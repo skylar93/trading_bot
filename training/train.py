@@ -3,6 +3,7 @@ import logging
 import yaml
 import pandas as pd
 import torch
+from data.utils.data_loader import DataLoader
 from agents.ppo_agent import PPOAgent
 from envs.trading_env import TradingEnvironment
 from training.utils.mlflow_manager import MLflowManager
@@ -16,11 +17,38 @@ class TrainingPipeline:
         
         self.mlflow_manager = MLflowManager()
     
+    def prepare_data(self):
+        """Prepare training data"""
+        logger.info("Fetching and preparing data...")
+        
+        # Load data
+        data_loader = DataLoader(
+            exchange_id=self.config['data']['exchange'],
+            symbol=self.config['data']['symbols'][0],
+            timeframe=self.config['data']['timeframe']
+        )
+        
+        data = data_loader.fetch_data(
+            start_date=self.config['data']['start_date'],
+            end_date=self.config['data'].get('end_date')
+        )
+        
+        # Split data
+        train_size = int(len(data) * 0.7)
+        val_size = int(len(data) * 0.15)
+        
+        train_data = data[:train_size]
+        val_data = data[train_size:train_size+val_size]
+        test_data = data[train_size+val_size:]
+        
+        return train_data, val_data, test_data
+
     def create_env(self, data):
         return TradingEnvironment(
-            data=data,
+            df=data,
             initial_balance=self.config['env']['initial_balance'],
-            transaction_fee=self.config['env']['transaction_fee']
+            transaction_fee=self.config['env']['trading_fee'],
+            window_size=self.config['env']['window_size']
         )
     
     def save_model(self, agent, filename):
@@ -29,16 +57,18 @@ class TrainingPipeline:
         self.mlflow_manager.log_artifact(save_path)
     
     def _run_episode(self, env, agent, train=True):
-        state = env.reset()
+        state, _ = env.reset()
+        logger.info(f"Initial state shape: {state.shape if hasattr(state, 'shape') else 'no shape'}")
         done = False
         total_reward = 0
         
         while not done:
             action = agent.get_action(state)
-            next_state, reward, done, info = env.step(action)
+            next_state, reward, terminated, truncated, info = env.step(action)
+            done = terminated or truncated
             
             if train:
-                agent.update(state, action, reward, next_state, done)
+                agent.train(state, action, reward, next_state, done)
             
             state = next_state
             total_reward += reward

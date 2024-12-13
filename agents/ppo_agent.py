@@ -1,4 +1,7 @@
 import numpy as np
+import logging
+
+logger = logging.getLogger(__name__)
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -61,6 +64,11 @@ class PPOAgent(BaseAgent):
     def get_action(self, state: np.ndarray, deterministic: bool = False) -> float:
         """Get action from the agent"""
         # Prepare input
+        if isinstance(state, tuple):
+            state = state[0]  # Get only the observation part of the state
+        # Add debug log
+        logger.info(f"State type: {type(state)}, shape: {state.shape if hasattr(state, 'shape') else 'no shape'}")
+        logger.info(f"State content: {state}")
         x = torch.FloatTensor(state).reshape(1, -1).to(self.device)
         
         # Get action distribution parameters
@@ -77,7 +85,15 @@ class PPOAgent(BaseAgent):
     
     def train(self, state, action, reward, next_state, done) -> Dict[str, float]:
         """Train the agent using PPO with single transition"""
-        # Convert to tensors
+        logger.info(f"Train method - State shape: {state.shape if hasattr(state, 'shape') else 'no shape'}")
+        logger.info(f"Train method - State type: {type(state)}")
+        """Train the agent using PPO with single transition"""
+        # Convert numpy arrays to tensors
+        state = np.array(state, dtype=np.float32)
+        next_state = np.array(next_state, dtype=np.float32)
+        logger.info(f"Next state shape before tensor: {next_state.shape}")
+        
+        # Reshape and convert to tensors
         state = torch.FloatTensor(state).reshape(1, -1).to(self.device)
         action = torch.FloatTensor([action]).to(self.device)
         reward = torch.FloatTensor([reward]).to(self.device)
