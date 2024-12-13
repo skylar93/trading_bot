@@ -1,0 +1,15 @@
+artifact_uri: file:///Users/skylar/Desktop/trading_bot/mlruns/0/f4c4c92fa7a2435a979e9cdd8fb936d2/artifacts
+end_time: 1734095009516
+entry_point_name: ''
+experiment_id: '0'
+lifecycle_stage: active
+run_id: f4c4c92fa7a2435a979e9cdd8fb936d2
+run_name: invincible-hawk-33
+run_uuid: f4c4c92fa7a2435a979e9cdd8fb936d2
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1734095007189
+status: 3
+tags: []
+user_id: skylar

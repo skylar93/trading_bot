@@ -1,0 +1,15 @@
+artifact_uri: file:///Users/skylar/Desktop/trading_bot/mlruns/0/f1aa35ead7504abba9850f8f1764197d/artifacts
+end_time: 1734095965088
+entry_point_name: ''
+experiment_id: '0'
+lifecycle_stage: active
+run_id: f1aa35ead7504abba9850f8f1764197d
+run_name: omniscient-doe-729
+run_uuid: f1aa35ead7504abba9850f8f1764197d
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1734095943521
+status: 3
+tags: []
+user_id: skylar

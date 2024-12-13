@@ -1,0 +1,15 @@
+artifact_uri: file:///Users/skylar/Desktop/trading_bot/mlruns/0/be868835748f47408f080142a5cd9a65/artifacts
+end_time: 1734116806253
+entry_point_name: ''
+experiment_id: '0'
+lifecycle_stage: active
+run_id: be868835748f47408f080142a5cd9a65
+run_name: rare-horse-351
+run_uuid: be868835748f47408f080142a5cd9a65
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1734116321744
+status: 3
+tags: []
+user_id: skylar

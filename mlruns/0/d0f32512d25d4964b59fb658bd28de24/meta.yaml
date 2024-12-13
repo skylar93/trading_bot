@@ -1,0 +1,15 @@
+artifact_uri: file:///Users/skylar/Desktop/trading_bot/mlruns/0/d0f32512d25d4964b59fb658bd28de24/artifacts
+end_time: 1734095667299
+entry_point_name: ''
+experiment_id: '0'
+lifecycle_stage: active
+run_id: d0f32512d25d4964b59fb658bd28de24
+run_name: aged-wren-127
+run_uuid: d0f32512d25d4964b59fb658bd28de24
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1734095665807
+status: 3
+tags: []
+user_id: skylar

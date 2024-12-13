@@ -1,0 +1,15 @@
+artifact_uri: file:///Users/skylar/Desktop/trading_bot/mlruns/0/a8ac13ec2775427084d86c7843c8d73d/artifacts
+end_time: 1734094981567
+entry_point_name: ''
+experiment_id: '0'
+lifecycle_stage: active
+run_id: a8ac13ec2775427084d86c7843c8d73d
+run_name: melodic-swan-30
+run_uuid: a8ac13ec2775427084d86c7843c8d73d
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1734094979399
+status: 3
+tags: []
+user_id: skylar

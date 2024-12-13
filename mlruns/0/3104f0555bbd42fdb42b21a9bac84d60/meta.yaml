@@ -1,0 +1,15 @@
+artifact_uri: file:///Users/skylar/Desktop/trading_bot/mlruns/0/3104f0555bbd42fdb42b21a9bac84d60/artifacts
+end_time: 1734095990710
+entry_point_name: ''
+experiment_id: '0'
+lifecycle_stage: active
+run_id: 3104f0555bbd42fdb42b21a9bac84d60
+run_name: powerful-duck-89
+run_uuid: 3104f0555bbd42fdb42b21a9bac84d60
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1734095981115
+status: 3
+tags: []
+user_id: skylar

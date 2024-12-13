@@ -52,7 +52,7 @@ def main():
         logger.info(f"Data prepared - Train size: {len(train_data)}, Val size: {len(val_data)}, Test size: {len(test_data)}")
         
         logger.info("Starting training...")
-        agent = pipeline.train(train_data, val_data)
+        agent = pipeline.train(train_data, val_data, save_path='training_viz')
         logger.info("Training completed")
         
         logger.info("Starting evaluation...")

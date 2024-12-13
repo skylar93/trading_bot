@@ -1,0 +1,15 @@
+artifact_uri: file:///Users/skylar/Desktop/trading_bot/mlruns/0/5500961dd4954b26b10aca38d0553dce/artifacts
+end_time: 1734096554189
+entry_point_name: ''
+experiment_id: '0'
+lifecycle_stage: active
+run_id: 5500961dd4954b26b10aca38d0553dce
+run_name: defiant-moth-566
+run_uuid: 5500961dd4954b26b10aca38d0553dce
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1734096212970
+status: 3
+tags: []
+user_id: skylar
