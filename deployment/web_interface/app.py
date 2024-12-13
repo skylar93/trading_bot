@@ -304,7 +304,7 @@ class TradingBotUI:
 
             except Exception as e:
                 st.error(f"Training error: {str(e)}")
-                st.error("Error details:", str(type(e).__name__))
+                st.error(f"Error details: {str(type(e).__name__)}")
                 import traceback
                 st.error(traceback.format_exc())
 
