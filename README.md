@@ -78,12 +78,12 @@ Successfully implemented backtesting & visualization system (Dec 13, 2024):
    - Trade analysis
    - Real-time monitoring
 
-4. **Web Interface** ✅
+4. **Visualization Tools** ✅
 
-   - Data management
-   - Model settings
-   - Training visualization
-   - Live tracking
+   - Portfolio value tracking
+   - Returns distribution
+   - Drawdown analysis
+   - Trade and risk metric visualizations
 
 ## Integrated Architecture Workflow
 
@@ -140,10 +140,25 @@ Changes should be made through extension, not modification.
 
 ## Running the Project
 
+### Local Directory
+```
+Users/skylar/Desktop/trading_bot
+```
+
+### Virtual Environment
+```
+venv
+```
+
+### GitHub Repository
+```
+https://github.com/skylar93/trading_bot
+```
+
 1. Setup
 
 ```bash
-cd trading_bot
+cd Users/skylar/Desktop/trading_bot
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
@@ -172,13 +187,21 @@ trading_bot/
 │       ├── data_loader.py   # ccxt integration
 │       └── feature_generator.py
 ├── envs/
-│   └── trading_env.py       # Trading environment - STABLE
+│   ├── base_env.py          # Base trading environment
+│   ├── trading_env.py       # Single-agent trading environment - STABLE
+│   └── multi_agent_env.py   # Multi-agent trading environment
 ├── training/
-│   ├── train.py            # Training pipeline - STABLE
-│   └── evaluation.py       # Performance metrics
-└── deployment/
-    └── web_interface/
-        └── app.py          # Streamlit UI
+│   ├── train.py             # Training pipeline - STABLE
+│   ├── train_multi_agent.py # Multi-agent training
+│   ├── evaluation.py        # Performance metrics
+│   ├── backtest.py          # Backtesting system
+│   └── utils/
+│       ├── visualization.py # Visualization tools
+│       ├── mlflow_manager.py # MLflow tracking manager
+│       └── mlflow_utils.py   # MLflow helper utilities
+├── deployment/
+│   └── web_interface/
+│       └── app.py           # Streamlit UI
 ```
 
 ## Visual Results
@@ -202,14 +225,14 @@ Latest results in `training_viz/training_progress_ep0.png` show:
 
 1. **Core Testing**
 
-   - Always start with test\_training.py
+   - Always start with test_training.py
    - Verify basic functionality first
    - Check MLflow logs for performance regression
    - Validate all metrics
 
 2. **Visualization Testing**
 
-   - Check training\_viz directory
+   - Check training_viz directory
    - Verify all plots are generated
    - Validate metrics display
    - Ensure proper file saving
