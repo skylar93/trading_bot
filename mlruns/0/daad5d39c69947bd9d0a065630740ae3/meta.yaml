@@ -1,0 +1,15 @@
+artifact_uri: file:///Users/skylar/Desktop/trading_bot/mlruns/0/daad5d39c69947bd9d0a065630740ae3/artifacts
+end_time: 1734047144189
+entry_point_name: ''
+experiment_id: '0'
+lifecycle_stage: active
+run_id: daad5d39c69947bd9d0a065630740ae3
+run_name: valuable-mole-841
+run_uuid: daad5d39c69947bd9d0a065630740ae3
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1734047142075
+status: 3
+tags: []
+user_id: skylar

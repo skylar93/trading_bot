@@ -1,0 +1,14 @@
+# Exclude virtual environments
+venv/
+.venv/
+
+# Exclude hidden files and directories
+.DS_Store
+__pycache__/
+*.pyc
+
+# Exclude data, logs, and other unnecessary files
+data/
+logs/
+*.log
+
