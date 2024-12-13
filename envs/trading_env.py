@@ -1,4 +1,7 @@
 import gymnasium as gym
+import logging
+
+logger = logging.getLogger(__name__)
 import numpy as np
 import pandas as pd
 from gymnasium import spaces
@@ -84,7 +87,10 @@ class TradingEnvironment(gym.Env):
     def _get_observation(self) -> np.ndarray:
         """Construct the observation"""
         # Get the price data for the current window
+        logger.info(f"Current step: {self.current_step}, Window size: {self.window_size}")
+        logger.info(f"DataFrame length: {len(self.df)}")
         df_window = self.df.iloc[self.current_step-self.window_size:self.current_step]
+        logger.info(f"Window data shape: {df_window.shape}")
         
         # Normalize the data
         price_mean = df_window['close'].mean()
@@ -93,17 +99,21 @@ class TradingEnvironment(gym.Env):
         volume_std = df_window['volume'].std()
         
         # Construct features
-        obs = np.array([
-            (df_window['open'] - price_mean) / price_std,
-            (df_window['high'] - price_mean) / price_std,
-            (df_window['low'] - price_mean) / price_std,
-            (df_window['close'] - price_mean) / price_std,
-            (df_window['volume'] - volume_mean) / volume_std,
-            df_window['close'].pct_change().fillna(0),  # Returns
-            df_window['volume'].pct_change().fillna(0),  # Volume change
-            [self.position] * len(df_window),  # Current position
-            [self.balance / self.initial_balance] * len(df_window),  # Normalized balance
-            [(self.balance + self.position * df_window['close'].iloc[-1]) / self.initial_balance] * len(df_window)  # Normalized portfolio value
-        ]).T
+        features = []
+        # Price features
+        for col in ['open', 'high', 'low', 'close']:
+            features.append((df_window[col] - price_mean) / price_std)
+        # Volume
+        features.append((df_window['volume'] - volume_mean) / volume_std)
+        # Returns and changes
+        features.append(df_window['close'].pct_change().fillna(0))
+        features.append(df_window['volume'].pct_change().fillna(0))
+        # Portfolio info
+        features.append(pd.Series([self.position] * len(df_window)))
+        features.append(pd.Series([self.balance / self.initial_balance] * len(df_window)))
+        features.append(pd.Series([(self.balance + self.position * df_window['close'].iloc[-1]) / self.initial_balance] * len(df_window)))
+        
+        obs = np.array(features).T
+        logger.info(f"Observation shape: {obs.shape}")
         
         return obs.astype(np.float32)
