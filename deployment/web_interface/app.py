@@ -104,6 +104,7 @@ class TradingBotUI:
                 
                 if st.button("Generate Features"):
                     try:
+                        # Progress tracking
                         progress_bar = st.progress(0)
                         status_text = st.empty()
                         log_container = st.empty()
@@ -115,15 +116,19 @@ class TradingBotUI:
                             logs.append(message)
                             log_container.text('\n'.join(logs))
 
+                        # Generate features
                         generator = FeatureGenerator()
                         features = generator.generate_features(df, progress_callback=update_progress)
 
+                        # Save and display results
                         st.session_state['features'] = features
                         st.success(f"Successfully generated {len(features.columns) - len(df.columns)} new features!")
 
+                        # Feature preview
                         st.write("Features Preview:")
                         st.dataframe(features.head())
 
+                        # Correlation heatmap
                         st.subheader("Feature Correlations")
                         fig = go.Figure(data=go.Heatmap(
                             z=features.corr(),
@@ -218,11 +223,13 @@ class TradingBotUI:
             
         if st.button("Start Training"):
             try:
+                # Progress tracking
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 metrics_plot = st.empty()
                 training_log = st.empty()
 
+                # Training setup
                 from training.train import TrainingPipeline
                 pipeline = TrainingPipeline("config/default_config.yaml")
                 
@@ -234,6 +241,7 @@ class TradingBotUI:
                 val_data = df[train_size:train_size+val_size]
                 test_data = df[train_size+val_size:]
 
+                # Initialize metrics storage
                 if 'training_metrics' not in st.session_state:
                     st.session_state['training_metrics'] = {
                         'portfolio_values': [],
@@ -242,15 +250,19 @@ class TradingBotUI:
                     }
 
                 def update_training_progress(episode, train_metrics, val_metrics):
+                    # Update progress bar
                     progress = (episode + 1) / num_episodes
                     progress_bar.progress(progress)
                     
+                    # Update status text
                     status_text.text(f"Episode {episode + 1}/{num_episodes}")
                     
+                    # Store metrics
                     st.session_state['training_metrics']['portfolio_values'].append(
                         train_metrics['final_balance']
                     )
                     
+                    # Update plots in real-time
                     fig = go.Figure()
                     fig.add_trace(go.Scatter(
                         y=st.session_state['training_metrics']['portfolio_values'],
@@ -264,6 +276,7 @@ class TradingBotUI:
                     )
                     metrics_plot.plotly_chart(fig)
                     
+                    # Update training log
                     log_text = f"""
                     Episode {episode + 1}:
                     - Train Return: {train_metrics['episode_reward']:.2f}
@@ -273,9 +286,11 @@ class TradingBotUI:
                     """
                     training_log.text(log_text)
 
+                # Run training with progress updates
                 agent = pipeline.train(train_data, val_data, callback=update_training_progress)
                 metrics = pipeline.evaluate(agent, test_data)
 
+                # Show final results
                 st.success("Training completed!")
                 st.subheader("Test Results")
                 
@@ -300,6 +315,7 @@ class TradingBotUI:
             st.info("No training data available yet. Please start training first.")
             return
         
+        # Metrics Dashboard
         col1, col2, col3 = st.columns(3)
         
         metrics = st.session_state['training_metrics']
@@ -313,6 +329,7 @@ class TradingBotUI:
                 f"{return_pct:+.2f}%"
             )
         
+        # Portfolio Value Chart
         st.subheader("Portfolio Performance")
         fig = go.Figure()
         fig.add_trace(go.Scatter(
@@ -327,12 +344,14 @@ class TradingBotUI:
         )
         st.plotly_chart(fig)
         
+        # Trading Activity
         if 'trades' in st.session_state:
             st.subheader("Recent Trades")
             trades_df = pd.DataFrame(st.session_state['trades'])
             if not trades_df.empty:
                 st.dataframe(trades_df)
                 
+                # Trade Distribution
                 st.subheader("Trade Distribution")
                 fig = go.Figure()
                 fig.add_trace(go.Histogram(
@@ -349,11 +368,13 @@ class TradingBotUI:
     def run(self):
         st.title("Trading Bot Control Panel")
         
+        # Navigation
         page = st.sidebar.selectbox(
             "Navigation",
             ["Data Management", "Model Settings", "Training", "Live Monitoring"]
         )
         
+        # Refresh Rate for Monitoring
         if page == "Live Monitoring":
             st.sidebar.slider(
                 "Refresh Interval (seconds)",
@@ -362,6 +383,7 @@ class TradingBotUI:
                 value=5
             )
         
+        # Show selected page
         if page == "Data Management":
             self.show_data_management()
         elif page == "Model Settings":
@@ -374,3 +396,4 @@ class TradingBotUI:
 if __name__ == "__main__":
     app = TradingBotUI()
     app.run()
+
