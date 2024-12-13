@@ -1,0 +1,15 @@
+artifact_uri: file:///Users/skylar/Desktop/trading_bot/mlruns/0/c0c21cfbb2f74db88c98ec16d42d6914/artifacts
+end_time: 1734094943777
+entry_point_name: ''
+experiment_id: '0'
+lifecycle_stage: active
+run_id: c0c21cfbb2f74db88c98ec16d42d6914
+run_name: adorable-worm-891
+run_uuid: c0c21cfbb2f74db88c98ec16d42d6914
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1734094941386
+status: 3
+tags: []
+user_id: skylar

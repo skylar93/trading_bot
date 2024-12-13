@@ -1,0 +1,15 @@
+artifact_uri: file:///Users/skylar/Desktop/trading_bot/mlruns/0/8575a492506e4017a696eae435798dbf/artifacts
+end_time: 1734096192322
+entry_point_name: ''
+experiment_id: '0'
+lifecycle_stage: active
+run_id: 8575a492506e4017a696eae435798dbf
+run_name: sincere-dog-929
+run_uuid: 8575a492506e4017a696eae435798dbf
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1734096091335
+status: 3
+tags: []
+user_id: skylar

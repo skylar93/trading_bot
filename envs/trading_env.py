@@ -30,6 +30,12 @@ class TradingEnvironment(gym.Env):
         
         self.reset()
     
+    @property
+    def portfolio_value(self):
+        """Calculate current portfolio value"""
+        current_price = self.df.iloc[self.current_step]['close']
+        return self.balance + (self.position * current_price)
+    
     def reset(self, seed=None):
         """Reset the environment"""
         super().reset(seed=seed)
