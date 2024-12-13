@@ -3,74 +3,115 @@
 ## Latest Achievement 🎯
 
 Successfully implemented backtesting & visualization system (Dec 13, 2024):
+
 - Portfolio returns: +1.42%
 - Sharpe Ratio: 0.43
 - Sortino Ratio: 0.60
 - Max Drawdown: -4.26%
 
-## Architecture
+## Core Architecture Components
 
 ### A. Data Pipeline Layer
-- Framework: Qlib + ccxt
-- Pipeline: Raw Data (ccxt) → Feature Store → Training Data
-- Storage:
+
+- **Frameworks**: TA-Lib + ccxt
+
+- **Data Processing Pipeline**:
+
   ```
-  /data
-    /raw          # ccxt data
-    /processed    # processed data
-    /features     # feature sets
+  Raw Data (ccxt) → TA-Lib Pipeline → Feature Store → Training Data
   ```
 
-### B. Learning Layer
-- Framework: RLlib + PPO Agent
-- Multi-agent setup:
+- **Storage Structure**:
+
+  ```
+  /data
+    /raw          # Original data collected via ccxt
+    /processed    # TA-Lib-processed data
+    /features     # Final feature sets for training
+  ```
+
+### B. Training and Inference Layer
+
+- **Frameworks**: RLlib + PPO Agent
+- **Multi-Agent Architecture**:
   ```
   Market Environment
     └── PPO Agent (Currently Active)
   ```
 
 ### C. Web Interface Layer
-- Framework: FastAPI + Streamlit
-- Components:
-  - Model Selection ✅
-  - Parameter Tuning ✅
-  - Live Monitoring ✅
-  - Performance Visualization ✅
+
+- **Frameworks**: FastAPI + Streamlit
+- **Components**:
+  ```
+  Web UI (Streamlit)
+    ├── Model Selection 
+    ├── Parameter Tuning
+    ├── Live Monitoring
+    └── Performance Visualization
+
+  API Server (FastAPI)
+    ├── Training Control
+    ├── Model Management
+    └── Data Pipeline Control
+  ```
 
 ## Completed Features
 
 1. **Data Pipeline** ✅
+
    - ccxt data collection
    - 44 technical indicators
    - Data caching system
 
 2. **Reinforcement Learning** ✅
+
    - PPO agent implementation
    - Trading environment
    - MLflow tracking
    - Successful training runs
 
 3. **Backtesting System** ✅
+
    - Performance metrics (Sharpe, Sortino, MDD)
    - Portfolio visualization
    - Trade analysis
    - Real-time monitoring
 
 4. **Web Interface** ✅
+
    - Data management
    - Model settings
    - Training visualization
    - Live tracking
 
+## Integrated Architecture Workflow
+
+```
+Data Sources (Exchanges) → ccxt → Raw Data Storage
+                                  ↓
+                              TA-Lib Pipeline
+                                  ↓
+                              Feature Store
+                                  ↓
+                          RLlib Training Pipeline
+                                  ↓
+                          Model Store (MLflow)
+                                  ↓
+                       FastAPI Backend + Streamlit UI
+```
+
 ## Development Guidelines
 
 ### MVP First
+
 - Focus on core functionality
 - Test components individually
 - Keep changes minimal
 - Avoid modifying working components
 
 ### Code Modification Rules
+
 ```
 IMPORTANT: Make minimal changes to:
 - train.py
@@ -82,13 +123,16 @@ Changes should be made through extension, not modification.
 ```
 
 ### Current Focus
+
 1. **Backtesting System** (Priority)
+
    - Further visualization development
    - Additional metrics
    - Trade analysis tools
    - Add new files under training/utils/
 
 2. **Risk Management**
+
    - Position sizing
    - Stop-loss mechanisms
    - Portfolio constraints
@@ -97,6 +141,7 @@ Changes should be made through extension, not modification.
 ## Running the Project
 
 1. Setup
+
 ```bash
 cd trading_bot
 python -m venv venv
@@ -105,11 +150,13 @@ pip install -r requirements.txt
 ```
 
 2. Test Core System
+
 ```bash
 python test_training.py  # Always start here!
 ```
 
 3. Launch Web UI
+
 ```bash
 streamlit run deployment/web_interface/app.py
 ```
@@ -137,6 +184,7 @@ trading_bot/
 ## Visual Results
 
 The backtesting system generates comprehensive visualizations:
+
 - Portfolio value tracking
 - Returns distribution with key metrics
 - Drawdown analysis and maximum drawdown periods
@@ -144,6 +192,7 @@ The backtesting system generates comprehensive visualizations:
 - Real-time performance indicators
 
 Latest results in `training_viz/training_progress_ep0.png` show:
+
 - Positive returns (+1.42%)
 - Stable Sharpe ratio (0.43)
 - Controlled drawdown (-4.26%)
@@ -152,13 +201,15 @@ Latest results in `training_viz/training_progress_ep0.png` show:
 ## Testing Changes
 
 1. **Core Testing**
-   - Always start with test_training.py
+
+   - Always start with test\_training.py
    - Verify basic functionality first
    - Check MLflow logs for performance regression
    - Validate all metrics
 
 2. **Visualization Testing**
-   - Check training_viz directory
+
+   - Check training\_viz directory
    - Verify all plots are generated
    - Validate metrics display
    - Ensure proper file saving
@@ -166,18 +217,21 @@ Latest results in `training_viz/training_progress_ep0.png` show:
 ## Critical Notes
 
 1. **Core Principle**: MVP Stability
+
    - Don't modify working core components
    - Add features through new modules
    - Test thoroughly before integration
    - Keep the stable core stable
 
 2. **Code Changes**
+
    - Create new files instead of modifying existing ones
    - Use inheritance and composition
    - Keep changes isolated
    - Document everything thoroughly
 
 3. **Current Success Factors**
+
    - MVP bot runs successfully
    - Shows positive returns
    - Visualization system works
@@ -185,3 +239,4 @@ Latest results in `training_viz/training_progress_ep0.png` show:
    - Proper metrics tracking
 
 Remember: The goal is to extend and enhance, not to modify what works.
+
