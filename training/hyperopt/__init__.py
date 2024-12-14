@@ -1,9 +1,9 @@
 """
-Hyperparameter optimization tools and utilities.
+Hyperparameter optimization module
 """
 
-from .hyperopt_env import HyperoptEnv
-from .hyperopt_agent import HyperoptAgent
-from .hyperopt_tuner import HyperoptTuner
+from .hyperopt_env import SimplifiedTradingEnv
+from .hyperopt_agent import MinimalPPOAgent
+from .hyperopt_tuner import MinimalTuner, train_agent
 
-__all__ = ['HyperoptEnv', 'HyperoptAgent', 'HyperoptTuner']
+__all__ = ['SimplifiedTradingEnv', 'MinimalPPOAgent', 'MinimalTuner', 'train_agent']
