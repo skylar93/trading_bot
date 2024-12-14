@@ -1,3 +1,5 @@
+"""Streamlit UI for Trading Bot"""
+
 import os
 import sys
 
@@ -13,6 +15,9 @@ from datetime import datetime, timedelta
 import yaml
 from pathlib import Path
 import logging
+from typing import Dict, Any
+import queue
+import threading
 
 from data.utils.data_loader import DataLoader
 from data.utils.feature_generator import FeatureGenerator
@@ -20,15 +25,87 @@ from agents.ppo_agent import PPOAgent
 from envs.trading_env import TradingEnvironment
 from training.evaluation import TradingMetrics
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
+class BackgroundFeatureGenerator:
+    """Background worker for feature generation"""
+    
+    def __init__(self):
+        self._generator = FeatureGenerator()
+        self._running = False
+        self._progress_queue = queue.Queue()
+        self._result_queue = queue.Queue()
+    
+    def generate_features(self, df: pd.DataFrame) -> None:
+        """Generate features in background thread"""
+        self._running = True
+        
+        def progress_callback(progress: float, message: str) -> None:
+            """Handle progress updates"""
+            if self._running:
+                self._progress_queue.put((progress, message))
+        
+        try:
+            # Run feature generation
+            result = self._generator.generate_features(df, progress_callback)
+            self._result_queue.put(('success', result))
+            
+        except Exception as e:
+            logger.error("Feature generation error", exc_info=True)
+            self._result_queue.put(('error', str(e)))
+            
+        finally:
+            self._running = False
+    
+    def start(self, df: pd.DataFrame) -> None:
+        """Start feature generation in background"""
+        threading.Thread(
+            target=self.generate_features,
+            args=(df,),
+            daemon=True
+        ).start()
+    
+    def get_progress(self) -> tuple:
+        """Get latest progress update"""
+        try:
+            return self._progress_queue.get_nowait()
+        except queue.Empty:
+            return None
+            
+    def get_result(self) -> tuple:
+        """Get generation result if complete"""
+        try:
+            return self._result_queue.get_nowait() 
+        except queue.Empty:
+            return None
+    
+    def stop(self) -> None:
+        """Stop feature generation"""
+        self._running = False
+
+def init_session_state() -> None:
+    """Initialize Streamlit session state"""
+    if 'feature_generator' not in st.session_state:
+        st.session_state['feature_generator'] = BackgroundFeatureGenerator()
+    if 'progress' not in st.session_state:
+        st.session_state['progress'] = 0.0
+    if 'logs' not in st.session_state:
+        st.session_state['logs'] = []
+
 class TradingBotUI:
+    """Main UI class for Trading Bot"""
+    
     def __init__(self):
         st.set_page_config(page_title="Trading Bot", layout="wide")
         self.load_config()
-        
-    def load_config(self):
+        init_session_state()
+    
+    def load_config(self) -> None:
+        """Load or create config"""
         config_path = os.path.join(project_root, "config/default_config.yaml")
         if os.path.exists(config_path):
             with open(config_path, "r") as f:
@@ -36,7 +113,8 @@ class TradingBotUI:
         else:
             self.create_default_config(config_path)
     
-    def create_default_config(self, config_path):
+    def create_default_config(self, config_path: str) -> None:
+        """Create default config file"""
         self.config = {
             'env': {
                 'initial_balance': 10000,
@@ -58,6 +136,7 @@ class TradingBotUI:
             yaml.dump(self.config, f)
     
     def show_data_management(self):
+        """Show data management page"""
         st.header("Data Management")
         
         col1, col2 = st.columns(2)
@@ -72,7 +151,6 @@ class TradingBotUI:
                 "Start Date",
                 value=datetime.now() - timedelta(days=30)
             )
-            
             end_date = st.date_input(
                 "End Date",
                 value=datetime.now()
@@ -93,6 +171,7 @@ class TradingBotUI:
                         st.session_state['raw_data'] = df
                         st.success("Data fetched successfully!")
                     except Exception as e:
+                        logger.error("Data fetch error", exc_info=True)
                         st.error(f"Error fetching data: {str(e)}")
         
         with col2:
@@ -103,51 +182,62 @@ class TradingBotUI:
                 st.dataframe(df.head())
                 
                 if st.button("Generate Features"):
-                    try:
-                        # Progress tracking
-                        progress_bar = st.progress(0)
-                        status_text = st.empty()
-                        log_container = st.empty()
-                        logs = []
-
-                        def update_progress(progress, message):
+                    st.session_state['feature_generator'].start(df)
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    logs = st.empty()
+                    
+                    while True:
+                        # Check progress
+                        progress_update = st.session_state['feature_generator'].get_progress()
+                        if progress_update:
+                            progress, message = progress_update
                             progress_bar.progress(progress)
                             status_text.text(f"Progress: {progress*100:.0f}%")
-                            logs.append(message)
-                            log_container.text('\n'.join(logs))
-
-                        # Generate features
-                        generator = FeatureGenerator()
-                        features = generator.generate_features(df, progress_callback=update_progress)
-
-                        # Save and display results
-                        st.session_state['features'] = features
-                        st.success(f"Successfully generated {len(features.columns) - len(df.columns)} new features!")
-
-                        # Feature preview
-                        st.write("Features Preview:")
-                        st.dataframe(features.head())
-
-                        # Correlation heatmap
-                        st.subheader("Feature Correlations")
-                        fig = go.Figure(data=go.Heatmap(
-                            z=features.corr(),
-                            x=features.columns,
-                            y=features.columns,
-                            colorscale='RdBu'
-                        ))
-                        fig.update_layout(height=600)
-                        st.plotly_chart(fig)
-
-                    except Exception as e:
-                        st.error(f"Error generating features: {str(e)}")
-                        st.error(f"Error details: {type(e).__name__}")
-                        import traceback
-                        st.error(traceback.format_exc())
+                            st.session_state['logs'].append(message)
+                            logs.text("\n".join(st.session_state['logs'][-5:]))
+                        
+                        # Check completion
+                        result = st.session_state['feature_generator'].get_result()
+                        if result:
+                            status, data = result
+                            if status == 'success':
+                                st.session_state['features'] = data
+                                
+                                st.success("Feature generation complete!")
+                                st.write("Features Preview:")
+                                st.dataframe(data.head())
+                                
+                                # Correlation heatmap
+                                st.subheader("Feature Correlations")
+                                fig = go.Figure(data=go.Heatmap(
+                                    z=data.corr(),
+                                    x=data.columns,
+                                    y=data.columns,
+                                    colorscale='RdBu'
+                                ))
+                                fig.update_layout(height=600)
+                                st.plotly_chart(fig)
+                                break
+                            else:
+                                st.error(f"Error generating features: {data}")
+                                break
+                        
+                        # Small delay
+                        import time
+                        time.sleep(0.1)
+                
+                # Stop generation on page change
+                def on_change():
+                    if 'feature_generator' in st.session_state:
+                        st.session_state['feature_generator'].stop()
+                
+                st.on_change(on_change)
             else:
                 st.info("Please fetch data first")
-
+    
     def show_model_settings(self):
+        """Show model settings page"""
         st.header("Model Settings")
         
         col1, col2 = st.columns(2)
@@ -156,15 +246,15 @@ class TradingBotUI:
             st.subheader("Environment Settings")
             initial_balance = st.number_input(
                 "Initial Balance",
-                value=self.config['env']['initial_balance']
+                value=float(self.config['env']['initial_balance'])
             )
             trading_fee = st.number_input(
                 "Trading Fee",
-                value=self.config['env']['trading_fee']
+                value=float(self.config['env']['trading_fee'])
             )
             window_size = st.number_input(
                 "Window Size",
-                value=self.config['env']['window_size']
+                value=int(self.config['env']['window_size'])
             )
         
         with col2:
@@ -197,6 +287,7 @@ class TradingBotUI:
             st.success("Settings saved!")
 
     def show_training(self):
+        """Show training page"""
         st.header("Training")
         
         if 'features' not in st.session_state:
@@ -218,7 +309,7 @@ class TradingBotUI:
             )
             num_episodes = st.number_input(
                 "Number of Episodes",
-                value=50  # Reduced for testing
+                value=50
             )
             
         if st.button("Start Training"):
@@ -233,13 +324,14 @@ class TradingBotUI:
                 from training.train import TrainingPipeline
                 pipeline = TrainingPipeline("config/default_config.yaml")
                 
-                df = st.session_state['features']
-                train_size = int(len(df) * 0.7)
-                val_size = int(len(df) * 0.15)
+                # Split data
+                features = st.session_state['features']
+                train_size = int(len(features) * 0.7)
+                val_size = int(len(features) * 0.15)
                 
-                train_data = df[:train_size]
-                val_data = df[train_size:train_size+val_size]
-                test_data = df[train_size+val_size:]
+                train_data = features[:train_size]
+                val_data = features[train_size:train_size+val_size]
+                test_data = features[train_size+val_size:]
 
                 # Initialize metrics storage
                 if 'training_metrics' not in st.session_state:
@@ -249,6 +341,7 @@ class TradingBotUI:
                         'episode_rewards': []
                     }
 
+                # Progress callback
                 def update_training_progress(episode, train_metrics, val_metrics):
                     # Update progress bar
                     progress = (episode + 1) / num_episodes
@@ -262,165 +355,67 @@ class TradingBotUI:
                         train_metrics['final_balance']
                     )
                     
-                    # Update plots in real-time
-                    fig = go.Figure()
-                    fig.add_trace(go.Scatter(
-                        y=st.session_state['training_metrics']['portfolio_values'],
-                        name='Portfolio Value',
-                        line=dict(color='blue')
-                    ))
-                    fig.update_layout(
-                        title='Training Progress',
-                        xaxis_title='Episode',
-                        yaxis_title='Portfolio Value'
-                    )
-                    metrics_plot.plotly_chart(fig)
-                    
-                    # Update training log
-                    log_text = f"""
-                    Episode {episode + 1}:
-                    - Train Return: {train_metrics['episode_reward']:.2f}
-                    - Train Final Balance: {train_metrics['final_balance']:.2f}
-                    - Val Return: {val_metrics['episode_reward']:.2f}
-                    - Val Final Balance: {val_metrics['final_balance']:.2f}
-                    """
-                    training_log.text(log_text)
+                    # Update plots every 5 episodes
+                    if episode % 5 == 0:
+                        fig = go.Figure()
+                        fig.add_trace(go.Scatter(
+                            y=st.session_state['training_metrics']['portfolio_values'],
+                            name='Portfolio Value'
+                        ))
+                        fig.update_layout(
+                            title='Training Progress',
+                            xaxis_title='Episode',
+                            yaxis_title='Portfolio Value'
+                        )
+                        metrics_plot.plotly_chart(fig)
+                        
+                        # Update log
+                        log_text = f"""
+                        Episode {episode + 1}:
+                        - Train Return: {train_metrics['episode_reward']:.2f}
+                        - Train Final Balance: {train_metrics['final_balance']:.2f}
+                        - Val Return: {val_metrics['episode_reward']:.2f}
+                        - Val Final Balance: {val_metrics['final_balance']:.2f}
+                        """
+                        training_log.text(log_text)
 
-                # Run training with progress updates
-                agent = pipeline.train(train_data, val_data, callback=update_training_progress)
+                # Run training
+                agent = pipeline.train(
+                    train_data, 
+                    val_data,
+                    callback=update_training_progress
+                )
                 metrics = pipeline.evaluate(agent, test_data)
 
-                # Show final results
+                # Show results
                 st.success("Training completed!")
                 st.subheader("Test Results")
                 
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    st.metric("Final Portfolio Value", f"${metrics['final_balance']:.2f}")
+                    st.metric(
+                        "Final Portfolio Value",
+                        f"${metrics['final_balance']:.2f}",
+                        f"{((metrics['final_balance'] / 10000) - 1) * 100:.1f}%"
+                    )
                 with col2:
-                    st.metric("Total Return", f"{((metrics['final_balance'] / 10000) - 1) * 100:.2f}%")
+                    st.metric("Sharpe Ratio", f"{metrics['sharpe_ratio']:.2f}")
                 with col3:
-                    st.metric("Sharpe Ratio", f"{metrics.get('sharpe_ratio', 0):.2f}")
+                    st.metric("Max Drawdown", f"{metrics['max_drawdown']*100:.1f}%")
 
             except Exception as e:
                 st.error(f"Training error: {str(e)}")
-                st.error(f"Error details: {str(type(e).__name__)}")
-                import traceback
-                st.error(traceback.format_exc())
-
-    def setup_realtime_trading(self):
-        """Initialize real-time trading components"""
-        if 'realtime_trading' not in st.session_state:
-            from .realtime_trading import RealTimeTrading
-            st.session_state['realtime_trading'] = RealTimeTrading()
-    
-    def show_monitoring(self):
-        st.header("Live Monitoring")
-        
-        # Initialize real-time trading if needed
-        self.setup_realtime_trading()
-        
-        # Trading Controls
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            if not st.session_state['realtime_trading'].is_trading:
-                if st.button("Start Live Trading"):
-                    symbol = st.session_state.get('selected_symbol', 'BTC/USDT')
-                    timeframe = st.session_state.get('selected_timeframe', '1m')
-                    
-                    # Initialize trading
-                    if st.session_state['realtime_trading'].initialize_trading(
-                        symbol=symbol,
-                        timeframe=timeframe
-                    ):
-                        asyncio.run(st.session_state['realtime_trading'].start_trading())
-                        st.success("Live trading started!")
-            else:
-                if st.button("Stop Trading"):
-                    asyncio.run(st.session_state['realtime_trading'].stop_trading())
-                    st.info("Trading stopped")
-        
-        with col2:
-            # Risk management settings
-            risk_level = st.slider("Risk Level", 0.0, 1.0, 0.5, 0.1)
-        
-        with col3:
-            # Update interval
-            update_interval = st.slider(
-                "Update Interval (seconds)",
-                min_value=1,
-                max_value=60,
-                value=5
-            )
-        
-        # Metrics Dashboard
-        col1, col2, col3 = st.columns(3)
-        
-        metrics = st.session_state['training_metrics']
-        with col1:
-            current_value = metrics['portfolio_values'][-1] if metrics['portfolio_values'] else 10000
-            initial_value = metrics['portfolio_values'][0] if metrics['portfolio_values'] else 10000
-            return_pct = ((current_value / initial_value) - 1) * 100
-            st.metric(
-                "Portfolio Value",
-                f"${current_value:.2f}",
-                f"{return_pct:+.2f}%"
-            )
-        
-        # Portfolio Value Chart
-        st.subheader("Portfolio Performance")
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            y=metrics['portfolio_values'],
-            name='Portfolio Value',
-            line=dict(color='blue')
-        ))
-        fig.update_layout(
-            title='Portfolio Value Over Time',
-            xaxis_title='Episode',
-            yaxis_title='Value ($)'
-        )
-        st.plotly_chart(fig)
-        
-        # Trading Activity
-        if 'trades' in st.session_state:
-            st.subheader("Recent Trades")
-            trades_df = pd.DataFrame(st.session_state['trades'])
-            if not trades_df.empty:
-                st.dataframe(trades_df)
-                
-                # Trade Distribution
-                st.subheader("Trade Distribution")
-                fig = go.Figure()
-                fig.add_trace(go.Histogram(
-                    x=trades_df['profit_loss'],
-                    name='Profit/Loss Distribution'
-                ))
-                fig.update_layout(
-                    title='Trade Profit/Loss Distribution',
-                    xaxis_title='Profit/Loss ($)',
-                    yaxis_title='Count'
-                )
-                st.plotly_chart(fig)
+                logger.error("Training error", exc_info=True)
 
     def run(self):
+        """Run the Streamlit app"""
         st.title("Trading Bot Control Panel")
         
         # Navigation
         page = st.sidebar.selectbox(
             "Navigation",
-            ["Data Management", "Model Settings", "Training", "Live Monitoring"]
+            ["Data Management", "Model Settings", "Training"]
         )
-        
-        # Refresh Rate for Monitoring
-        if page == "Live Monitoring":
-            st.sidebar.slider(
-                "Refresh Interval (seconds)",
-                min_value=1,
-                max_value=60,
-                value=5
-            )
         
         # Show selected page
         if page == "Data Management":
@@ -429,16 +424,7 @@ class TradingBotUI:
             self.show_model_settings()
         elif page == "Training":
             self.show_training()
-        elif page == "Live Monitoring":
-            self.show_monitoring()
 
 if __name__ == "__main__":
-    import time
-    
     app = TradingBotUI()
     app.run()
-
-    # Cleanup on exit
-    if 'realtime_trading' in st.session_state and st.session_state['realtime_trading'].is_trading:
-        asyncio.run(st.session_state['realtime_trading'].stop_trading())
-
