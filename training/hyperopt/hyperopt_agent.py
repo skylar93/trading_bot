@@ -1,116 +1,137 @@
 """
 Simplified agent for hyperparameter optimization.
 """
-
 import numpy as np
 import torch
 import torch.nn as nn
-from typing import Dict
-from agents.base.base_agent import BaseAgent
+from typing import Dict, Tuple
+import logging
 
-class SimpleNetwork(nn.Module):
-    """Simple neural network for rapid experimentation"""
-    
-    def __init__(self, input_dim: int, hidden_size: int = 64, num_layers: int = 2):
+logger = logging.getLogger(__name__)
+
+class MinimalNetwork(nn.Module):
+    def __init__(self, input_dim: int, hidden_size: int = 64):
         super().__init__()
         
-        layers = []
-        current_dim = input_dim
+        self.shared = nn.Sequential(
+            nn.Linear(input_dim, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU()
+        )
         
-        # Hidden layers
-        for _ in range(num_layers):
-            layers.extend([
-                nn.Linear(current_dim, hidden_size),
-                nn.ReLU()
-            ])
-            current_dim = hidden_size
-            
-        # Output layer (single action)
-        layers.append(nn.Linear(hidden_size, 1))
-        layers.append(nn.Tanh())  # Scale output to [-1, 1]
+        # Policy head (action)
+        self.policy = nn.Sequential(
+            nn.Linear(hidden_size, 32),
+            nn.ReLU(),
+            nn.Linear(32, 1),
+            nn.Tanh()  # [-1, 1] action range
+        )
         
-        self.network = nn.Sequential(*layers)
+        # Value head (state value)
+        self.value = nn.Sequential(
+            nn.Linear(hidden_size, 32),
+            nn.ReLU(),
+            nn.Linear(32, 1)
+        )
         
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.network(x)
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        shared_features = self.shared(x)
+        return self.policy(shared_features), self.value(shared_features)
 
-class HyperoptAgent(BaseAgent):
-    """Simplified trading agent for hyperparameter tuning"""
-    
+class MinimalPPOAgent:
     def __init__(self, 
                  observation_space,
                  action_space,
                  hidden_size: int = 64,
-                 num_layers: int = 2,
-                 learning_rate: float = 1e-3):
-        super().__init__(observation_space, action_space)
+                 learning_rate: float = 3e-4,
+                 gamma: float = 0.99,
+                 epsilon: float = 0.2):
         
-        # Calculate input dimensions from observation space
         input_dim = observation_space.shape[0] * observation_space.shape[1]
         
-        # Initialize network and optimizer
-        self.network = SimpleNetwork(
-            input_dim=input_dim,
-            hidden_size=hidden_size,
-            num_layers=num_layers
-        )
-        self.optimizer = torch.optim.Adam(
-            self.network.parameters(),
-            lr=learning_rate
-        )
+        self.network = MinimalNetwork(input_dim, hidden_size)
+        self.optimizer = torch.optim.Adam(self.network.parameters(), lr=learning_rate)
         
-        # Store hyperparameters
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
-        self.learning_rate = learning_rate
-        
-        # Use GPU if available
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.network.to(self.device)
-    
+        
+        self.gamma = gamma
+        self.epsilon = epsilon
+        self.hidden_size = hidden_size
+        self.learning_rate = learning_rate
+
     def get_action(self, state: np.ndarray) -> float:
-        """Get trading action from state"""
-        # Flatten and convert state to tensor
         x = torch.FloatTensor(state).reshape(1, -1).to(self.device)
         
         with torch.no_grad():
-            action = self.network(x)
+            action, _ = self.network(x)
         
         return action.cpu().item()
-    
-    def train(self, state, action, reward, next_state, done) -> Dict:
-        """Simple training step using mean squared error"""
-        # Prepare tensors
+
+    def train(self, 
+             state: np.ndarray, 
+             action: float, 
+             reward: float, 
+             next_state: np.ndarray, 
+             done: bool) -> Dict:
+        
+        # Convert to tensors
         state = torch.FloatTensor(state).reshape(1, -1).to(self.device)
         next_state = torch.FloatTensor(next_state).reshape(1, -1).to(self.device)
+        action = torch.FloatTensor([action]).to(self.device)
         reward = torch.FloatTensor([reward]).to(self.device)
         done = torch.FloatTensor([float(done)]).to(self.device)
+
+        # Get values and advantage
+        with torch.no_grad():
+            _, next_value = self.network(next_state)
+            target_value = reward + (1 - done) * self.gamma * next_value
+
+        # Get current predictions
+        current_action, current_value = self.network(state)
         
-        # Predict action
-        predicted_action = self.network(state)
+        # Calculate advantage
+        advantage = (target_value - current_value).detach()
         
-        # Use reward as target (simple value-based learning)
-        # Higher rewards should encourage similar actions in similar states
-        target = torch.clamp(reward, -1, 1)  # Clamp reward to action range
+        # Policy loss (PPO-Clip)
+        ratio = torch.exp(torch.log(current_action + 1e-8) - torch.log(action + 1e-8))
+        policy_loss_1 = ratio * advantage
+        policy_loss_2 = torch.clamp(ratio, 1-self.epsilon, 1+self.epsilon) * advantage
+        policy_loss = -torch.min(policy_loss_1, policy_loss_2).mean()
         
-        # Calculate loss
-        loss = nn.MSELoss()(predicted_action, target)
+        # Value loss
+        value_loss = nn.MSELoss()(current_value, target_value.detach())
+        
+        # Combined loss
+        loss = policy_loss + 0.5 * value_loss
         
         # Optimize
         self.optimizer.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.network.parameters(), 0.5)
         self.optimizer.step()
         
         return {
             'loss': loss.item(),
-            'predicted_action': predicted_action.item(),
-            'target': target.item()
+            'policy_loss': policy_loss.item(),
+            'value_loss': value_loss.item(),
+            'advantage': advantage.mean().item()
         }
+
+    def save(self, path: str):
+        torch.save({
+            'network_state': self.network.state_dict(),
+            'optimizer_state': self.optimizer.state_dict(),
+            'hyperparameters': {
+                'hidden_size': self.hidden_size,
+                'learning_rate': self.learning_rate,
+                'gamma': self.gamma,
+                'epsilon': self.epsilon
+            }
+        }, path)
     
-    def get_hyperparameters(self) -> Dict:
-        """Return current hyperparameters"""
-        return {
-            'hidden_size': self.hidden_size,
-            'num_layers': self.num_layers,
-            'learning_rate': self.learning_rate
-        }
+    def load(self, path: str):
+        checkpoint = torch.load(path)
+        self.network.load_state_dict(checkpoint['network_state'])
+        self.optimizer.load_state_dict(checkpoint['optimizer_state'])

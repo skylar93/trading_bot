@@ -1,0 +1,15 @@
+artifact_uri: file:///Users/skylar/Desktop/trading_bot/mlruns/0/ddefc8d09e094517a10b995112f43f8a/artifacts
+end_time: 1734153107544
+entry_point_name: ''
+experiment_id: '0'
+lifecycle_stage: active
+run_id: ddefc8d09e094517a10b995112f43f8a
+run_name: casual-asp-276
+run_uuid: ddefc8d09e094517a10b995112f43f8a
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1734153107530
+status: 4
+tags: []
+user_id: skylar
