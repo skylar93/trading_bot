@@ -199,6 +199,44 @@ Changes should be made through extension, not modification.
    - Automate testing, backtesting, and deployment using GitHub Actions.
    - Integrate MLflow logging into the pipeline for automated result tracking.
 
+## Current Ongoing part
+
+### **Real-Time Trading Integration**
+
+### **1. CCXT WebSocket Integration**
+
+- **Implemented Features**:
+  - Real-time data streaming:
+    - **Trades**: Live trade data
+    - **Orderbook**: Real-time order book updates
+    - **Ticker**: Current market state information
+  - Asynchronous data processing:
+    - Utilized `asyncio` and `queue` for seamless data flow management
+    - Combined real-time streaming with existing REST API data
+
+- **Relevant Files**:
+  ```
+  /data/utils/websocket_loader.py
+  /envs/trading_env.py (Added support for live trading environments)
+  ```
+
+---
+
+### **2. Paper Trading Feature**
+
+- **Implemented Functionalities**:
+  - Support for paper trading in the `RealTimeTradingEnv` environment
+  - Real-time testing of trading strategies:
+    - Actions: `Buy`, `Sell`
+    - Position sizing and balance management
+
+- **Relevant Files**:
+  ```
+  /envs/trading_env.py
+  /training/paper_trading.py
+  ```
+
+
 ## Running the Project
 
 ### Local Directory
@@ -283,12 +321,6 @@ trading_bot/
 │       └── app.py           # Streamlit UI
 ├── scripts/ 
 │   └── run_hyperopt.py   # Script for executing hyperparameter optimization
-
-Here is the continuation of the content tailored for the readme and additional notes:
-
-```
-│       └── run_hyperopt.py   # Script for executing hyperparameter optimization
-```
 
 ## Recommendations for Next Steps
 
