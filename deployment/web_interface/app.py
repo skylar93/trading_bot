@@ -308,12 +308,51 @@ class TradingBotUI:
                 import traceback
                 st.error(traceback.format_exc())
 
+    def setup_realtime_trading(self):
+        """Initialize real-time trading components"""
+        if 'realtime_trading' not in st.session_state:
+            from .realtime_trading import RealTimeTrading
+            st.session_state['realtime_trading'] = RealTimeTrading()
+    
     def show_monitoring(self):
         st.header("Live Monitoring")
         
-        if 'training_metrics' not in st.session_state:
-            st.info("No training data available yet. Please start training first.")
-            return
+        # Initialize real-time trading if needed
+        self.setup_realtime_trading()
+        
+        # Trading Controls
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if not st.session_state['realtime_trading'].is_trading:
+                if st.button("Start Live Trading"):
+                    symbol = st.session_state.get('selected_symbol', 'BTC/USDT')
+                    timeframe = st.session_state.get('selected_timeframe', '1m')
+                    
+                    # Initialize trading
+                    if st.session_state['realtime_trading'].initialize_trading(
+                        symbol=symbol,
+                        timeframe=timeframe
+                    ):
+                        asyncio.run(st.session_state['realtime_trading'].start_trading())
+                        st.success("Live trading started!")
+            else:
+                if st.button("Stop Trading"):
+                    asyncio.run(st.session_state['realtime_trading'].stop_trading())
+                    st.info("Trading stopped")
+        
+        with col2:
+            # Risk management settings
+            risk_level = st.slider("Risk Level", 0.0, 1.0, 0.5, 0.1)
+        
+        with col3:
+            # Update interval
+            update_interval = st.slider(
+                "Update Interval (seconds)",
+                min_value=1,
+                max_value=60,
+                value=5
+            )
         
         # Metrics Dashboard
         col1, col2, col3 = st.columns(3)
@@ -394,6 +433,12 @@ class TradingBotUI:
             self.show_monitoring()
 
 if __name__ == "__main__":
+    import time
+    
     app = TradingBotUI()
     app.run()
+
+    # Cleanup on exit
+    if 'realtime_trading' in st.session_state and st.session_state['realtime_trading'].is_trading:
+        asyncio.run(st.session_state['realtime_trading'].stop_trading())
 
