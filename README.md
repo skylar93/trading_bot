@@ -2,12 +2,14 @@
 
 ## Latest Achievement 🎯
 
-Successfully implemented backtesting & visualization system (Dec 13, 2024):
+Successfully implemented risk-aware backtesting system (Dec 13, 2024):
 
 - Portfolio returns: +1.42%
 - Sharpe Ratio: 0.43
 - Sortino Ratio: 0.60
 - Max Drawdown: -4.26%
+- Flash Crash and Low Liquidity Scenarios tested successfully
+- Risk-aware trading implemented with dynamic position sizing and stop-loss mechanisms
 
 ## Core Architecture Components
 
@@ -85,6 +87,22 @@ Successfully implemented backtesting & visualization system (Dec 13, 2024):
    - Drawdown analysis
    - Trade and risk metric visualizations
 
+5. **Advanced Backtesting Scenarios** ✅
+
+   - Flash Crash Scenarios:
+     - Tested with sudden price drops and partial recovery
+     - Evaluated metrics such as survival rate and recovery time
+   - Low Liquidity Scenarios:
+     - Tested with reduced trade volumes and high volatility
+     - Measured trade execution costs and feasibility
+
+6. **Risk-Aware Backtesting** ✅
+
+   - Integrated dynamic position sizing
+   - Real-time leverage monitoring
+   - Stop-loss mechanisms and drawdown limits
+   - Risk metrics summary added to backtesting results
+
 ## Integrated Architecture Workflow
 
 ```
@@ -124,12 +142,11 @@ Changes should be made through extension, not modification.
 
 ### Current Focus
 
-1. **Backtesting System** (Priority)
+1. **Advanced Backtesting System** (Priority)
 
-   - Further visualization development
-   - Additional metrics
-   - Trade analysis tools
-   - Add new files under training/utils/
+   - Further scenario development
+   - Test additional edge cases (e.g., extreme volatility, correlated assets)
+   - Validate new metrics and visualizations
 
 2. **Risk Management**
 
@@ -195,10 +212,14 @@ trading_bot/
 │   ├── train_multi_agent.py # Multi-agent training
 │   ├── evaluation.py        # Performance metrics
 │   ├── backtest.py          # Backtesting system
-│   └── utils/
-│       ├── visualization.py # Visualization tools
-│       ├── mlflow_manager.py # MLflow tracking manager
-│       └── mlflow_utils.py   # MLflow helper utilities
+│   ├── advanced_backtest.py # Advanced scenario backtesting
+│   ├── utils/
+│   │   ├── visualization.py  # Visualization tools
+│   │   ├── mlflow_manager.py # MLflow tracking manager
+│   │   ├── mlflow_utils.py   # MLflow helper utilities
+│   │   ├── advanced_scenarios.py # Advanced scenario generation
+│   │   ├── risk_management.py    # Risk management logic
+│   │   └── risk_backtest.py      # Risk-aware backtesting system
 ├── deployment/
 │   └── web_interface/
 │       └── app.py           # Streamlit UI
@@ -206,20 +227,22 @@ trading_bot/
 
 ## Visual Results
 
-The backtesting system generates comprehensive visualizations:
+The advanced backtesting system generates comprehensive visualizations:
 
 - Portfolio value tracking
 - Returns distribution with key metrics
 - Drawdown analysis and maximum drawdown periods
+- Scenario-specific annotations (e.g., flash crash markers)
 - Trading metrics dashboard including Sharpe and Sortino ratios
-- Real-time performance indicators
+- Risk-adjusted metrics and trade-level details
 
 Latest results in `training_viz/training_progress_ep0.png` show:
 
 - Positive returns (+1.42%)
 - Stable Sharpe ratio (0.43)
 - Controlled drawdown (-4.26%)
-- Consistent risk-adjusted performance
+- Survived extreme market scenarios
+- Effective risk management during volatile periods
 
 ## Testing Changes
 
@@ -230,12 +253,17 @@ Latest results in `training_viz/training_progress_ep0.png` show:
    - Check MLflow logs for performance regression
    - Validate all metrics
 
-2. **Visualization Testing**
+2. **Scenario Testing**
 
-   - Check training_viz directory
-   - Verify all plots are generated
-   - Validate metrics display
-   - Ensure proper file saving
+   - Run tests in `tests/test_advanced_backtest.py`
+   - Ensure all scenarios pass with expected results
+   - Validate scenario-specific metrics (e.g., max drawdown recovery)
+
+3. **Risk Management Testing**
+
+   - Validate with `tests/test_risk_backtest.py`
+   - Ensure dynamic position sizing is respected
+   - Confirm stop-loss and drawdown mechanisms work as expected
 
 ## Critical Notes
 
@@ -256,9 +284,10 @@ Latest results in `training_viz/training_progress_ep0.png` show:
 3. **Current Success Factors**
 
    - MVP bot runs successfully
-   - Shows positive returns
+   - Advanced scenarios tested and passed
    - Visualization system works
    - Training pipeline stable
+   - Risk-aware system operational
    - Proper metrics tracking
 
 Remember: The goal is to extend and enhance, not to modify what works.
