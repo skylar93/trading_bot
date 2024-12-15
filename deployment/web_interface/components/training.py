@@ -8,121 +8,91 @@ logger = logging.getLogger(__name__)
 
 def show_training():
     """Show training interface"""
-    st.header("Training")
+    st.title("Model Training")
     
-    if 'features' not in st.session_state:
-        st.warning("Please generate features first")
+    # Check for generated features
+    if 'generated_features' not in st.session_state or st.session_state['generated_features'] is None:
+        st.warning("Please generate features in the Data Management section first.")
         return
     
-    col1, col2 = st.columns(2)
+    features_df = st.session_state['generated_features']
     
+    # Display features info
+    st.subheader("Features Information")
+    st.write(f"Number of samples: {len(features_df)}")
+    st.write(f"Available features: {', '.join(features_df.columns)}")
+    
+    with st.expander("Preview Features"):
+        st.dataframe(features_df.head())
+    
+    # Training settings
+    st.subheader("Training Settings")
+    
+    # Split settings
+    st.markdown("### Data Split")
+    train_size = st.slider(
+        "Training Data Size",
+        min_value=50,
+        max_value=90,
+        value=80,
+        step=5,
+        help="Percentage of data to use for training"
+    )
+    
+    # Model settings
+    st.markdown("### Model Configuration")
+    model_type = st.selectbox(
+        "Model Type",
+        ["PPO", "DQN", "A2C"],
+        help="Select the reinforcement learning algorithm"
+    )
+    
+    # Training parameters
+    st.markdown("### Training Parameters")
+    
+    col1, col2 = st.columns(2)
     with col1:
-        batch_size = st.selectbox(
-            "Batch Size",
-            [32, 64, 128, 256],
-            index=2
-        )
-        learning_rate = st.selectbox(
-            "Learning Rate",
-            [0.0001, 0.0003, 0.001],
-            index=1
-        )
-        num_episodes = st.number_input(
-            "Number of Episodes",
-            value=50
+        n_steps = st.number_input(
+            "Training Steps",
+            min_value=1000,
+            max_value=1000000,
+            value=10000,
+            step=1000,
+            help="Number of steps to train the model"
         )
         
-    if st.button("Start Training"):
-        try:
-            # Progress tracking
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            metrics_plot = st.empty()
-            training_log = st.empty()
-
-            # Training setup
-            from training.train import TrainingPipeline
-            pipeline = TrainingPipeline("config/default_config.yaml")
-            
-            # Split data
-            features = st.session_state['features']
-            train_size = int(len(features) * 0.7)
-            val_size = int(len(features) * 0.15)
-            
-            train_data = features[:train_size]
-            val_data = features[train_size:train_size+val_size]
-            test_data = features[train_size+val_size:]
-
-            # Initialize metrics storage
-            if 'training_metrics' not in st.session_state:
-                st.session_state['training_metrics'] = {
-                    'portfolio_values': [],
-                    'returns': [],
-                    'episode_rewards': []
-                }
-
-            # Progress callback
-            def update_training_progress(episode, train_metrics, val_metrics):
-                # Update progress bar
-                progress = (episode + 1) / num_episodes
-                progress_bar.progress(progress)
-                
-                # Update status text
-                status_text.text(f"Episode {episode + 1}/{num_episodes}")
-                
-                # Store metrics
-                st.session_state['training_metrics']['portfolio_values'].append(
-                    train_metrics['final_balance']
-                )
-                
-                # Update plots every 5 episodes
-                if episode % 5 == 0:
-                    fig = go.Figure()
-                    fig.add_trace(go.Scatter(
-                        y=st.session_state['training_metrics']['portfolio_values'],
-                        name='Portfolio Value'
-                    ))
-                    fig.update_layout(
-                        title='Training Progress',
-                        xaxis_title='Episode',
-                        yaxis_title='Portfolio Value'
-                    )
-                    metrics_plot.plotly_chart(fig)
-                    
-                    # Update log
-                    log_text = f"""
-                    Episode {episode + 1}:
-                    - Train Return: {train_metrics['episode_reward']:.2f}
-                    - Train Final Balance: {train_metrics['final_balance']:.2f}
-                    - Val Return: {val_metrics['episode_reward']:.2f}
-                    - Val Final Balance: {val_metrics['final_balance']:.2f}
-                    """
-                    training_log.text(log_text)
-
-            # Run training
-            agent = pipeline.train(
-                train_data, 
-                val_data,
-                callback=update_training_progress
-            )
-            metrics = pipeline.evaluate(agent, test_data)
-
-            # Show results
-            st.success("Training completed!")
-            st.subheader("Test Results")
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric(
-                    "Final Portfolio Value",
-                    f"${metrics['final_balance']:.2f}",
-                    f"{((metrics['final_balance'] / 10000) - 1) * 100:.1f}%"
-                )
-            with col2:
-                st.metric("Sharpe Ratio", f"{metrics['sharpe_ratio']:.2f}")
-            with col3:
-                st.metric("Max Drawdown", f"{metrics['max_drawdown']*100:.1f}%")
-
-        except Exception as e:
-            st.error(f"Training error: {str(e)}")
-            logger.error("Training error", exc_info=True)
+        batch_size = st.number_input(
+            "Batch Size",
+            min_value=32,
+            max_value=1024,
+            value=64,
+            step=32,
+            help="Number of samples per training batch"
+        )
+    
+    with col2:
+        learning_rate = st.number_input(
+            "Learning Rate",
+            min_value=0.0001,
+            max_value=0.1,
+            value=0.001,
+            format="%f",
+            help="Model learning rate"
+        )
+        
+        gamma = st.number_input(
+            "Discount Factor (Gamma)",
+            min_value=0.8,
+            max_value=0.999,
+            value=0.99,
+            format="%f",
+            help="Discount factor for future rewards"
+        )
+    
+    # Training control
+    st.markdown("### Training Control")
+    
+    if st.button("Start Training", use_container_width=True):
+        with st.spinner("Training in progress..."):
+            # Here you would implement the actual training logic
+            st.info("Training functionality will be implemented in the next update.")
