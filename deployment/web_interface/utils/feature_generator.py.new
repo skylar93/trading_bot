@@ -1,0 +1,92 @@
+"""Asynchronous Feature Generation Manager"""
+
+import pandas as pd
+import logging
+from queue import Queue
+import threading
+from typing import Optional, Tuple, Dict, Any
+from data.utils.feature_generator import FeatureGenerator
+
+logger = logging.getLogger(__name__)
+
+class AsyncFeatureGenerator:
+    """Asynchronous wrapper for feature generation with queue-based progress reporting"""
+    
+    def __init__(self):
+        self._base_generator = FeatureGenerator()
+        self._progress_queue = Queue()
+        self._result_queue = Queue()
+        self._running = False
+        self._worker: Optional[threading.Thread] = None
+        
+    def _progress_callback(self, progress: float, message: str):
+        """Handle progress updates from base generator"""
+        if self._running:
+            self._progress_queue.put((progress, message))
+            logger.debug(f"Progress update: {progress:.1%} - {message}")
+            
+    def _generate_features(self, df: pd.DataFrame):
+        """Run feature generation in background thread"""
+        try:
+            logger.info("Starting feature generation")
+            result = self._base_generator.generate_features(df, self._progress_callback)
+            if self._running:
+                self._result_queue.put(('success', result))
+                logger.info("Feature generation completed successfully")
+        except Exception as e:
+            if self._running:
+                logger.error("Feature generation failed", exc_info=True)
+                self._result_queue.put(('error', str(e)))
+        finally:
+            self._running = False
+            
+    def start(self, df: pd.DataFrame):
+        """Start asynchronous feature generation"""
+        if self._running:
+            logger.warning("Feature generation already running")
+            return
+            
+        logger.info("Initializing feature generation")
+        self._running = True
+        
+        # Clear queues
+        while not self._progress_queue.empty():
+            self._progress_queue.get()
+        while not self._result_queue.empty():
+            self._result_queue.get()
+            
+        # Start worker thread
+        self._worker = threading.Thread(
+            target=self._generate_features,
+            args=(df,),
+            daemon=True
+        )
+        self._worker.start()
+        
+    def stop(self):
+        """Stop feature generation"""
+        if self._running:
+            logger.info("Stopping feature generation")
+            self._base_generator.stop()
+            self._running = False
+            if self._worker:
+                self._worker.join(timeout=1.0)
+                
+    def get_progress(self) -> Optional[Tuple[float, str]]:
+        """Get latest progress update if available"""
+        try:
+            return self._progress_queue.get_nowait()
+        except:
+            return None
+            
+    def get_result(self) -> Optional[Tuple[str, pd.DataFrame]]:
+        """Get final result if available"""
+        try:
+            return self._result_queue.get_nowait()
+        except:
+            return None
+            
+    @property
+    def is_running(self) -> bool:
+        """Check if feature generation is running"""
+        return self._running
