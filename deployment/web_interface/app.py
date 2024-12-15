@@ -10,6 +10,16 @@ sys.path.insert(0, project_root)
 import streamlit as st
 import logging
 
+# Configure root logger
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),  # Console handler
+        logging.FileHandler(os.path.join('logs', 'app.log'))  # File handler
+    ]
+)
+
 # Import relative to the current package
 from deployment.web_interface.utils.config_manager import load_config
 from deployment.web_interface.utils.state import init_session_state
@@ -17,15 +27,14 @@ from deployment.web_interface.components.data_management import show_data_manage
 from deployment.web_interface.components.model_settings import show_model_settings
 from deployment.web_interface.components.training import show_training
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger(__name__)
 
 def main():
     """Main application entry point"""
     try:
+        # Create logs directory if it doesn't exist
+        os.makedirs('logs', exist_ok=True)
+        
         # Configure app
         st.set_page_config(
             page_title="Trading Bot",
@@ -39,10 +48,27 @@ def main():
 
         # Navigation sidebar
         st.sidebar.title("Navigation")
+        
+        # Store previous page to detect page changes
+        if 'previous_page' not in st.session_state:
+            st.session_state['previous_page'] = None
+            
         page = st.sidebar.selectbox(
             "Select Page",
-            ["Data Management", "Model Settings", "Training"]
+            ["Data Management", "Model Settings", "Training"],
+            key='navigation'
         )
+        
+        # Detect page changes and preserve state
+        if st.session_state['previous_page'] != page:
+            # Save important state before page change
+            if 'data_state' in st.session_state:
+                st.session_state['preserved_data_state'] = st.session_state['data_state'].copy()
+            st.session_state['previous_page'] = page
+            
+        # Restore state after page change
+        if 'preserved_data_state' in st.session_state and 'data_state' in st.session_state:
+            st.session_state['data_state'].update(st.session_state['preserved_data_state'])
 
         # Header
         st.title("Trading Bot Control Panel")
