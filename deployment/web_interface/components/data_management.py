@@ -14,14 +14,23 @@ logger = logging.getLogger(__name__)
 
 def init_session_state():
     """Initialize session state variables"""
+    if 'data_state' not in st.session_state:
+        st.session_state['data_state'] = {
+            'mode': 'historical',
+            'raw_data': None,
+            'features': None,
+            'is_processing': False
+        }
+    
+    if 'generated_features' not in st.session_state:
+        st.session_state['generated_features'] = None
+        
     if 'feature_generator' not in st.session_state:
         st.session_state['feature_generator'] = AsyncFeatureGenerator()
     if 'ws_manager' not in st.session_state:
         st.session_state['ws_manager'] = WebSocketManager()
     if 'chart' not in st.session_state:
         st.session_state['chart'] = OHLCVChart()
-    if 'data_mode' not in st.session_state:
-        st.session_state['data_mode'] = 'historical'
 
 def show_data_controls():
     """Show data control panel"""
@@ -29,9 +38,13 @@ def show_data_controls():
     st.subheader("Data Mode")
     data_mode = st.radio(
         "Select Mode",
-        ["Historical", "Real-time"],
-        key="data_mode"
+        options=["Historical", "Real-time"],
+        index=0,
+        key="data_mode_radio"
     )
+    
+    # Update data state
+    st.session_state['data_state']['mode'] = data_mode.lower()
     
     st.markdown("---")
     
@@ -39,14 +52,16 @@ def show_data_controls():
     st.subheader("Basic Settings")
     exchange = st.selectbox(
         "Exchange",
-        ["Binance", "Coinbase"],
-        key="exchange"
+        options=["Binance", "Coinbase"],
+        index=0,
+        key="exchange_select"
     )
     
     symbol = st.selectbox(
         "Trading Pair",
-        ["BTC/USDT", "ETH/USDT", "SOL/USDT", "ADA/USDT"],
-        key="symbol"
+        options=["BTC/USDT", "ETH/USDT", "SOL/USDT", "ADA/USDT"],
+        index=0,
+        key="symbol_select"
     )
     
     if data_mode == "Historical":
@@ -56,8 +71,9 @@ def show_data_controls():
         # Timeframe selection
         timeframe = st.selectbox(
             "Timeframe",
-            ["1m", "5m", "15m", "1h", "4h", "1d"],
-            key="timeframe"
+            options=["1m", "5m", "15m", "1h", "4h", "1d"],
+            index=0,
+            key="timeframe_select"
         )
         
         # Date range selection
@@ -67,13 +83,13 @@ def show_data_controls():
             start_date = st.date_input(
                 "Start Date",
                 value=datetime.now() - timedelta(days=7),
-                key="start_date"
+                key="start_date_input"
             )
         with col2:
             end_date = st.date_input(
                 "End Date",
                 value=datetime.now(),
-                key="end_date"
+                key="end_date_input"
             )
     else:
         timeframe = "1m"  # Real-time mode always uses 1m timeframe
@@ -105,40 +121,61 @@ def fetch_historical_data(params: dict) -> pd.DataFrame:
         return df
         
     except Exception as e:
+        logger.error(f"Error fetching historical data: {str(e)}", exc_info=True)
         st.error(f"Error fetching historical data: {str(e)}")
         return pd.DataFrame()
 
 def show_data_view(data: pd.DataFrame = None):
     """Show data visualization"""
     chart = st.session_state['chart']
+    data_state = st.session_state['data_state']
     
-    if st.session_state['data_mode'] == 'historical':
+    if data_state['mode'] == 'historical':
         if data is not None:
-            st.plotly_chart(chart.update(data), use_container_width=True)
+            with st.spinner("Updating chart..."):
+                st.plotly_chart(
+                    chart.update(data),
+                    use_container_width=True,
+                    key="historical_chart"
+                )
             
             with st.expander("Raw Data"):
                 st.dataframe(data)
     else:
         placeholder = st.empty()
         ws_manager = st.session_state['ws_manager']
+        error_placeholder = st.empty()
         
-        # Real-time update loop
-        while ws_manager.is_running:
-            data = ws_manager.get_current_ohlcv()
-            latest = ws_manager.get_latest_data()
-            
-            if data is not None:
-                with placeholder.container():
-                    st.plotly_chart(
-                        chart.update(data, latest),
-                        use_container_width=True
-                    )
-            
-            time.sleep(1)
+        try:
+            # Real-time update loop
+            while ws_manager.is_running:
+                try:
+                    data = ws_manager.get_current_ohlcv()
+                    latest = ws_manager.get_latest_data()
+                    
+                    if data is not None:
+                        with placeholder.container():
+                            current_time = int(time.time() * 1000)
+                            st.plotly_chart(
+                                chart.update(data, latest),
+                                use_container_width=True,
+                                key=f"realtime_chart_{current_time}"
+                            )
+                            error_placeholder.empty()  # Clear any previous errors
+                    
+                    time.sleep(0.1)
+                except Exception as e:
+                    error_placeholder.error(f"Error updating chart: {str(e)}")
+                    time.sleep(1)  # Wait longer on error
+                    
+        except Exception as e:
+            logger.error(f"Error in real-time view: {str(e)}", exc_info=True)
+            error_placeholder.error("Real-time stream encountered an error. Please stop and restart the stream.")
 
 def show_data_management():
     """Main data management interface"""
     init_session_state()
+    data_state = st.session_state['data_state']
     
     st.title("Data Management")
     
@@ -158,125 +195,107 @@ def show_data_management():
             
             fetch_col1, fetch_col2 = st.columns([3, 1])
             with fetch_col1:
-                fetch_button = st.button("Fetch Historical Data", use_container_width=True)
+                fetch_button = st.button(
+                    "Fetch Historical Data",
+                    use_container_width=True,
+                    disabled=data_state['is_processing']
+                )
             
             if fetch_button:
                 with st.spinner("Fetching historical data..."):
+                    data_state['is_processing'] = True
                     data = fetch_historical_data(params)
                     
                     if len(data) > 0:
-                        st.session_state['raw_data'] = data
+                        data_state['raw_data'] = data
                         st.success("Data fetched successfully!")
                         
                         # Show in right column
                         with right_col:
                             show_data_view(data)
                     
+                    data_state['is_processing'] = False
+                    
         else:  # Real-time mode
             stream_col1, stream_col2 = st.columns([3, 1])
             with stream_col1:
                 if not st.session_state['ws_manager'].is_running:
-                    if st.button("Start Real-time Stream", use_container_width=True):
+                    if st.button(
+                        "Start Real-time Stream",
+                        use_container_width=True,
+                        disabled=data_state['is_processing']
+                    ):
+                        data_state['is_processing'] = True
                         st.session_state['ws_manager'].start(params['symbol'])
                         # Show in right column
                         with right_col:
                             show_data_view()
+                        data_state['is_processing'] = False
                 else:
-                    if st.button("Stop Real-time Stream", use_container_width=True):
+                    if st.button(
+                        "Stop Real-time Stream",
+                        use_container_width=True,
+                        disabled=data_state['is_processing']
+                    ):
                         st.session_state['ws_manager'].stop()
     
     # Feature generation section in left column when data is available
-    if 'raw_data' in st.session_state:
+    if data_state['raw_data'] is not None:
         with left_col:
             st.markdown("---")
             st.header("Feature Generation")
         
             generate_col1, generate_col2 = st.columns([3, 1])
             with generate_col1:
-                if st.button("Generate Features", use_container_width=True):
+                if st.button(
+                    "Generate Features",
+                    use_container_width=True,
+                    disabled=data_state['is_processing']
+                ):
+                    data_state['is_processing'] = True
                     feature_generator = st.session_state['feature_generator']
-                    feature_generator.start(st.session_state['raw_data'])
                     
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
+                    try:
+                        logger.info("Starting feature generation...")
+                        with st.spinner("Generating features..."):
+                            # Start feature generation
+                            feature_generator.start(data_state['raw_data'])
+                            
+                            progress_placeholder = st.empty()
+                            status_placeholder = st.empty()
+                            
+                            # Monitor progress
+                            while True:
+                                progress = feature_generator.get_progress()
+                                logger.debug(f"Progress update: {progress}")
+                                
+                                if progress:
+                                    # Create a new progress bar each time to ensure update
+                                    with progress_placeholder:
+                                        st.progress(progress['progress'])
+                                    with status_placeholder:
+                                        st.text(progress['message'])
+                                
+                                result = feature_generator.get_result()
+                                if result:
+                                    status, data = result
+                                    if status == 'success':
+                                        data_state['features'] = data
+                                        # Store features in a separate session state variable for persistence
+                                        st.session_state['generated_features'] = data
+                                        st.success("Feature generation complete!")
+                                        st.write("Features Preview:")
+                                        st.dataframe(data.head())
+                                        break
+                                    elif status == 'error':
+                                        st.error(f"Error generating features: {data}")
+                                        break
+                                
+                                time.sleep(0.1)
                     
-                    while True:
-                        progress = feature_generator.get_progress()
-                        if progress:
-                            info = progress
-                            progress_bar.progress(info['progress'])
-                            status_text.text(info['message'])
+                    except Exception as e:
+                        logger.error(f"Error in feature generation: {str(e)}", exc_info=True)
+                        st.error(f"An error occurred during feature generation: {str(e)}")
                     
-                result = feature_generator.get_result()
-                if result:
-                    status, data = result
-                    if status == 'success':
-                        st.session_state['features'] = data
-                        st.success("Feature generation complete!")
-                        st.write("Features Preview:")
-                        st.dataframe(data.head())
-                        break
-                    else:
-                        st.error(f"Error generating features: {data}")
-                        break
-                        
-                        break
-                else:
-                    st.error(f"Error generating features: {data}")
-                    break
-                    
-            time.sleep(0.1)
-
-def show_data_management():
-    """Main data management interface"""
-    ensure_session_state()
-    
-    # Create two-column layout
-    controls_col, view_col = st.columns([1, 2])
-    
-    with controls_col:
-        st.markdown("### Data Controls")
-        
-        # Mode selection
-        st.session_state['data_tab'] = st.radio(
-            "Data Mode",
-            ["Historical", "Real-time"],
-            key='mode'
-        ).lower()
-        
-        st.markdown("---")
-        
-        # Get base parameters
-        params = get_data_params()
-        
-        # Show mode-specific controls
-        if st.session_state['data_tab'] == 'historical':
-            start_date, end_date = show_historical_controls()
-            if st.button("Fetch Data", use_container_width=True):
-                fetch_historical_data(params, start_date, end_date)
-        else:
-            show_realtime_controls()
-            
-        # Feature generation
-        show_feature_generation()
-    
-    # Data visualization
-    show_data_view(view_col)
-    
-    # Cleanup on page change
-    if st.session_state.get('previous_page', 'Data Management') != 'Data Management':
-        if 'ws_manager' in st.session_state and st.session_state['ws_manager'].is_running:
-            st.session_state['ws_manager'].stop()
-        if 'feature_generator' in st.session_state:
-            st.session_state['feature_generator'].stop()
-    
-    st.session_state['previous_page'] = 'Data Management'
-    
-    # Cleanup on page change
-    if st.session_state.get('previous_page', 'Data Management') != 'Data Management':
-        if st.session_state['ws_manager'].is_running:
-            st.session_state['ws_manager'].stop()
-        if 'feature_generator' in st.session_state:
-            st.session_state['feature_generator'].stop()
-    
-    st.session_state['previous_page'] = 'Data Management'
+                    finally:
+                        data_state['is_processing'] = False
