@@ -6,7 +6,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from training.advanced_backtest import ScenarioBacktester
-from agents.ppo_agent import PPOAgent
+from agents.strategies.ppo_agent import PPOAgent
 
 class MockAgent:
     """Mock agent for testing"""

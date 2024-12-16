@@ -2,54 +2,87 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 from typing import Dict, Any, Tuple, Optional
+import torch
+import mlflow
 
 class NormalizeObservation(gym.ObservationWrapper):
-    """Normalize observations to range [-1, 1]"""
+    """Normalize observations to range [-1, 1] with support for GPU and NaN handling"""
     
-    def __init__(self, env):
+    def __init__(self, env, device='cpu'):
         super().__init__(env)
-        self.running_mean = None
-        self.running_std = None
+        self.device = torch.device(device)
         
+        # Initialize running statistics
+        self.is_vector_env = hasattr(env, 'num_envs')
+        
+        # Update observation space to reflect normalized values
+        self.observation_space = spaces.Box(
+            low=-1, high=1,
+            shape=self.observation_space.shape,
+            dtype=np.float32
+        )
+    
     def observation(self, obs):
-        # Initialize running statistics if not already done
-        if self.running_mean is None:
-            self.running_mean = np.zeros_like(obs)
-            self.running_std = np.ones_like(obs)
-        
-        # Update running statistics
-        self.running_mean = 0.99 * self.running_mean + 0.01 * obs
-        self.running_std = 0.99 * self.running_std + 0.01 * np.abs(obs - self.running_mean)
-        
-        # Normalize
-        normalized_obs = (obs - self.running_mean) / (self.running_std + 1e-8)
-        return np.clip(normalized_obs, -1, 1)
+        """Normalize observation"""
+        if isinstance(obs, np.ndarray):
+            # Handle NaN values
+            obs = np.nan_to_num(obs, nan=0.0, posinf=1.0, neginf=-1.0)
+            # Ensure observation is in [-1, 1] range
+            obs = np.clip(obs, -1, 1)
+            return obs.astype(np.float32)
+        elif isinstance(obs, torch.Tensor):
+            # Handle NaN values
+            obs = torch.nan_to_num(obs, nan=0.0, posinf=1.0, neginf=-1.0)
+            # Ensure observation is in [-1, 1] range
+            obs = torch.clamp(obs, -1, 1)
+            return obs.to(dtype=torch.float32)
+        else:
+            raise ValueError(f"Unsupported observation type: {type(obs)}")
 
 class StackObservation(gym.ObservationWrapper):
-    """Stack multiple observations"""
+    """Stack observations to create a history of observations"""
     
     def __init__(self, env, stack_size=4):
         super().__init__(env)
         self.stack_size = stack_size
-        self.stacked_obs = None
+        
+        # Calculate new observation space shape
+        old_shape = env.observation_space.shape
+        if len(old_shape) != 2:
+            raise ValueError(f"Expected 2D observation shape (window_size, features), got {old_shape}")
+        
+        # New shape will be (window_size, features * stack_size)
+        new_shape = (old_shape[0], old_shape[1] * stack_size)
         
         # Update observation space
-        low = np.repeat(self.observation_space.low, stack_size)
-        high = np.repeat(self.observation_space.high, stack_size)
-        self.observation_space = spaces.Box(low=low, high=high, dtype=np.float32)
+        self.observation_space = spaces.Box(
+            low=env.observation_space.low.min(),
+            high=env.observation_space.high.max(),
+            shape=new_shape,
+            dtype=np.float32
+        )
+        
+        # Initialize observation stack
+        self.obs_stack = None
     
     def reset(self, **kwargs):
+        """Reset observation stack"""
         obs, info = self.env.reset(**kwargs)
-        self.stacked_obs = np.tile(obs, (self.stack_size, 1))
-        return self.stacked_obs.flatten(), info
+        
+        # Initialize stack with copies of the initial observation
+        self.obs_stack = np.concatenate([obs] * self.stack_size, axis=1)
+        return self.obs_stack, info
     
     def observation(self, obs):
-        if self.stacked_obs is None:
-            self.stacked_obs = np.tile(obs, (self.stack_size, 1))
+        """Stack observations by concatenating along feature dimension"""
+        if self.obs_stack is None:
+            # Initialize stack with copies of the observation
+            self.obs_stack = np.concatenate([obs] * self.stack_size, axis=1)
         else:
-            self.stacked_obs = np.roll(self.stacked_obs, shift=-1, axis=0)
-            self.stacked_obs[-1] = obs
-        return self.stacked_obs.flatten()
+            # Roll the stack and update with new observation
+            old_stack = self.obs_stack[:, :-obs.shape[1]]  # Remove oldest observation
+            self.obs_stack = np.concatenate([old_stack, obs], axis=1)  # Add new observation
+        return self.obs_stack
 
 class ClipActions(gym.ActionWrapper):
     """Clip actions to valid range"""
@@ -92,12 +125,65 @@ class RecordEpisodeStats(gym.Wrapper):
         self.current_length = 0
         return self.env.reset(**kwargs)
 
+class MLflowLoggingWrapper(gym.Wrapper):
+    """Log environment metrics to MLflow"""
+    
+    def __init__(self, env, experiment_name="trading_bot"):
+        super().__init__(env)
+        self.experiment_name = experiment_name
+        mlflow.set_experiment(experiment_name)
+        self.episode_count = 0
+        self.step_count = 0
+    
+    def reset(self, **kwargs):
+        """Reset with MLflow logging"""
+        obs, info = self.env.reset(**kwargs)
+        
+        # Log reset metrics
+        mlflow.log_metrics({
+            'initial_balance': info.get('balance', 0),
+            'initial_price': info.get('current_price', 0)
+        }, step=self.episode_count)
+        
+        return obs, info
+    
+    def step(self, action):
+        observation, reward, terminated, truncated, info = self.env.step(action)
+        self.step_count += 1
+        
+        # Log step metrics
+        mlflow.log_metrics({
+            'step_reward': reward,
+            'portfolio_value': info.get('portfolio_value', 0),
+            'position_size': info.get('position_size', 0)
+        }, step=self.step_count)
+        
+        if terminated or truncated:
+            self.episode_count += 1
+            # Log episode metrics
+            mlflow.log_metrics({
+                'episode_return': info['episode']['r'],
+                'episode_length': info['episode']['l'],
+                'total_trades': info.get('total_trades', 0),
+                'win_rate': info.get('win_rate', 0)
+            }, step=self.episode_count)
+        
+        return observation, reward, terminated, truncated, info
+
 def make_env(env, normalize=True, stack_size=4):
-    """Create wrapped environment"""
+    """Create environment with specified wrappers"""
+    # Add action clipping
     env = ClipActions(env)
+    
+    # Add observation normalization if requested
     if normalize:
         env = NormalizeObservation(env)
+    
+    # Add observation stacking if requested
     if stack_size > 1:
-        env = StackObservation(env, stack_size)
+        env = StackObservation(env, stack_size=stack_size)
+    
+    # Add episode statistics recording
     env = RecordEpisodeStats(env)
+    
     return env

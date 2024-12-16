@@ -11,7 +11,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from training.utils.backtesting.advanced_scenarios import ScenarioGenerator, ScenarioTester
 from envs.trading_env import TradingEnvironment
-from agents.ppo_agent import PPOAgent
+from agents.strategies.ppo_agent import PPOAgent
 
 class TestAdvancedScenarios(unittest.TestCase):
     def setUp(self):

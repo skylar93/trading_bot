@@ -3,16 +3,13 @@
 import pytest
 import os
 import sys
-import subprocess
-import tempfile
-import shutil
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 
 from data.utils.data_loader import DataLoader
-from training.train import TrainingPipeline
-from training.backtest import BacktestEngine
+from training.train import train_agent
+from training.backtest import Backtester
 from training.evaluation import TradingMetrics
 
 def test_data_pipeline():
@@ -35,30 +32,6 @@ def test_data_pipeline():
     assert not data.empty
     assert all(col in data.columns for col in ['open', 'high', 'low', 'close', 'volume'])
 
-def test_training_pipeline():
-    """Test training pipeline"""
-    # Create test data
-    data = pd.DataFrame({
-        'open': np.random.randn(100),
-        'high': np.random.randn(100),
-        'low': np.random.randn(100),
-        'close': np.random.randn(100),
-        'volume': np.abs(np.random.randn(100))
-    })
-    
-    # Initialize pipeline
-    pipeline = TrainingPipeline("config/default_config.yaml")
-    
-    # Run training
-    try:
-        agent = pipeline.train(
-            train_data=data[:70],
-            val_data=data[70:85]
-        )
-        assert agent is not None
-    except Exception as e:
-        pytest.fail(f"Training failed with error: {str(e)}")
-
 def test_backtesting():
     """Test backtesting system"""
     # Create test data
@@ -70,66 +43,63 @@ def test_backtesting():
         'volume': np.abs(np.random.randn(100))
     })
     
-    # Initialize backtest engine
-    engine = BacktestEngine(
+    # Initialize backtester
+    backtester = Backtester(
+        data=data,
         initial_balance=10000,
-        trading_fee=0.001
+        transaction_fee=0.001
     )
+    
+    # Create mock agent for testing
+    class MockAgent:
+        def get_action(self, state):
+            return np.random.uniform(-1, 1)
+    
+    mock_agent = MockAgent()
     
     # Run backtest
     try:
-        results = engine.run(data)
-        assert 'portfolio_value' in results
-        assert 'trades' in results
+        results = backtester.run(mock_agent)
         assert 'metrics' in results
+        assert 'trades' in results
+        assert 'portfolio_values' in results
     except Exception as e:
         pytest.fail(f"Backtesting failed with error: {str(e)}")
 
 @pytest.mark.integration
 def test_full_pipeline():
     """Test full training and backtesting pipeline"""
-    # Create temporary directory
-    temp_dir = tempfile.mkdtemp()
+    # Create test data
+    data = pd.DataFrame({
+        'open': np.random.randn(100),
+        'high': np.random.randn(100),
+        'low': np.random.randn(100),
+        'close': np.random.randn(100),
+        'volume': np.abs(np.random.randn(100))
+    })
     
+    # Split data
+    train_data = data[:70]
+    val_data = data[70:85]
+    test_data = data[85:]
+    
+    # Train agent
     try:
-        # Create test data
-        data = pd.DataFrame({
-            'open': np.random.randn(100),
-            'high': np.random.randn(100),
-            'low': np.random.randn(100),
-            'close': np.random.randn(100),
-            'volume': np.abs(np.random.randn(100))
-        })
-        
-        # Save test data
-        data_path = os.path.join(temp_dir, "test_data.csv")
-        data.to_csv(data_path)
-        
-        # Run training
-        train_script = "training/train.py"
-        result = subprocess.run(
-            [sys.executable, train_script, "--data", data_path],
-            capture_output=True,
-            text=True
-        )
-        assert result.returncode == 0
-        
-        # Run backtesting
-        backtest_script = "training/backtest.py"
-        result = subprocess.run(
-            [sys.executable, backtest_script, "--data", data_path],
-            capture_output=True,
-            text=True
-        )
-        assert result.returncode == 0
-        
-        # Check for output files
-        assert os.path.exists("mlruns")
-        assert os.path.exists("training_viz")
-        
-    finally:
-        # Cleanup
-        shutil.rmtree(temp_dir)
+        agent = train_agent(train_data, val_data)
+        assert agent is not None
+    except Exception as e:
+        pytest.fail(f"Training failed with error: {str(e)}")
+    
+    # Run backtest
+    backtester = Backtester(
+        data=test_data,
+        initial_balance=10000,
+        transaction_fee=0.001
+    )
+    
+    results = backtester.run(agent)
+    assert results['metrics'] is not None
+    assert len(results['trades']) > 0
 
 @pytest.mark.performance
 def test_resource_usage():
@@ -146,19 +116,15 @@ def test_resource_usage():
         'volume': np.abs(np.random.randn(1000))
     })
     
-    # Initialize pipeline
-    pipeline = TrainingPipeline("config/default_config.yaml")
-    
     # Monitor resource usage
     start_time = time.time()
     process = psutil.Process()
     initial_memory = process.memory_info().rss
     
-    # Run training
-    agent = pipeline.train(
-        train_data=data[:700],
-        val_data=data[700:850]
-    )
+    # Train agent
+    train_data = data[:700]
+    val_data = data[700:850]
+    agent = train_agent(train_data, val_data)
     
     # Check resource usage
     end_time = time.time()

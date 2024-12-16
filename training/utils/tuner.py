@@ -16,6 +16,9 @@ from ..train import TrainingPipeline
 
 logger = logging.getLogger(__name__)
 
+# Import MinimalTuner for backward compatibility
+from training.hyperopt import MinimalTuner as HyperParameterTuner
+
 class HyperParameterTuner:
     """Manages hyperparameter optimization using Ray Tune"""
     
@@ -182,3 +185,6 @@ class HyperParameterTuner:
         })
         
         return pipeline
+
+# Re-export for backward compatibility
+__all__ = ['HyperParameterTuner']

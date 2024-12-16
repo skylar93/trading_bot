@@ -11,7 +11,7 @@ from plotly.subplots import make_subplots
 import asyncio
 from typing import Dict, List, Optional
 from envs.realtime_env import RealtimeTradingEnvironment
-from agents.ppo_agent import PPOAgent
+from agents.strategies.ppo_agent import PPOAgent
 
 class RealTimeTrading:
     """Manages real-time trading functionality"""

@@ -53,53 +53,66 @@ class TradingEnvironment(gym.Env):
         self.action_space = spaces.Box(
             low=-1, high=1, shape=(1,), dtype=np.float32)
         
-        # Observation space: price data + features + position info
-        num_features = len(self.feature_columns) * window_size + 4  # +4 for position info
+        # Observation space: (window_size, features)
+        # Features include price data, technical indicators, and position info
+        self.n_features = len(self.feature_columns)
         self.observation_space = spaces.Box(
-            low=-np.inf, high=np.inf, shape=(num_features,), dtype=np.float32)
+            low=-np.inf, high=np.inf, 
+            shape=(window_size, self.n_features), 
+            dtype=np.float32
+        )
         
         # Initialize state variables
         self.reset()
         
-    def reset(self, seed: Optional[int] = None):
-        """Reset the environment"""
+    def reset(self, seed=None, options=None):
+        """Reset the environment
+        
+        Args:
+            seed: Random seed
+            options: Additional options for reset
+            
+        Returns:
+            observation: Initial observation
+            info: Additional information
+        """
         super().reset(seed=seed)
+        
+        # Reset internal state
         self.current_step = self.window_size
         self.balance = self.initial_balance
         self.position = None
-        self.done = False
         self.position_history = []
+        self.total_trades = 0
+        self.profitable_trades = 0
         
-        return self._get_observation(), {}  # Return observation and info dict
+        # Get initial observation
+        observation = self._get_observation()
+        info = {
+            'balance': self.balance,
+            'position': self.position,
+            'current_price': self.df['$close'].iloc[self.current_step]
+        }
+        
+        return observation, info
     
     def _get_observation(self) -> np.ndarray:
         """Get current observation (state)"""
         # Get window of feature data
-        features = self.df[self.feature_columns].iloc[
-            self.current_step - self.window_size:self.current_step].values.flatten()
+        obs = self.df[self.feature_columns].iloc[
+            self.current_step - self.window_size:self.current_step].values
         
-        # Add position information
-        position_size = 0.0
-        position_type = 0.0  # -1 for short, 1 for long
-        position_profit = 0.0
-        position_hold_time = 0.0
+        # Normalize each feature independently
+        for i in range(obs.shape[1]):
+            col = obs[:, i]
+            min_val = np.min(col)
+            max_val = np.max(col)
+            if min_val != max_val:
+                obs[:, i] = 2 * (col - min_val) / (max_val - min_val) - 1
+            else:
+                obs[:, i] = 0
         
-        if self.position is not None:
-            position_size = self.position.size / self.max_position_size
-            position_type = 1.0 if self.position.type == 'long' else -1.0
-            current_price = self.df['$close'].iloc[self.current_step]
-            position_profit = self.position.calculate_pnl(current_price) / self.initial_balance
-            position_hold_time = (self.df['datetime'].iloc[self.current_step] - 
-                                self.position.entry_time).total_seconds() / (24 * 3600)  # in days
-        
-        position_info = np.array([
-            position_size,
-            position_type,
-            position_profit,
-            position_hold_time
-        ])
-        
-        return np.concatenate([features, position_info])
+        return obs.astype(np.float32)
     
     def _calculate_reward(self, action: float) -> float:
         """Calculate reward for the current step"""
@@ -126,6 +139,7 @@ class TradingEnvironment(gym.Env):
         
         # Process the action
         current_price = self.df['$close'].iloc[self.current_step]
+        current_time = self.df.index[self.current_step]
         
         # Close existing position if action is in opposite direction
         if self.position is not None:
@@ -143,7 +157,7 @@ class TradingEnvironment(gym.Env):
                 type=position_type,
                 size=position_size,
                 entry_price=current_price,
-                entry_time=self.df['datetime'].iloc[self.current_step]
+                entry_time=current_time
             )
         
         # Move to next step
@@ -161,7 +175,7 @@ class TradingEnvironment(gym.Env):
             'balance': self.balance,
             'position': self.position,
             'current_price': current_price,
-            'timestamp': self.df['datetime'].iloc[self.current_step]
+            'timestamp': current_time
         }
         
         return obs, reward, done, truncated, info

@@ -1,0 +1,54 @@
+version: 1
+disable_existing_loggers: false
+
+formatters:
+  standard:
+    format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+  detailed:
+    format: '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
+
+handlers:
+  console:
+    class: logging.StreamHandler
+    level: INFO
+    formatter: standard
+    stream: ext://sys.stdout
+
+  file:
+    class: logging.FileHandler
+    level: DEBUG
+    formatter: detailed
+    filename: logs/trading_bot.log
+    mode: a
+
+  error_file:
+    class: logging.FileHandler
+    level: ERROR
+    formatter: detailed
+    filename: logs/error.log
+    mode: a
+
+loggers:
+  trading_bot:
+    level: DEBUG
+    handlers: [console, file, error_file]
+    propagate: false
+
+  trading_bot.env:
+    level: DEBUG
+    handlers: [console, file]
+    propagate: false
+
+  trading_bot.agent:
+    level: DEBUG
+    handlers: [console, file]
+    propagate: false
+
+  trading_bot.data:
+    level: DEBUG
+    handlers: [console, file]
+    propagate: false
+
+root:
+  level: INFO
+  handlers: [console, file] 
