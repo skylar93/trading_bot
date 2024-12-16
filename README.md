@@ -172,6 +172,15 @@ Data Sources (Exchanges) → ccxt → Raw Data Storage
 - **Modular Design**: Add new features via separate modules (inheritance, composition) without altering stable core.
 - **Documentation**: Thoroughly document changes and new modules.
 
+For all development work, please refer to our [Development Guidelines](DEVELOPMENT_GUIDELINES.md). This document contains:
+
+- Code standards and best practices
+- Testing requirements
+- Data validation rules
+- Debugging procedures
+- Common issues and solutions
+
+Following these guidelines ensures consistent code quality and makes debugging easier.
 
 ## Running the Project
 

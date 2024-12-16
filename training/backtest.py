@@ -246,9 +246,10 @@ class Backtester:
                           color=color, marker=marker, s=100)
             
             # Plot daily returns
-            returns = pd.Series(values).pct_change()
-            ax3.bar(times[1:], returns, color='blue', alpha=0.5)
-            ax3.set_title('Daily Returns')
+            returns = pd.Series(values).pct_change().fillna(0)
+            # Ensure times and returns have the same length
+            ax3.bar(times, returns, color='blue', alpha=0.5)
+            ax3.set_title('Returns')
             ax3.set_xlabel('Date')
             ax3.set_ylabel('Return %')
             ax3.grid(True)
@@ -258,6 +259,7 @@ class Backtester:
             
             if save_path:
                 plt.savefig(save_path)
+                plt.close()
             else:
                 plt.show()
                 
