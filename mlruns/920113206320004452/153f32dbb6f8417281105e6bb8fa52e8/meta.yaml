@@ -1,0 +1,15 @@
+artifact_uri: file:///Users/skylar/Desktop/trading_bot/mlruns/920113206320004452/153f32dbb6f8417281105e6bb8fa52e8/artifacts
+end_time: 1734317354197
+entry_point_name: ''
+experiment_id: '920113206320004452'
+lifecycle_stage: active
+run_id: 153f32dbb6f8417281105e6bb8fa52e8
+run_name: crawling-rook-74
+run_uuid: 153f32dbb6f8417281105e6bb8fa52e8
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1734317354130
+status: 3
+tags: []
+user_id: skylar

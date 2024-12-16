@@ -294,3 +294,19 @@ class Backtester:
         self.plot_results(results, save_path=str(save_dir / 'results_plot.png'))
         
         logger.info(f"Results saved to {save_dir}")
+    
+    def _record_trade(self, action, price, timestamp):
+        """Record a trade with proper datetime handling"""
+        if isinstance(timestamp, (int, float)):
+            timestamp = pd.Timestamp.fromtimestamp(timestamp)
+        elif isinstance(timestamp, str):
+            timestamp = pd.Timestamp(timestamp)
+        
+        trade = {
+            'action': action,
+            'price': price,
+            'entry_time': timestamp,
+            'exit_time': None,
+            'profit': 0.0
+        }
+        self.trades.append(trade)

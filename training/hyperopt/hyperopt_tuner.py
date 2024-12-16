@@ -1,163 +1,152 @@
-"""
-Ray Tune based hyperparameter optimizer
-"""
+"""Hyperparameter optimization using Ray Tune"""
+
+import os
 import ray
 from ray import tune
-from ray.tune.schedulers import ASHAScheduler
-from ray.tune.search.hyperopt import HyperOptSearch
+from typing import Dict, Any, List, Tuple, Optional
+import pandas as pd
 import numpy as np
-from typing import Dict, Optional
-import logging
-import mlflow
 
-from .hyperopt_env import SimplifiedTradingEnv
-from .hyperopt_agent import MinimalPPOAgent
-
-logger = logging.getLogger(__name__)
-
-def train_agent(env: SimplifiedTradingEnv, 
-                agent: MinimalPPOAgent, 
-                total_timesteps: int) -> Dict:
-    """Training loop with early stopping"""
-    state = env.reset()[0]
-    best_reward = float('-inf')
-    patience = 5
-    no_improve = 0
-    
-    for step in range(total_timesteps):
-        # Step environment
-        action = agent.get_action(state)
-        next_state, reward, done, truncated, info = env.step(action)
-        
-        # Train agent
-        metrics = agent.train(state, action, reward, next_state, done)
-        
-        # Early stopping check
-        if reward > best_reward:
-            best_reward = reward
-            no_improve = 0
-        else:
-            no_improve += 1
-            if no_improve >= patience:
-                logger.debug(f"Early stopping at step {step}")
-                break
-        
-        # Reset or update state
-        if done or truncated:
-            state = env.reset()[0]
-        else:
-            state = next_state
-            
-    return metrics
+from training.train import train_agent
 
 class MinimalTuner:
-    def __init__(self, df, mlflow_experiment: Optional[str] = None):
+    """Minimal hyperparameter tuner using Ray Tune"""
+    
+    def __init__(self, df: pd.DataFrame):
+        """Initialize tuner
+        
+        Args:
+            df: DataFrame containing market data
+        """
         self.df = df
-        if mlflow_experiment:
-            mlflow.set_experiment(mlflow_experiment)
-
-    def objective(self, config: Dict) -> None:
-        """Minimal objective function for Ray Tune"""
-        # Create env and agent
-        env = SimplifiedTradingEnv(
-            df=self.df,
-            initial_balance=config["initial_balance"],
-            transaction_fee=config["transaction_fee"]
-        )
         
-        agent = MinimalPPOAgent(
-            observation_space=env.observation_space,
-            action_space=env.action_space,
-            learning_rate=config["learning_rate"],
-            hidden_size=config["hidden_size"],
-            gamma=config["gamma"],
-            epsilon=config["epsilon"]
-        )
+        # Split data into train/val
+        train_size = int(len(df) * 0.8)
+        self.train_data = df[:train_size]
+        self.val_data = df[train_size:]
         
-        # Train
-        metrics = train_agent(env, agent, config["total_timesteps"])
-        
-        # Get final performance stats
-        stats = env.get_episode_infos()[-1]  # Last episode stats
-        
-        # Report results
-        tune.report(
-            loss=metrics["loss"],
-            sharpe_ratio=stats["sharpe_ratio"],
-            total_return=stats["total_return"]
-        )
-
-    def run_optimization(self, num_samples: int = 10) -> Dict:
-        """Run hyperparameter optimization"""
-        search_space = {
-            "learning_rate": tune.loguniform(1e-4, 1e-3),
-            "hidden_size": tune.choice([32, 64]),
-            "gamma": tune.uniform(0.95, 0.99),
-            "epsilon": tune.uniform(0.1, 0.3),
-            "initial_balance": tune.choice([10000]),
-            "transaction_fee": tune.uniform(0.0005, 0.001),
-            "total_timesteps": tune.choice([1000])  # Fixed for quick iteration
+        # Default search space
+        self.search_space = {
+            "learning_rate": tune.loguniform(1e-4, 1e-2),
+            "hidden_size": tune.choice([32, 64, 128, 256]),
+            "gamma": tune.uniform(0.9, 0.999),
+            "epsilon": tune.loguniform(1e-5, 1e-3),
+            "initial_balance": tune.choice([10000, 100000]),
+            "transaction_fee": tune.loguniform(1e-3, 1e-2),
+            "total_timesteps": tune.choice([10000, 50000])
         }
-
-        scheduler = ASHAScheduler(
-            time_attr='training_iteration',
-            metric='sharpe_ratio',
-            mode='max',
-            max_t=3,  # Maximum number of iterations
-            grace_period=1
+        
+    def objective(self, config: Dict[str, Any]) -> Dict[str, float]:
+        """Objective function for Ray Tune
+        
+        Args:
+            config: Configuration dictionary
+            
+        Returns:
+            Dictionary containing metrics
+        """
+        # Convert flat config to nested config
+        config_dict = {
+            'env': {
+                'initial_balance': config['initial_balance'],
+                'trading_fee': config['transaction_fee'],
+                'window_size': 20
+            },
+            'model': {
+                'fcnet_hiddens': [config['hidden_size'], config['hidden_size']],
+                'learning_rate': config['learning_rate'],
+                'gamma': config['gamma'],
+                'epsilon': config['epsilon']
+            },
+            'training': {
+                'total_timesteps': config['total_timesteps'],
+                'batch_size': 64
+            },
+            'paths': {
+                'model_dir': 'models',
+                'log_dir': 'logs'
+            }
+        }
+        
+        # Train agent
+        agent = train_agent(self.train_data, self.val_data, config_dict)
+        
+        # Evaluate on validation set
+        metrics = self.evaluate_config(config_dict)
+        
+        # Report metrics
+        tune.report(
+            score=metrics['sharpe_ratio'],
+            total_return=metrics['total_return'],
+            max_drawdown=metrics['max_drawdown']
         )
-
-        reporter = tune.CLIReporter(
-            metric_columns=["loss", "sharpe_ratio", "total_return"]
-        )
-
+        
+        return metrics
+        
+    def evaluate_config(self, config: Dict[str, Any], episodes: int = 1) -> Dict[str, float]:
+        """Evaluate a configuration
+        
+        Args:
+            config: Configuration dictionary
+            episodes: Number of episodes to evaluate
+            
+        Returns:
+            Dictionary containing metrics
+        """
+        # Train agent
+        agent = train_agent(self.train_data, self.val_data, config)
+        
+        # Calculate metrics
+        returns = []
+        for _ in range(episodes):
+            metrics = agent.evaluate(self.val_data)
+            returns.append(metrics['total_return'])
+            
+        # Calculate statistics
+        mean_return = np.mean(returns)
+        std_return = np.std(returns)
+        sharpe_ratio = mean_return / std_return if std_return > 0 else 0
+        
+        return {
+            'total_return': mean_return,
+            'return_std': std_return,
+            'sharpe_ratio': sharpe_ratio
+        }
+        
+    def optimize(self, num_samples: int = 10, max_concurrent: int = 4) -> Tuple[Dict[str, Any], Dict[str, float]]:
+        """Run hyperparameter optimization
+        
+        Args:
+            num_samples: Number of configurations to try
+            max_concurrent: Maximum number of concurrent trials
+            
+        Returns:
+            Tuple containing best configuration and metrics
+        """
+        # Run optimization
         analysis = tune.run(
             self.objective,
+            config=self.search_space,
             num_samples=num_samples,
-            config=search_space,
-            scheduler=scheduler,
-            progress_reporter=reporter,
-            resources_per_trial={"cpu": 1},
-            local_dir="./ray_results",
-            name="minimal_trading_tune",
-            verbose=0
+            max_concurrent_trials=max_concurrent,
+            resources_per_trial={'cpu': 2},
+            metric='score',
+            mode='max'
         )
         
-        best_config = analysis.get_best_config(metric="sharpe_ratio", mode="max")
-        logger.info(f"Best config: {best_config}")
+        # Get best configuration
+        best_config = analysis.best_config
+        best_metrics = analysis.best_result
         
-        return best_config
-
-    def evaluate_config(self, config: Dict, episodes: int = 3) -> Dict:
-        """Evaluate a configuration"""
-        env = SimplifiedTradingEnv(
-            df=self.df, 
-            initial_balance=config["initial_balance"],
-            transaction_fee=config["transaction_fee"]
-        )
+        return best_config, best_metrics
         
-        agent = MinimalPPOAgent(
-            observation_space=env.observation_space,
-            action_space=env.action_space,
-            **{k: v for k, v in config.items() 
-               if k in ["learning_rate", "hidden_size", "gamma", "epsilon"]}
-        )
+    def run_optimization(self, num_samples: int = 10) -> Dict[str, Any]:
+        """Run optimization and return best configuration
         
-        # Run evaluation episodes
-        metrics = []
-        for _ in range(episodes):
-            state = env.reset()[0]
-            done = truncated = False
+        Args:
+            num_samples: Number of configurations to try
             
-            while not (done or truncated):
-                action = agent.get_action(state)
-                state, _, done, truncated, _ = env.step(action)
-            
-            metrics.append(env.get_episode_infos()[-1])
-        
-        # Average metrics
-        avg_metrics = {}
-        for key in metrics[0].keys():
-            avg_metrics[key] = float(np.mean([m[key] for m in metrics]))
-        
-        return avg_metrics
+        Returns:
+            Best configuration dictionary
+        """
+        return self.optimize(num_samples=num_samples)[0]  # Return only config for backward compatibility

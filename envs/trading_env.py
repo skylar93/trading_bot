@@ -1,125 +1,188 @@
 import gymnasium as gym
 import logging
-
-logger = logging.getLogger(__name__)
 import numpy as np
 import pandas as pd
 from gymnasium import spaces
 from typing import Dict, List, Tuple
 
+logger = logging.getLogger('trading_bot.env')
+
 class TradingEnvironment(gym.Env):
     """Custom Trading Environment that follows gym interface"""
     
     def __init__(self, df: pd.DataFrame, initial_balance: float = 10000.0,
-                 transaction_fee: float = 0.001, window_size: int = 60):
+                 transaction_fee: float = 0.001, window_size: int = 60,
+                 max_position_size: float = 1.0):
         super(TradingEnvironment, self).__init__()
+        
+        logger.info(f"Initializing TradingEnvironment with window_size={window_size}, "
+                   f"initial_balance={initial_balance}, transaction_fee={transaction_fee}")
 
         self.df = df
         self.initial_balance = initial_balance
         self.transaction_fee = transaction_fee
         self.window_size = window_size
+        self.max_position_size = max_position_size
         
         # Action space: continuous action between -1 (full sell) and 1 (full buy)
         self.action_space = spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32)
         
-        # Observation space: OHLCV data + technical indicators
-        n_features = 10  # price, volume, position, balance, etc.
+        # Calculate number of features
+        self.n_features = len(df.columns)  # Use all columns as features
+        
+        # Observation space: All features from DataFrame
         self.observation_space = spaces.Box(
-            low=-np.inf, high=np.inf, shape=(window_size, n_features), dtype=np.float32
+            low=-np.inf, high=np.inf, 
+            shape=(self.window_size, self.n_features), 
+            dtype=np.float32
         )
         
+        logger.debug(f"Environment initialized with observation space shape: {self.observation_space.shape}")
+        logger.debug(f"Available features: {list(df.columns)}")
         self.reset()
     
     @property
     def portfolio_value(self):
         """Calculate current portfolio value"""
-        current_price = self.df.iloc[self.current_step]['close']
-        return self.balance + (self.position * current_price)
+        current_price = self.df.iloc[self.current_step]['$close']
+        value = self.balance + (self.position * current_price)
+        logger.debug(f"Portfolio value: {value:.2f} (balance: {self.balance:.2f}, "
+                    f"position: {self.position:.4f} @ {current_price:.2f})")
+        return value
     
-    def reset(self, seed=None):
+    def reset(self, *, seed=None, options=None):
         """Reset the environment"""
+        logger.info("Resetting environment")
         super().reset(seed=seed)
+        
         self.current_step = self.window_size
         self.balance = self.initial_balance
-        self.position = 0
+        self.position = 0.0
         self.trades = []
         
-        return self._get_observation(), {}
+        logger.debug(f"Reset state - step: {self.current_step}, balance: {self.balance}, "
+                    f"position: {self.position}")
+        
+        # Get observation
+        obs = self._get_observation()
+        
+        # Update info dictionary
+        info = {
+            'balance': self.balance,
+            'position': self.position,
+            'current_price': self.df.iloc[self.current_step]['$close']
+        }
+        
+        logger.debug(f"Reset complete - observation shape: {obs.shape}, info: {info}")
+        return obs, info
     
     def step(self, action: float) -> Tuple[np.ndarray, float, bool, bool, dict]:
-        """
-        Execute one step in the environment
+        """Execute one step in the environment"""
+        logger.debug(f"Step {self.current_step} - Executing action: {action[0]:.4f}")
         
-        Args:
-            action (float): Value between -1 and 1 indicating the trading action
-                          -1: full sell, 0: hold, 1: full buy
-        """
-        # Get current price and next price
-        current_price = self.df.iloc[self.current_step]['close']
+        # Get current price
+        current_price = float(self.df.iloc[self.current_step]['$close'])
+        
+        # Calculate maximum position value allowed
+        max_position_value = self.initial_balance * self.max_position_size
         
         # Execute trade
         if action > 0:  # Buy
-            shares_to_buy = (self.balance * abs(action)) / current_price
-            cost = shares_to_buy * current_price * (1 + self.transaction_fee)
-            if cost <= self.balance:
-                self.position += shares_to_buy
-                self.balance -= cost
-                self.trades.append(('buy', shares_to_buy, current_price))
+            # Calculate maximum shares that can be bought considering position limit and fees
+            current_position_value = self.position * current_price
+            remaining_position_value = max_position_value - current_position_value
+            max_cost = min(self.balance, remaining_position_value) / (1 + self.transaction_fee)
+            max_shares = max_cost / current_price
+            shares_to_buy = max_shares * abs(float(action[0]))
+            
+            if shares_to_buy > 0:
+                cost = shares_to_buy * current_price * (1 + self.transaction_fee)
+                if cost <= self.balance:
+                    self.position += shares_to_buy
+                    self.balance -= cost
+                    self.trades.append(('buy', shares_to_buy, current_price))
+                    logger.info(f"Bought {shares_to_buy:.4f} shares at {current_price:.2f} "
+                              f"(cost with fee: {cost:.2f}, remaining balance: {self.balance:.2f})")
+                else:
+                    logger.warning(f"Insufficient balance for buy order - "
+                                 f"cost with fee: {cost:.2f}, balance: {self.balance:.2f}")
+            else:
+                logger.warning("Buy order too small - no shares purchased")
         
         elif action < 0:  # Sell
-            shares_to_sell = self.position * abs(action)
+            # Calculate maximum shares that can be sold
+            shares_to_sell = self.position * abs(float(action[0]))
             revenue = shares_to_sell * current_price * (1 - self.transaction_fee)
-            self.position -= shares_to_sell
-            self.balance += revenue
-            self.trades.append(('sell', shares_to_sell, current_price))
+            
+            if shares_to_sell > 0:
+                self.position -= shares_to_sell
+                self.balance += revenue
+                self.trades.append(('sell', shares_to_sell, current_price))
+                logger.info(f"Sold {shares_to_sell:.4f} shares at {current_price:.2f} "
+                          f"(revenue: {revenue:.2f}, new balance: {self.balance:.2f})")
+            else:
+                logger.warning(f"Insufficient position for sell order - "
+                             f"position: {self.position:.4f}")
         
         # Move to next step
         self.current_step += 1
         
         # Calculate reward (change in portfolio value)
         portfolio_value = self.balance + (self.position * current_price)
-        prev_portfolio_value = self.balance + (self.position * self.df.iloc[self.current_step-1]['close'])
-        reward = (portfolio_value - prev_portfolio_value) / prev_portfolio_value
+        prev_portfolio_value = self.balance + (self.position * float(self.df.iloc[self.current_step-1]['$close']))
+        reward = float((portfolio_value - prev_portfolio_value) / prev_portfolio_value)
+        
+        logger.debug(f"Step reward: {reward:.6f} (portfolio value change: "
+                    f"{portfolio_value:.2f} -> {prev_portfolio_value:.2f})")
         
         # Check if episode is done
         done = self.current_step >= len(self.df) - 1
         
-        return self._get_observation(), reward, done, False, {
-            'portfolio_value': portfolio_value,
-            'position': self.position,
-            'balance': self.balance
+        obs = self._get_observation()
+        info = {
+            'portfolio_value': float(portfolio_value),
+            'position': float(self.position),
+            'position_value': float(self.position * current_price),
+            'balance': float(self.balance),
+            'current_price': float(current_price),
+            'action': float(action[0])
         }
+        
+        if done:
+            logger.info(f"Episode complete - Final portfolio value: {portfolio_value:.2f}, "
+                       f"Total trades: {len(self.trades)}")
+        
+        return obs, reward, done, False, info
     
     def _get_observation(self) -> np.ndarray:
         """Construct the observation"""
-        # Get the price data for the current window
-        logger.info(f"Current step: {self.current_step}, Window size: {self.window_size}")
-        logger.info(f"DataFrame length: {len(self.df)}")
-        df_window = self.df.iloc[self.current_step-self.window_size:self.current_step]
-        logger.info(f"Window data shape: {df_window.shape}")
-        
-        # Normalize the data
-        price_mean = df_window['close'].mean()
-        price_std = df_window['close'].std()
-        volume_mean = df_window['volume'].mean()
-        volume_std = df_window['volume'].std()
-        
-        # Construct features
-        features = []
-        # Price features
-        for col in ['open', 'high', 'low', 'close']:
-            features.append((df_window[col] - price_mean) / price_std)
-        # Volume
-        features.append((df_window['volume'] - volume_mean) / volume_std)
-        # Returns and changes
-        features.append(df_window['close'].pct_change().fillna(0))
-        features.append(df_window['volume'].pct_change().fillna(0))
-        # Portfolio info
-        features.append(pd.Series([self.position] * len(df_window)))
-        features.append(pd.Series([self.balance / self.initial_balance] * len(df_window)))
-        features.append(pd.Series([(self.balance + self.position * df_window['close'].iloc[-1]) / self.initial_balance] * len(df_window)))
-        
-        obs = np.array(features).T
-        logger.info(f"Observation shape: {obs.shape}")
-        
-        return obs.astype(np.float32)
+        try:
+            # Get the price data for the current window
+            df_window = self.df.iloc[self.current_step-self.window_size:self.current_step]
+            
+            if len(df_window) < self.window_size:
+                logger.warning(f"Insufficient data for window size {self.window_size}, padding with zeros")
+                # Pad with zeros if we don't have enough data
+                pad_size = self.window_size - len(df_window)
+                pad_shape = (pad_size, self.n_features)
+                padding = np.zeros(pad_shape, dtype=np.float32)
+                obs = np.vstack([padding, df_window.values])
+            else:
+                obs = df_window.values
+            
+            # Normalize each feature independently
+            for i in range(obs.shape[1]):
+                col = obs[:, i]
+                min_val = np.min(col)
+                max_val = np.max(col)
+                if min_val != max_val:
+                    obs[:, i] = 2 * (col - min_val) / (max_val - min_val) - 1
+                else:
+                    obs[:, i] = 0
+            
+            logger.debug(f"Generated observation with shape {obs.shape}")
+            return obs.astype(np.float32)
+            
+        except Exception as e:
+            logger.error(f"Error generating observation: {str(e)}", exc_info=True)
+            raise

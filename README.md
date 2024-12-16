@@ -172,44 +172,6 @@ Data Sources (Exchanges) → ccxt → Raw Data Storage
 - **Modular Design**: Add new features via separate modules (inheritance, composition) without altering stable core.
 - **Documentation**: Thoroughly document changes and new modules.
 
-## Current Focus
-
-1. **Advanced Backtesting Scenarios**
-   - Additional edge cases: extreme volatility, correlated assets
-   - Validate new metrics and visualizations in `advanced_backtest.py`
-
-2. **Risk Management Enhancements**
-   - Additional risk metrics (e.g., VaR, CVaR)
-   - Automated rebalancing strategies
-   - Enhanced stop-loss (trailing stops, dynamic thresholds)
-
-3. **Hyperparameter Optimization**
-   - Finalize `hyperopt_tuner.py` with Ray Tune
-   - Validate results via MLflow
-   - Run comprehensive experiments with `scripts/run_hyperopt.py`
-
-4. **Real-Time Trading Setup**
-   - Finalize CCXT WebSocket integration
-   - Adapt `trading_env.py` for live data and order execution
-   - Paper trading tests to ensure live strategy readiness
-   - Real-time performance dashboards (Plotly/Dash for interactive visuals)
-
-5. **Resource Optimization**
-   - Test GPU-enabled environment
-   - Explore distributed training (Horovod, PyTorch Lightning)
-   - Batch processing for agent evaluation and backtesting
-
-6. **CI/CD Automation**
-   - Automatic testing, backtesting, and deployment with GitHub Actions
-   - Automated alerts for significant performance deviations
-
-7. **Algorithmic Enhancements**
-   - Experiment with LSTMs, Transformers for time-series forecasting
-   - Multi-strategy agents (momentum, mean reversion, market-making)
-
-8. **Community & Documentation**
-   - Publish to GitHub with detailed instructions
-   - Encourage community feedback and contributions
 
 ## Running the Project
 
@@ -241,44 +203,76 @@ Data Sources (Exchanges) → ccxt → Raw Data Storage
 
 ```
 trading_bot/
-├── agents/
-│   └── ppo_agent.py
-├── data/
-│   └── utils/
-│       ├── data_loader.py
-│       ├── feature_generator.py
-│       └── websocket_loader.py
-├── envs/
-│   ├── base_env.py
-│   ├── trading_env.py  # STABLE
-│   └── multi_agent_env.py
-├── training/
-│   ├── train.py         # STABLE
-│   ├── train_multi_agent.py
-│   ├── evaluation.py
-│   ├── backtest.py
-│   ├── advanced_backtest.py
-│   ├── hyperopt/
-│   │   ├── hyperopt_env.py
-│   │   ├── hyperopt_agent.py
-│   │   └── hyperopt_tuner.py
-│   ├── utils/
-│   │   ├── visualization.py
-│   │   ├── mlflow_manager.py
-│   │   ├── mlflow_utils.py
-│   │   ├── advanced_scenarios.py
-│   │   ├── risk_management.py
-│   │   └── risk_backtest.py
-│   └── monitoring/
-│       ├── metrics_collector.py
-│       ├── performance_analyzer.py
-│       ├── worker_manager.py
-│       └── optimizer.py
-├── deployment/
-│   └── web_interface/app.py
-└── scripts/
-    ├── run_hyperopt.py
-    └── test_optimization.py
+├─ config/
+│  ├─ default_config.yaml         # Core configuration
+│  ├─ env_settings.yaml           # Environment settings
+│  └─ model_config.yaml           # Model architecture settings
+│
+├─ data/
+│  ├─ raw/
+│  │  └─ crypto/                  # Raw cryptocurrency data
+│  ├─ processed/
+│  │  ├─ features/               # Processed features
+│  │  └─ cache/                  # Cached computations
+│  └─ utils/
+│     ├─ data_loader.py          # Data loading utilities
+│     ├─ feature_generator.py    # Feature generation
+│     └─ validation.py           # Data validation
+│
+├─ agents/
+│  ├─ base/
+│  │  ├─ base_agent.py          # Abstract base agent
+│  │  └─ agent_factory.py       # Agent creation factory
+│  ├─ strategies/
+│  │  └─ ppo_agent.py          # PPO implementation
+│  └─ models/
+│     ├─ policy_network.py      # Policy network architectures
+│     └─ value_network.py       # Value network architectures
+│
+├─ envs/
+│  ├─ base_env.py              # Base trading environment
+│  └─ trading_env.py           # Main trading environment
+│
+├─ training/
+│  ├─ train.py                 # Single-agent training
+│  ├─ train_multi_agent.py     # Multi-agent training
+│  ├─ evaluation.py            # Performance evaluation
+│  ├─ backtest.py             # Basic backtesting
+│  ├─ advanced_backtest.py     # Advanced scenario testing
+│  └─ utils/
+│     ├─ metrics.py            # Performance metrics
+│     └─ callbacks.py          # Training callbacks
+│
+├─ deployment/
+│  ├─ web_interface/
+│  │  ├─ app.py               # Streamlit main app
+│  │  ├─ pages/              # Multi-page components
+│  │  │  ├─ training.py      # Training interface
+│  │  │  ├─ backtest.py      # Backtesting interface
+│  │  │  └─ monitor.py       # Monitoring interface
+│  │  └─ utils/
+│  │     └─ state_management.py  # Session state management
+│  └─ api/
+│     ├─ main.py             # FastAPI main app
+│     └─ routers/
+│        ├─ training.py      # Training endpoints
+│        └─ data.py          # Data endpoints
+│
+└─ tests/
+   ├─ test_environment.py    # Environment tests
+   ├─ test_agents.py        # Agent tests
+   └─ test_training.py      # Training pipeline tests
+```
+
+## Dependencies and Roles
+```
+graph TD
+    A[environment.py] --> B[agents.py]
+    B --> C[train.py]
+    B --> D[backtest.py]
+    D --> E[evaluation.py]
+    F[async_feature_generator.py] --> G[app.py]
+    H[data_management.py] --> G
 ```
 
 ## Visual Results
@@ -324,3 +318,43 @@ Latest results in `training_viz/training_progress_ep0.png`:
   - Advanced scenarios and risk-aware features operational
   - Visualization and metrics tracking robust
   - CI/CD and resource optimization in progress
+
+## Latest Updates 🔄
+
+### Recent Improvements (2024-03-20)
+- **Environment Wrapper GPU Support** ✅
+  - Added GPU acceleration to observation normalization
+  - Improved memory efficiency in observation stacking
+  - NaN handling and numerical stability fixes
+  - MLflow integration for environment metrics
+
+- **Data Pipeline Optimization** ✅
+  - Fixed feature generation issues
+  - Improved PVT calculation
+  - Updated naming conventions
+  - All data pipeline tests passing
+
+### Current Active Components
+- **PPO Agent**: Located in `training/agents.py` (primary implementation)
+- **Environment Wrapper**: Located in `envs/wrap_env.py` (GPU-enabled)
+- **Base Environment**: Located in `envs/base_env.py`
+
+### Deprecated Components ⚠️
+- `agents/strategies/ppo_agent.py` is no longer in use
+- Use `training/agents.py` for the current PPO implementation
+
+### Next Steps 🎯
+1. **GPU Support Enhancement**
+   - Update PPO agent for efficient GPU utilization
+   - Batch processing optimization
+   - Memory management improvements
+
+2. **MLflow Integration**
+   - Enhanced metric logging
+   - Hyperparameter tracking
+   - Experiment management
+
+3. **Multi-Agent System**
+   - Parallel environment handling
+   - Experience sharing mechanism
+   - Distributed training support

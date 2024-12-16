@@ -1,0 +1,15 @@
+artifact_uri: file:///Users/skylar/Desktop/trading_bot/mlruns/0/a2cdb9d7718942b18ff204c3bef5ef6c/artifacts
+end_time: 1734313075199
+entry_point_name: ''
+experiment_id: '0'
+lifecycle_stage: active
+run_id: a2cdb9d7718942b18ff204c3bef5ef6c
+run_name: capable-wren-976
+run_uuid: a2cdb9d7718942b18ff204c3bef5ef6c
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1734312953922
+status: 3
+tags: []
+user_id: skylar

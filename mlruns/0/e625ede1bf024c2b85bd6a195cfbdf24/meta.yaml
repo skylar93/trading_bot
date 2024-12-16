@@ -1,0 +1,15 @@
+artifact_uri: file:///Users/skylar/Desktop/trading_bot/mlruns/0/e625ede1bf024c2b85bd6a195cfbdf24/artifacts
+end_time: 1734309996940
+entry_point_name: ''
+experiment_id: '0'
+lifecycle_stage: active
+run_id: e625ede1bf024c2b85bd6a195cfbdf24
+run_name: gentle-ox-386
+run_uuid: e625ede1bf024c2b85bd6a195cfbdf24
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1734307609566
+status: 3
+tags: []
+user_id: skylar

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import torch
 
 from envs.multi_agent_env import MultiAgentTradingEnv
-from agents.ppo_agent import PPOAgent
+from agents.strategies.ppo_agent import PPOAgent
 from training.train import fetch_training_data
 
 def train_multi_agent_system(

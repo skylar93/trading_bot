@@ -10,7 +10,7 @@ import os
 import mlflow
 
 from training.utils.ray_manager import RayManager, RayConfig, BatchConfig
-from agents.ppo_agent import PPOAgent
+from agents.strategies.ppo_agent import PPOAgent
 from envs.trading_env import TradingEnvironment
 from training.utils.mlflow_manager import MLflowManager
 
