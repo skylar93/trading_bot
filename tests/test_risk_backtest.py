@@ -14,7 +14,7 @@ class MockAgent:
 
 def generate_test_data(length: int = 1000) -> pd.DataFrame:
     """Generate test market data"""
-    dates = pd.date_range(start='2024-01-01', periods=length, freq='1H')
+    dates = pd.date_range(start='2024-01-01', periods=length, freq='h')
     
     # Generate price process
     np.random.seed(42)
