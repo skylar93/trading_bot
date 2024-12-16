@@ -28,9 +28,10 @@ class TradingEnvironment(gym.Env):
         self.action_space = spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32)
         
         # Calculate number of features
-        self.n_features = len(df.columns)  # Use all columns as features
+        self.feature_columns = [col for col in df.columns if col not in ['datetime', 'instrument']]
+        self.n_features = len(self.feature_columns)
         
-        # Observation space: All features from DataFrame
+        # Observation space: price data + technical indicators + position info
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, 
             shape=(self.window_size, self.n_features), 
@@ -38,7 +39,7 @@ class TradingEnvironment(gym.Env):
         )
         
         logger.debug(f"Environment initialized with observation space shape: {self.observation_space.shape}")
-        logger.debug(f"Available features: {list(df.columns)}")
+        logger.debug(f"Available features: {self.feature_columns}")
         self.reset()
     
     @property
@@ -82,13 +83,14 @@ class TradingEnvironment(gym.Env):
         
         # Get current price
         current_price = float(self.df.iloc[self.current_step]['$close'])
+        prev_portfolio_value = self.portfolio_value
         
         # Calculate maximum position value allowed
         max_position_value = self.initial_balance * self.max_position_size
         
         # Execute trade
-        if action > 0:  # Buy
-            # Calculate maximum shares that can be bought considering position limit and fees
+        if action[0] > 0:  # Buy
+            # Calculate maximum shares that can be bought considering position limit
             current_position_value = self.position * current_price
             remaining_position_value = max_position_value - current_position_value
             max_cost = min(self.balance, remaining_position_value) / (1 + self.transaction_fee)
@@ -101,56 +103,40 @@ class TradingEnvironment(gym.Env):
                     self.position += shares_to_buy
                     self.balance -= cost
                     self.trades.append(('buy', shares_to_buy, current_price))
-                    logger.info(f"Bought {shares_to_buy:.4f} shares at {current_price:.2f} "
-                              f"(cost with fee: {cost:.2f}, remaining balance: {self.balance:.2f})")
+                    logger.info(f"Bought {shares_to_buy:.4f} shares at {current_price:.2f}")
                 else:
-                    logger.warning(f"Insufficient balance for buy order - "
-                                 f"cost with fee: {cost:.2f}, balance: {self.balance:.2f}")
-            else:
-                logger.warning("Buy order too small - no shares purchased")
-        
-        elif action < 0:  # Sell
-            # Calculate maximum shares that can be sold
-            shares_to_sell = self.position * abs(float(action[0]))
-            revenue = shares_to_sell * current_price * (1 - self.transaction_fee)
+                    logger.warning("Insufficient balance for buy order")
             
+        elif action[0] < 0:  # Sell
+            shares_to_sell = self.position * abs(float(action[0]))
             if shares_to_sell > 0:
+                revenue = shares_to_sell * current_price * (1 - self.transaction_fee)
                 self.position -= shares_to_sell
                 self.balance += revenue
                 self.trades.append(('sell', shares_to_sell, current_price))
-                logger.info(f"Sold {shares_to_sell:.4f} shares at {current_price:.2f} "
-                          f"(revenue: {revenue:.2f}, new balance: {self.balance:.2f})")
-            else:
-                logger.warning(f"Insufficient position for sell order - "
-                             f"position: {self.position:.4f}")
+                logger.info(f"Sold {shares_to_sell:.4f} shares at {current_price:.2f}")
         
         # Move to next step
         self.current_step += 1
         
-        # Calculate reward (change in portfolio value)
-        portfolio_value = self.balance + (self.position * current_price)
-        prev_portfolio_value = self.balance + (self.position * float(self.df.iloc[self.current_step-1]['$close']))
-        reward = float((portfolio_value - prev_portfolio_value) / prev_portfolio_value)
-        
-        logger.debug(f"Step reward: {reward:.6f} (portfolio value change: "
-                    f"{portfolio_value:.2f} -> {prev_portfolio_value:.2f})")
+        # Calculate reward (relative change in portfolio value)
+        current_portfolio_value = self.portfolio_value
+        reward = (current_portfolio_value - prev_portfolio_value) / prev_portfolio_value
         
         # Check if episode is done
         done = self.current_step >= len(self.df) - 1
         
         obs = self._get_observation()
         info = {
-            'portfolio_value': float(portfolio_value),
+            'portfolio_value': float(current_portfolio_value),
             'position': float(self.position),
-            'position_value': float(self.position * current_price),
             'balance': float(self.balance),
             'current_price': float(current_price),
             'action': float(action[0])
         }
         
         if done:
-            logger.info(f"Episode complete - Final portfolio value: {portfolio_value:.2f}, "
-                       f"Total trades: {len(self.trades)}")
+            logger.info(f"Episode complete - Final portfolio value: {current_portfolio_value:.2f}")
         
         return obs, reward, done, False, info
     
@@ -158,7 +144,7 @@ class TradingEnvironment(gym.Env):
         """Construct the observation"""
         try:
             # Get the price data for the current window
-            df_window = self.df.iloc[self.current_step-self.window_size:self.current_step]
+            df_window = self.df[self.feature_columns].iloc[self.current_step-self.window_size:self.current_step]
             
             if len(df_window) < self.window_size:
                 logger.warning(f"Insufficient data for window size {self.window_size}, padding with zeros")
@@ -176,7 +162,7 @@ class TradingEnvironment(gym.Env):
                 min_val = np.min(col)
                 max_val = np.max(col)
                 if min_val != max_val:
-                    obs[:, i] = 2 * (col - min_val) / (max_val - min_val) - 1
+                    obs[:, i] = (col - min_val) / (max_val - min_val)
                 else:
                     obs[:, i] = 0
             
