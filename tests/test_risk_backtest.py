@@ -21,13 +21,20 @@ def generate_test_data(length: int = 1000) -> pd.DataFrame:
     returns = np.random.normal(0, 0.01, length)
     price = 100 * np.exp(np.cumsum(returns))
     
-    return pd.DataFrame({
-        'open': price,
-        'high': price * (1 + np.random.uniform(0, 0.001, length)),
-        'low': price * (1 - np.random.uniform(0, 0.001, length)),
-        'close': price,
-        'volume': np.random.uniform(1000, 5000, length)
+    # Create DataFrame with $ prefixed columns
+    data = pd.DataFrame({
+        '$open': price,
+        '$high': price * (1 + np.random.uniform(0, 0.001, length)),
+        '$low': price * (1 - np.random.uniform(0, 0.001, length)),
+        '$close': price,
+        '$volume': np.random.uniform(1000, 5000, length)
     }, index=dates)
+    
+    # Ensure high is highest and low is lowest
+    data['$high'] = data[['$open', '$high', '$low', '$close']].max(axis=1)
+    data['$low'] = data[['$open', '$high', '$low', '$close']].min(axis=1)
+    
+    return data
 
 class TestRiskAwareBacktester(unittest.TestCase):
     def setUp(self):
@@ -60,10 +67,11 @@ class TestRiskAwareBacktester(unittest.TestCase):
         """Test trading with risk management"""
         timestamp = self.test_data.index[0]
         price_data = {
-            'open': 100,
-            'high': 101,
-            'low': 99,
-            'close': 100
+            '$open': 100,
+            '$high': 101,
+            '$low': 99,
+            '$close': 100,
+            '$volume': 1000
         }
         
         # Test large trade gets adjusted

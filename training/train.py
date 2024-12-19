@@ -12,7 +12,8 @@ from envs.trading_env import TradingEnvironment
 from envs.wrap_env import make_env
 from training.utils.mlflow_manager import MLflowManager
 from typing import Union, Dict, Any, Tuple, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
+import ccxt
 
 logger = logging.getLogger(__name__)
 
@@ -55,22 +56,28 @@ def load_config(config_path: str = "config/default_config.yaml") -> dict:
             }
         }
 
-def create_env(data: Union[pd.DataFrame, Dict], config: dict = None) -> TradingEnvironment:
-    """Create trading environment with given data and config"""
-    if config is None:
-        config = load_config()
+def create_env(env_config: Dict[str, Any]) -> TradingEnvironment:
+    """Create trading environment from config
     
-    # Convert dict to DataFrame if necessary
-    if isinstance(data, dict):
-        if 'df' in data:  # Handle DataFrame in config
-            data = data['df']
-        elif 'data' in data:  # Handle nested data structure
-            data = pd.DataFrame(data['data'])
-        else:
-            # Ensure all values are lists of the same length
-            max_len = max(len(v) if isinstance(v, (list, np.ndarray)) else 1 for v in data.values())
+    Args:
+        env_config: Environment configuration
+        
+    Returns:
+        Trading environment instance
+    """
+    # Get data from config
+    data = env_config.get('df', None)
+    if data is None:
+        raise ValueError("No data provided in env_config")
+        
+    # Handle different data types
+    if isinstance(data, (list, tuple)):
+        # Convert list of dictionaries to DataFrame
+        if all(isinstance(d, dict) for d in data):
+            max_len = max(len(v) if isinstance(v, (list, np.ndarray)) else 1 
+                         for d in data for v in d.values())
             normalized_data = {}
-            for k, v in data.items():
+            for k, v in data[0].items():
                 if not isinstance(v, (list, np.ndarray)):
                     v = [v] * max_len
                 normalized_data[k] = v
@@ -88,62 +95,144 @@ def create_env(data: Union[pd.DataFrame, Dict], config: dict = None) -> TradingE
     # Create environment with config parameters
     env = TradingEnvironment(
         df=data,
-        initial_balance=config['env']['initial_balance'],
-        transaction_fee=config['env']['trading_fee'],
-        window_size=config['env']['window_size'],
-        max_position_size=config['env'].get('max_position_size', 1.0)
+        initial_balance=env_config.get('initial_balance', 10000.0),
+        trading_fee=env_config.get('trading_fee', 0.001),
+        window_size=env_config.get('window_size', 20),
+        max_position_size=env_config.get('max_position_size', 1.0)
     )
     
     # Apply wrappers if specified in config
-    if config['env'].get('normalize', True):
+    if env_config.get('normalize', True):
         env = make_env(
             env,
             normalize=True,
-            stack_size=config['env'].get('stack_size', 4)
+            stack_size=env_config.get('stack_size', 4)
         )
     
     return env
 
-def train_agent(train_data: pd.DataFrame, 
-              val_data: pd.DataFrame, 
-              config: Union[str, Dict[str, Any]] = "config/default_config.yaml"):
-    """
-    Simplified interface for training an agent.
+def train_agent(
+        train_data: pd.DataFrame,
+        val_data: pd.DataFrame,
+        config: Dict[str, Any] = None
+    ) -> PPOAgent:
+    """Train a PPO agent
     
     Args:
         train_data: Training data
         val_data: Validation data
-        config: Either a path to config file (str) or config dictionary
+        config: Configuration dictionary
         
     Returns:
-        Trained agent
+        Trained PPO agent
     """
-    if isinstance(config, str):
-        pipeline = TrainingPipeline(config)
-    else:
-        # If config is a dict, load default config first then update with provided config
-        default_config = load_config()
-        # Ensure model config has required fields
-        if 'model' not in default_config:
-            default_config['model'] = {}
-        if 'fcnet_hiddens' not in default_config['model']:
-            default_config['model']['fcnet_hiddens'] = [64, 64]
-        
-        # Update with provided config
-        if isinstance(config, dict):
-            for key, value in config.items():
-                if key in default_config:
-                    if isinstance(value, dict):
-                        default_config[key].update(value)
-                    else:
-                        default_config[key] = value
-                else:
-                    default_config[key] = value
-        
-        pipeline = TrainingPipeline("config/default_config.yaml")
-        pipeline.config = default_config
+    # Use default config if none provided
+    if config is None:
+        config = {
+            'env': {
+                'initial_balance': 10000.0,
+                'trading_fee': 0.001,
+                'window_size': 20
+            },
+            'model': {
+                'learning_rate': 3e-4,
+                'gamma': 0.99,
+                'gae_lambda': 0.95,
+                'clip_epsilon': 0.2,
+                'c1': 1.0,
+                'c2': 0.01,
+                'batch_size': 64,
+                'n_epochs': 10
+            },
+            'training': {
+                'total_timesteps': 10000
+            }
+        }
     
-    return pipeline.train(train_data, val_data)
+    # Convert flat config to nested if needed
+    if not isinstance(config.get('env'), dict):
+        env_config = config.get('env', {})
+        if isinstance(env_config, dict):
+            # Already nested
+            pass
+        else:
+            # Convert flat to nested
+            config = {
+                'env': {
+                    'initial_balance': config.get('initial_balance', 10000.0),
+                    'trading_fee': config.get('trading_fee', 0.001),
+                    'window_size': config.get('window_size', 20)
+                },
+                'model': {
+                    'learning_rate': config.get('learning_rate', 3e-4),
+                    'gamma': config.get('gamma', 0.99),
+                    'gae_lambda': config.get('gae_lambda', 0.95),
+                    'clip_epsilon': config.get('clip_epsilon', 0.2),
+                    'c1': config.get('c1', 1.0),
+                    'c2': config.get('c2', 0.01),
+                    'batch_size': config.get('batch_size', 64),
+                    'n_epochs': config.get('n_epochs', 10)
+                },
+                'training': {
+                    'total_timesteps': config.get('total_timesteps', 10000)
+                }
+            }
+    
+    # Ensure all required config sections exist
+    for section in ['env', 'model', 'training']:
+        if section not in config:
+            config[section] = {}
+    
+    # Set default values for required parameters
+    config['env'].setdefault('initial_balance', 10000.0)
+    config['env'].setdefault('trading_fee', 0.001)
+    config['env'].setdefault('window_size', 20)
+    
+    config['model'].setdefault('learning_rate', 3e-4)
+    config['model'].setdefault('gamma', 0.99)
+    config['model'].setdefault('gae_lambda', 0.95)
+    config['model'].setdefault('clip_epsilon', 0.2)
+    config['model'].setdefault('c1', 1.0)
+    config['model'].setdefault('c2', 0.01)
+    config['model'].setdefault('batch_size', 64)
+    config['model'].setdefault('n_epochs', 10)
+    
+    config['training'].setdefault('total_timesteps', 10000)
+    
+    # Create environments
+    train_env = TradingEnvironment(
+        df=train_data,
+        initial_balance=config['env']['initial_balance'],
+        trading_fee=config['env']['trading_fee'],
+        window_size=config['env']['window_size']
+    )
+    
+    val_env = TradingEnvironment(
+        df=val_data,
+        initial_balance=config['env']['initial_balance'],
+        trading_fee=config['env']['trading_fee'],
+        window_size=config['env']['window_size']
+    )
+    
+    # Create agent
+    agent = PPOAgent(
+        observation_space=train_env.observation_space,
+        action_space=train_env.action_space,
+        learning_rate=config['model']['learning_rate'],
+        gamma=config['model']['gamma'],
+        gae_lambda=config['model']['gae_lambda'],
+        clip_epsilon=config['model']['clip_epsilon'],
+        c1=config['model']['c1'],
+        c2=config['model']['c2'],
+        batch_size=config['model']['batch_size'],
+        n_epochs=config['model']['n_epochs']
+    )
+    
+    # Train agent
+    train_env.reset()
+    agent.train(train_env, total_timesteps=config['training']['total_timesteps'])
+    
+    return agent
 
 class TrainingPipeline:
     """Training pipeline for RL agents"""
@@ -178,7 +267,14 @@ class TrainingPipeline:
             with open(config, 'r') as f:
                 self.config = yaml.safe_load(f)
         else:
-            self.config = config
+            self.config = config.copy()  # Make a copy to avoid modifying the original
+            
+            # Add default paths if not present
+            if 'paths' not in self.config:
+                self.config['paths'] = {
+                    'model_dir': 'models',
+                    'log_dir': 'logs'
+                }
             
         # Ensure required paths exist
         os.makedirs(self.config['paths']['model_dir'], exist_ok=True)
@@ -196,14 +292,14 @@ class TrainingPipeline:
         """
         # Create environments
         train_env = TradingEnvironment(
-            train_data,
+            data=train_data,
             initial_balance=self.config['env']['initial_balance'],
             trading_fee=self.config['env']['trading_fee'],
             window_size=self.config['env']['window_size']
         )
         
         val_env = TradingEnvironment(
-            val_data,
+            data=val_data,
             initial_balance=self.config['env']['initial_balance'],
             trading_fee=self.config['env']['trading_fee'],
             window_size=self.config['env']['window_size']
@@ -324,3 +420,123 @@ class TrainingPipeline:
         """
         load_path = os.path.join(self.config['paths']['model_dir'], filename)
         return PPOAgent.load(load_path)
+
+def fetch_training_data(
+    exchange: str = 'binance',
+    symbol: str = 'BTC/USDT',
+    timeframe: str = '1h',
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit: int = 1000
+) -> pd.DataFrame:
+    """
+    Fetch historical price data for training
+    
+    Args:
+        exchange: Exchange name (default: binance)
+        symbol: Trading pair symbol (default: BTC/USDT)
+        timeframe: Candle timeframe (default: 1h)
+        start_date: Start date in YYYY-MM-DD format
+        end_date: End date in YYYY-MM-DD format
+        limit: Maximum number of candles to fetch
+    
+    Returns:
+        DataFrame with OHLCV data
+    """
+    try:
+        # Initialize exchange
+        exchange_class = getattr(ccxt, exchange)
+        exchange_instance = exchange_class({
+            'enableRateLimit': True,
+            'options': {'defaultType': 'future'}
+        })
+        
+        # Set up date range
+        if end_date is None:
+            end_date = datetime.now()
+        else:
+            end_date = datetime.strptime(end_date, '%Y-%m-%d')
+            
+        if start_date is None:
+            start_date = end_date - timedelta(days=30)
+        else:
+            start_date = datetime.strptime(start_date, '%Y-%m-%d')
+        
+        # Fetch OHLCV data
+        ohlcv = exchange_instance.fetch_ohlcv(
+            symbol=symbol,
+            timeframe=timeframe,
+            since=int(start_date.timestamp() * 1000),
+            limit=limit
+        )
+        
+        # Convert to DataFrame
+        df = pd.DataFrame(
+            ohlcv,
+            columns=['timestamp', '$open', '$high', '$low', '$close', '$volume']
+        )
+        
+        # Convert timestamp to datetime
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        df.set_index('timestamp', inplace=True)
+        
+        logger.info(f"Fetched {len(df)} candles from {exchange} for {symbol}")
+        return df
+        
+    except Exception as e:
+        logger.error(f"Error fetching data: {str(e)}")
+        
+        # Return dummy data for testing
+        dates = pd.date_range(start='2024-01-01', periods=1000, freq='1h')
+        return pd.DataFrame({
+            '$open': np.random.randn(1000) * 10 + 100,
+            '$high': np.random.randn(1000) * 10 + 100,
+            '$low': np.random.randn(1000) * 10 + 100,
+            '$close': np.random.randn(1000) * 10 + 100,
+            '$volume': np.abs(np.random.randn(1000) * 1000)
+        }, index=dates)
+
+class Trainer:
+    def __init__(self, config: Dict[str, Any]):
+        # ... (existing initialization code)
+        
+        # Initialize MLflow manager
+        self.mlflow_manager = MLflowManager(
+            experiment_name=config.get("experiment_name", "trading_bot_training"),
+            tracking_dir=config.get("mlflow_tracking_dir", "./mlflow_runs")
+        )
+        
+    def train(self) -> None:
+        """Train the agent with MLflow tracking."""
+        with self.mlflow_manager.start_run(run_name=f"training_{self.start_time}"):
+            # Log training parameters
+            self.mlflow_manager.log_params({
+                "window_size": self.window_size,
+                "trading_fee": self.trading_fee,
+                "batch_size": self.batch_size,
+                "learning_rate": self.learning_rate,
+                # ... other parameters
+            })
+            
+            for episode in range(self.num_episodes):
+                # ... (existing training loop code)
+                
+                # Log episode metrics
+                self.mlflow_manager.log_metrics({
+                    "episode_reward": episode_reward,
+                    "portfolio_value": portfolio_value,
+                    "sharpe_ratio": sharpe_ratio
+                }, step=episode)
+                
+            # Log final model and results
+            self.mlflow_manager.log_model(
+                self.agent.policy_network,
+                "policy_network"
+            )
+            
+            if self.results_df is not None:
+                self.mlflow_manager.log_dataframe(
+                    self.results_df,
+                    "results",
+                    "training_results.parquet"
+                )

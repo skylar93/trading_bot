@@ -1,0 +1,38 @@
+[Naming Conventions and Interface Standards]
+- DataFrame Parameter Names
+  * Use 'df' instead of 'data' for DataFrame parameters
+  * Example: def __init__(self, df: Optional[pd.DataFrame] = None)
+
+- Column Names
+  * Use '$' prefix for OHLCV columns: '$open', '$high', '$low', '$close', '$volume'
+  * Standardize technical indicator names without '$' prefix: 'RSI', 'MACD', etc.
+
+- Fee Parameters
+  * Use 'trading_fee' consistently (not 'transaction_fee')
+  * Default value should be 0.001 (0.1%)
+
+- Environment Parameters
+  * window_size: Number of time steps in observation window
+  * initial_balance: Starting account balance
+  * max_position_size: Maximum allowed position size
+
+[Code Organization]
+- Class Initialization
+  * Always initialize logger in __init__
+  * Example: self.logger = logging.getLogger(self.__class__.__name__)
+  * Validate required parameters before use
+
+- Data Handling
+  * Convert column names automatically if needed
+  * Validate required columns exist
+  * Handle missing data appropriately
+
+[Testing Standards]
+- Data Creation
+  * Use consistent test data creation methods
+  * Include all required OHLCV columns with '$' prefix
+  * Add relevant technical indicators for full testing
+
+- Configuration
+  * Use consistent parameter names in test configs
+  * Match parameter names with environment variables 

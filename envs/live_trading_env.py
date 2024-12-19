@@ -13,7 +13,7 @@ class LiveTradingEnvironment(gym.Env):
     """Live Trading Environment that extends the base TradingEnvironment"""
     
     def __init__(self, symbol: str = "BTC/USDT", initial_balance: float = 10000.0,
-                 transaction_fee: float = 0.001, window_size: int = 60,
+                 trading_fee: float = 0.001, window_size: int = 60,
                  exchange_id: str = "binance", max_data_points: int = 1000):
         super(LiveTradingEnvironment, self).__init__()
 
@@ -26,7 +26,7 @@ class LiveTradingEnvironment(gym.Env):
         
         # Trading parameters
         self.initial_balance = initial_balance
-        self.transaction_fee = transaction_fee
+        self.trading_fee = trading_fee
         self.window_size = window_size
         
         # Action space: continuous action between -1 (full sell) and 1 (full buy)
@@ -77,18 +77,25 @@ class LiveTradingEnvironment(gym.Env):
         
         return best_bid, best_ask, bid_volume, ask_volume
     
-    def reset(self, seed=None) -> Tuple[np.ndarray, dict]:
+    async def reset(self, seed=None) -> Tuple[np.ndarray, dict]:
         """Reset the environment"""
         super().reset(seed=seed)
         
         self.balance = self.initial_balance
         self.position = 0
         self.trades = []
+        self._last_portfolio_value = self.initial_balance
         
         # Wait for initial data
+        max_retries = 10
+        retry_count = 0
         while len(self.websocket.get_current_data()) < self.window_size:
             logger.info("Waiting for initial data...")
-            asyncio.sleep(1)
+            await asyncio.sleep(1)
+            retry_count += 1
+            if retry_count >= max_retries:
+                logger.warning("Timeout waiting for initial data")
+                break
         
         return self._get_observation(), {}
     
@@ -106,7 +113,7 @@ class LiveTradingEnvironment(gym.Env):
         if action > 0:  # Buy
             execution_price = best_ask or current_price
             shares_to_buy = (self.balance * abs(action)) / execution_price
-            cost = shares_to_buy * execution_price * (1 + self.transaction_fee)
+            cost = shares_to_buy * execution_price * (1 + self.trading_fee)
             
             if cost <= self.balance:
                 self.position += shares_to_buy
@@ -116,7 +123,7 @@ class LiveTradingEnvironment(gym.Env):
         elif action < 0:  # Sell
             execution_price = best_bid or current_price
             shares_to_sell = self.position * abs(action)
-            revenue = shares_to_sell * execution_price * (1 - self.transaction_fee)
+            revenue = shares_to_sell * execution_price * (1 - self.trading_fee)
             
             self.position -= shares_to_sell
             self.balance += revenue

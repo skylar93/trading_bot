@@ -1,45 +1,38 @@
-"""Training utilities with Ray Actor integration"""
+"""Distributed training utilities"""
 
+import os
 import ray
+import torch
 import logging
-from typing import Dict, Any, Optional
 import numpy as np
 import pandas as pd
+from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
-import os
-import mlflow
 
-from training.utils.ray_manager import RayManager, RayConfig, BatchConfig
-from agents.strategies.ppo_agent import PPOAgent
-from envs.trading_env import TradingEnvironment
 from training.utils.mlflow_manager import MLflowManager
+from training.utils.ray_manager import RayManager, RayConfig
+from envs.trading_env import TradingEnvironment
+from agents.strategies.ppo_agent import PPOAgent
 
 logger = logging.getLogger(__name__)
 
 @dataclass
 class TrainingConfig:
     """Configuration for distributed training"""
-    
-    # Environment settings
+    num_epochs: int = 100
+    batch_size: int = 64
+    learning_rate: float = 3e-4
+    gamma: float = 0.99
+    hidden_size: int = 256
+    num_parallel: int = 4
     initial_balance: float = 10000.0
     trading_fee: float = 0.001
     window_size: int = 20
-    
-    # Training settings
-    batch_size: int = 128
-    num_parallel: int = 4
-    chunk_size: int = 32
-    num_epochs: int = 100
-    
-    # Resource settings
-    num_cpus: int = 4
-    num_gpus: Optional[float] = None  # None means use all available
-    
-    # MLflow settings
-    experiment_name: str = "distributed_training"
+    tune_trials: int = 10
+    experiment_name: str = "trading_bot"
 
 class DistributedTrainer:
-    """Distributed training with Ray actors"""
+    """Distributed trainer for trading agents"""
     
     def __init__(self, config: TrainingConfig):
         """Initialize trainer
@@ -48,24 +41,23 @@ class DistributedTrainer:
             config: Training configuration
         """
         self.config = config
-        self.ray_config = RayConfig(
-            num_cpus=config.num_cpus,
-            num_gpus=config.num_gpus
-        )
-        self.batch_config = BatchConfig(
-            batch_size=config.batch_size,
-            num_parallel=config.num_parallel,
-            chunk_size=config.chunk_size
-        )
         
-        self.ray_manager = RayManager(self.ray_config)
-        self.mlflow_manager = MLflowManager()
+        # Initialize Ray
+        ray_config = RayConfig(num_cpus=config.num_parallel)
+        self.ray_manager = RayManager(ray_config)
         
+        # Initialize MLflow
+        self.mlflow_manager = MLflowManager(config.experiment_name)
+        
+        # Create storage directories
+        os.makedirs("models", exist_ok=True)
+        os.makedirs("results", exist_ok=True)
+    
     def create_env(self, data: pd.DataFrame) -> TradingEnvironment:
         """Create trading environment
         
         Args:
-            data: Training data
+            data: Market data
             
         Returns:
             Trading environment instance
@@ -86,94 +78,69 @@ class DistributedTrainer:
         Returns:
             PPO agent instance
         """
-        return PPOAgent(env)
-        
-    def train(
-        self, 
-        train_data: pd.DataFrame, 
-        val_data: pd.DataFrame
-    ) -> Dict[str, Any]:
-        """Run distributed training
+        return PPOAgent(
+            env=env,
+            learning_rate=self.config.learning_rate,
+            gamma=self.config.gamma,
+            hidden_size=self.config.hidden_size
+        )
+    
+    def train(self, train_data: pd.DataFrame, val_data: pd.DataFrame) -> Dict[str, float]:
+        """Train agent with distributed processing
         
         Args:
             train_data: Training data
             val_data: Validation data
             
         Returns:
-            Training metrics
+            Dictionary of training metrics
         """
-        # Set up MLflow
-        self.mlflow_manager.set_experiment(self.config.experiment_name)
-        
-        with mlflow.start_run() as run:
-            # Log config
-            self.mlflow_manager.log_params(self.config.__dict__)
-            
-            # Create environment and agent
-            train_env = self.create_env(train_data)
-            val_env = self.create_env(val_data)
-            agent = self.create_agent(train_env)
-            
-            # Create actor pool for parallel training
-            actor_pool = self.ray_manager.create_actor_pool(
-                actor_class=type(agent),
-                actor_config={'env': train_env},
-                num_actors=self.config.num_parallel
-            )
-            
-            best_reward = float('-inf')
-            best_metrics = None
-            
-            # Training loop
-            for epoch in range(self.config.num_epochs):
-                # Get training batches
-                train_batches = self._prepare_batches(train_data)
+        try:
+            with self.mlflow_manager:
+                # Log parameters
+                self.mlflow_manager.log_params(self.config.__dict__)
+                
+                # Create environment and agent
+                env = self.create_env(train_data)
+                agent = self.create_agent(env)
                 
                 # Train in parallel
-                train_results = self.ray_manager.process_in_parallel(
-                    actor_pool,
-                    train_batches,
-                    self.batch_config
-                )
+                metrics = []
+                for epoch in range(self.config.num_epochs):
+                    # Train one epoch
+                    train_metrics = agent.train(
+                        env,
+                        total_timesteps=len(train_data),
+                        batch_size=self.config.batch_size
+                    )
+                    
+                    # Evaluate on validation set
+                    val_env = self.create_env(val_data)
+                    val_metrics = self.evaluate(agent, val_env)
+                    
+                    # Combine metrics
+                    epoch_metrics = {
+                        **train_metrics,
+                        **{f'val_{k}': v for k, v in val_metrics.items()}
+                    }
+                    metrics.append(epoch_metrics)
+                    
+                    # Log metrics
+                    self.mlflow_manager.log_metrics(epoch_metrics, step=epoch)
                 
-                # Evaluate
-                val_metrics = self._evaluate(agent, val_env)
-                
-                # Log metrics
-                metrics = {
-                    'epoch': epoch,
-                    'train_loss': np.mean([r['loss'] for r in train_results]),
-                    **val_metrics
+                # Calculate final metrics
+                final_metrics = {
+                    k: np.mean([m[k] for m in metrics])
+                    for k in metrics[0].keys()
                 }
-                self.mlflow_manager.log_metrics(metrics, step=epoch)
                 
-                # Save best model
-                if val_metrics['reward'] > best_reward:
-                    best_reward = val_metrics['reward']
-                    best_metrics = metrics
-                    self._save_model(agent, run.info.run_id)
+                return final_metrics
                 
-                logger.info(f"Epoch {epoch}: {metrics}")
-            
-            return best_metrics
+        except Exception as e:
+            logger.error(f"Error in training: {str(e)}")
+            raise
     
-    def _prepare_batches(self, data: pd.DataFrame) -> np.ndarray:
-        """Prepare data batches for training
-        
-        Args:
-            data: Training data
-            
-        Returns:
-            Batched data
-        """
-        # Convert data to numpy array and create batches
-        return np.array_split(data.values, len(data) // self.config.batch_size)
-    
-    def _evaluate(
-        self, 
-        agent: PPOAgent,
-        env: TradingEnvironment
-    ) -> Dict[str, float]:
+    def evaluate(self, agent: PPOAgent, env: TradingEnvironment) -> Dict[str, float]:
         """Evaluate agent performance
         
         Args:
@@ -181,38 +148,147 @@ class DistributedTrainer:
             env: Trading environment
             
         Returns:
-            Evaluation metrics
+            Dictionary of evaluation metrics
         """
-        state = env.reset()
-        done = False
-        total_reward = 0
-        
-        while not done:
-            action = agent.select_action(state)
-            state, reward, done, info = env.step(action)
-            total_reward += reward
-        
-        return {
-            'reward': total_reward,
-            'portfolio_value': info['portfolio_value'],
-            'total_trades': len(info.get('trades', []))
-        }
+        try:
+            obs, _ = env.reset()
+            done = False
+            total_reward = 0
+            portfolio_values = []
+            
+            while not done:
+                action = agent.get_action(obs, deterministic=True)
+                obs, reward, done, _, info = env.step(action)
+                total_reward += reward
+                portfolio_values.append(info['portfolio_value'])
+            
+            return {
+                'reward': total_reward,
+                'portfolio_value': portfolio_values[-1],
+                'total_trades': len(env.trades),
+                'sharpe_ratio': self._calculate_sharpe_ratio(portfolio_values)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in evaluation: {str(e)}")
+            raise
     
-    def _save_model(self, agent: PPOAgent, run_id: str):
-        """Save model artifacts
+    def tune(self, train_data: pd.DataFrame, val_data: pd.DataFrame) -> Dict[str, Any]:
+        """Run hyperparameter tuning
         
         Args:
-            agent: PPO agent to save
-            run_id: MLflow run ID
+            train_data: Training data
+            val_data: Validation data
+            
+        Returns:
+            Best hyperparameter configuration
         """
-        artifacts_dir = f"models/run_{run_id}"
-        os.makedirs(artifacts_dir, exist_ok=True)
+        try:
+            from ray import tune
+            
+            def objective(config):
+                """Objective function for tuning"""
+                # Update trainer config with trial config
+                self.config.__dict__.update(config)
+                
+                # Train and evaluate
+                metrics = self.train(train_data, val_data)
+                
+                # Report metrics
+                tune.report(
+                    reward=metrics['val_reward'],
+                    portfolio_value=metrics['val_portfolio_value'],
+                    sharpe_ratio=metrics['val_sharpe_ratio']
+                )
+            
+            # Define search space
+            search_space = {
+                'learning_rate': tune.loguniform(1e-4, 1e-2),
+                'hidden_size': tune.choice([32, 64, 128, 256]),
+                'gamma': tune.uniform(0.9, 0.999)
+            }
+            
+            # Run tuning
+            analysis = tune.run(
+                objective,
+                config=search_space,
+                num_samples=self.config.tune_trials,
+                resources_per_trial={'cpu': 1},
+                metric='sharpe_ratio',
+                mode='max'
+            )
+            
+            return analysis.best_config
+            
+        except Exception as e:
+            logger.error(f"Error in hyperparameter tuning: {str(e)}")
+            raise
+    
+    def save_model(self, path: str):
+        """Save model to disk
         
-        model_path = os.path.join(artifacts_dir, "model.pth")
-        agent.save(model_path)
+        Args:
+            path: Path to save model
+        """
+        try:
+            if hasattr(self, 'agent'):
+                torch.save({
+                    'network_state_dict': self.agent.network.state_dict(),
+                    'value_network_state_dict': self.agent.value_network.state_dict(),
+                    'optimizer_state_dict': self.agent.optimizer.state_dict(),
+                    'config': self.config.__dict__
+                }, path)
+                
+                # Log model to MLflow
+                self.mlflow_manager.log_artifact(path)
+                
+        except Exception as e:
+            logger.error(f"Error saving model: {str(e)}")
+            raise
+    
+    def load_model(self, path: str) -> PPOAgent:
+        """Load model from disk
         
-        mlflow.log_artifact(model_path)
+        Args:
+            path: Path to load model from
+            
+        Returns:
+            Loaded PPO agent
+        """
+        try:
+            checkpoint = torch.load(path)
+            
+            # Create environment and agent with saved config
+            config = TrainingConfig(**checkpoint['config'])
+            env = self.create_env(pd.DataFrame())  # Empty DataFrame for now
+            agent = self.create_agent(env)
+            
+            # Load state dicts
+            agent.network.load_state_dict(checkpoint['network_state_dict'])
+            agent.value_network.load_state_dict(checkpoint['value_network_state_dict'])
+            agent.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            
+            return agent
+            
+        except Exception as e:
+            logger.error(f"Error loading model: {str(e)}")
+            raise
     
     def cleanup(self):
-        """Cleanup resources"""
-        self.ray_manager.shutdown()
+        """Clean up resources"""
+        if hasattr(self, 'ray_manager'):
+            self.ray_manager.shutdown()
+    
+    def _calculate_sharpe_ratio(self, portfolio_values: List[float]) -> float:
+        """Calculate Sharpe ratio
+        
+        Args:
+            portfolio_values: List of portfolio values
+            
+        Returns:
+            Sharpe ratio
+        """
+        returns = np.diff(portfolio_values) / portfolio_values[:-1]
+        if len(returns) < 2:
+            return 0.0
+        return np.mean(returns) / (np.std(returns) + 1e-6) * np.sqrt(252)
