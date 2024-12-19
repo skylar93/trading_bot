@@ -1,236 +1,429 @@
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.optim as optim
-from typing import Dict, List, Tuple, Optional
-import mlflow
+from torch.distributions import Normal
+from typing import Dict, List, Tuple, Optional, Any
+import logging
 from agents.base.base_agent import BaseAgent
 from agents.models.policy_network import PolicyNetwork
 from agents.models.value_network import ValueNetwork
 
+logger = logging.getLogger(__name__)
+
 class PPOAgent(BaseAgent):
-    """Proximal Policy Optimization (PPO) Agent"""
-    
-    def __init__(self, 
-                 observation_space,
-                 action_space,
-                 hidden_dim: int = 256,
+    def __init__(self,
+                 observation_space=None,
+                 action_space=None,
+                 env=None,
                  learning_rate: float = 3e-4,
                  gamma: float = 0.99,
-                 epsilon: float = 0.2,
+                 gae_lambda: float = 0.95,
+                 clip_epsilon: float = 0.2,
+                 c1: float = 1.0,
+                 c2: float = 0.01,
                  batch_size: int = 64,
+                 n_epochs: int = 10,
                  device: str = 'cuda' if torch.cuda.is_available() else 'cpu'):
-        """Initialize PPO agent
+        """
+        PPO Agent with shared experience learning capability
         
         Args:
-            observation_space: Gym observation space
-            action_space: Gym action space
-            hidden_dim: Hidden dimension of networks
-            learning_rate: Learning rate
+            observation_space: Gym observation space (optional if env is provided)
+            action_space: Gym action space (optional if env is provided)
+            env: Training environment (optional)
+            learning_rate: Learning rate for optimizer
             gamma: Discount factor
-            epsilon: PPO clipping parameter
-            batch_size: Batch size for training
-            device: Device to use for training
+            gae_lambda: GAE lambda parameter
+            clip_epsilon: PPO clip parameter
+            c1: Value loss coefficient
+            c2: Entropy coefficient
+            batch_size: Mini-batch size for training
+            n_epochs: Number of epochs to train on each batch
+            device: Device to use for tensor operations
         """
-        super(PPOAgent, self).__init__(observation_space, action_space)
+        # Get spaces from env if provided
+        if env is not None:
+            observation_space = env.observation_space
+            action_space = env.action_space
         
-        # Initialize parameters
-        self.lr = learning_rate
-        self.gamma = gamma
-        self.epsilon = epsilon
-        self.batch_size = batch_size
-        self.device = torch.device(device)
+        if observation_space is None or action_space is None:
+            raise ValueError("Must provide either env or both observation_space and action_space")
+            
+        super().__init__(observation_space, action_space)
+        
+        self.observation_space = observation_space
+        self.action_space = action_space
+        self.device = device
         
         # Initialize networks
-        input_dim = observation_space.shape[0]
-        self.policy = PolicyNetwork(input_dim, hidden_dim).to(self.device)
-        self.value = ValueNetwork(input_dim, hidden_dim).to(self.device)
+        self.network = PolicyNetwork(
+            observation_space=observation_space,
+            action_space=action_space,
+            hidden_size=256
+        ).to(device)
         
-        # Initialize optimizers
-        self.policy_optimizer = optim.Adam(self.policy.parameters(), lr=self.lr)
-        self.value_optimizer = optim.Adam(self.value.parameters(), lr=self.lr)
+        self.value_network = ValueNetwork(
+            observation_space=observation_space,
+            hidden_size=256
+        ).to(device)
         
-        # Initialize memory
-        self.reset_memory()
+        # Initialize optimizer
+        self.optimizer = optim.Adam([
+            {'params': self.network.parameters(), 'lr': learning_rate},
+            {'params': self.value_network.parameters(), 'lr': learning_rate}
+        ])
+        
+        # Store hyperparameters
+        self.gamma = gamma
+        self.gae_lambda = gae_lambda
+        self.clip_epsilon = clip_epsilon
+        self.c1 = c1
+        self.c2 = c2
+        self.batch_size = batch_size
+        self.n_epochs = n_epochs
+        
+        # Initialize action standard deviation
+        self.action_std = torch.ones(1).to(device)
+        
+        # Initialize experience buffer
+        self.buffer = []
+        
+        # Initialize running statistics for normalization
+        self.state_mean = None
+        self.state_std = None
+        
+        logger.info(f"Initialized PPO agent on device: {device}")
     
-    def reset_memory(self):
-        """Reset experience memory"""
-        self.states = []
-        self.actions = []
-        self.rewards = []
-        self.values = []
-        self.log_probs = []
-        self.masks = []  # For handling episode termination
+    def _normalize_state(self, state: np.ndarray) -> np.ndarray:
+        """Normalize state using running statistics"""
+        # Ensure state is 2D for proper normalization
+        original_shape = state.shape
+        if len(state.shape) == 3:
+            # For (batch_size, window_size, features)
+            batch_size, window_size, n_features = state.shape
+            state = state.reshape(-1, n_features)
+        elif len(state.shape) == 1:
+            state = state.reshape(1, -1)
+        
+        if self.state_mean is None:
+            self.state_mean = np.mean(state, axis=0)
+            self.state_std = np.std(state, axis=0) + 1e-8
+        else:
+            # Update running statistics with momentum
+            momentum = 0.99
+            batch_mean = np.mean(state, axis=0)
+            batch_std = np.std(state, axis=0) + 1e-8
+            
+            # Ensure shapes match
+            if self.state_mean.shape != batch_mean.shape:
+                # Reinitialize statistics if shape mismatch
+                self.state_mean = batch_mean
+                self.state_std = batch_std
+            else:
+                self.state_mean = momentum * self.state_mean + (1 - momentum) * batch_mean
+                self.state_std = momentum * self.state_std + (1 - momentum) * batch_std
+        
+        # Normalize
+        normalized = (state - self.state_mean) / self.state_std
+        
+        # Restore original shape if needed
+        if len(original_shape) == 3:
+            normalized = normalized.reshape(original_shape)
+        
+        return normalized.astype(np.float32)
     
     def get_action(self, state: np.ndarray, deterministic: bool = False) -> np.ndarray:
         """Get action from policy network
         
         Args:
-            state: Environment state
+            state: Current state observation
             deterministic: Whether to use deterministic action
             
         Returns:
-            Action array
+            Action as numpy array with shape (1,)
         """
         with torch.no_grad():
-            state = torch.FloatTensor(state).to(self.device)
-            mean, log_std = self.policy(state)
+            # Flatten and normalize state
+            if len(state.shape) > 1:
+                state = state.reshape(-1)
+            state = self._normalize_state(state)
+            
+            state_tensor = torch.FloatTensor(state).reshape(1, -1).to(self.device)
+            action_mean, action_std = self.network(state_tensor)
             
             if deterministic:
-                action = torch.tanh(mean)
+                action = action_mean
             else:
-                std = log_std.exp()
-                normal = torch.distributions.Normal(mean, std)
-                action = torch.tanh(normal.sample())
-                
-                # Store experience
-                value = self.value(state)
-                self.states.append(state)
-                self.actions.append(action)
-                self.values.append(value)
-                self.log_probs.append(normal.log_prob(action))
-        
-        return action.cpu().numpy()
+                dist = Normal(action_mean, action_std)
+                action = dist.sample()
+            
+            # Ensure action is a numpy array with shape (1,)
+            action = action.clamp(-1, 1).cpu().numpy()
+            return action.reshape(1)
     
-    def train(self, state, action, reward, next_state, done) -> Dict[str, float]:
+    def train(self, env_or_experiences, total_timesteps: int = 1000, batch_size: int = 64) -> Dict[str, Any]:
         """Train the agent
         
         Args:
-            state: Current state
-            action: Action taken
-            reward: Reward received
-            next_state: Next state
-            done: Whether episode is done
+            env_or_experiences: Either a gym environment or a list of experiences
+            total_timesteps: Number of timesteps to train for (if env provided)
+            batch_size: Size of batch for updates
             
         Returns:
-            Dictionary of training metrics
+            Dictionary with training metrics
         """
-        # Store experience
-        self.rewards.append(reward)
-        self.masks.append(1.0 - float(done))
+        logger.info(f"Starting training for {total_timesteps} timesteps with batch size {batch_size}")
+        states = []
+        actions = []
+        rewards = []
+        values = []
+        log_probs = []
+        dones = []
         
-        # Train if episode is done
-        metrics = {}
-        if done:
-            metrics = self._update()
-            self.reset_memory()
+        # Check if we're training from experiences or environment
+        if isinstance(env_or_experiences, list):
+            logger.info("Training from experiences")
+            # Training from experiences
+            for exp in env_or_experiences:
+                state = self._normalize_state(exp['state'])
+                states.append(state)
+                actions.append(exp['action'])
+                rewards.append(exp['reward'])
+                
+                # Get value and log prob for the state
+                with torch.no_grad():
+                    state_tensor = torch.FloatTensor(state).to(self.device)
+                    value = self.value_network(state_tensor)
+                    action_mean, action_std = self.network(state_tensor)
+                    dist = Normal(action_mean, action_std)
+                    log_prob = dist.log_prob(torch.FloatTensor([exp['action']]).to(self.device))
+                
+                values.append(value.cpu().numpy())
+                log_probs.append(log_prob.cpu().numpy())
+                dones.append(exp.get('done', False))
             
-            # Log metrics to MLflow
-            mlflow.log_metrics({
-                'policy_loss': metrics['policy_loss'],
-                'value_loss': metrics['value_loss'],
-                'total_loss': metrics['total_loss'],
-                'mean_reward': np.mean(self.rewards)
-            })
-        
-        return metrics
+            # Convert to tensors and update
+            states_tensor = torch.FloatTensor(np.array(states)).to(self.device)
+            actions_tensor = torch.FloatTensor(np.array(actions)).to(self.device)
+            rewards_tensor = torch.FloatTensor(np.array(rewards)).to(self.device)
+            values_tensor = torch.FloatTensor(np.array(values)).to(self.device)
+            log_probs_tensor = torch.FloatTensor(np.array(log_probs)).to(self.device)
+            dones_tensor = torch.FloatTensor(np.array(dones)).to(self.device)
+            
+            self.update(
+                states_tensor,
+                actions_tensor,
+                rewards_tensor,
+                values_tensor,
+                log_probs_tensor,
+                dones_tensor
+            )
+            
+            return {
+                'policy_loss': 0.0,  # Placeholder values since we don't track these for experience replay
+                'value_loss': 0.0,
+                'entropy': 0.0
+            }
+            
+        else:
+            # Training from environment
+            logger.info("Training from environment")
+            env = env_or_experiences
+            episode_rewards = []
+            current_episode_reward = 0
+            episode_count = 0
+            step_count = 0
+            
+            state, _ = env.reset()
+            state = self._normalize_state(state)
+            
+            while len(states) < total_timesteps:
+                step_count += 1
+                if step_count % 10 == 0:  # Log every 10 steps
+                    logger.info(f"Step {step_count}/{total_timesteps}, Episodes: {episode_count}, Current Episode Reward: {current_episode_reward:.2f}")
+                
+                # Get action and value
+                with torch.no_grad():
+                    state_tensor = torch.FloatTensor(state).to(self.device)
+                    action_mean, action_std = self.network(state_tensor)
+                    value = self.value_network(state_tensor)
+                    
+                    # Sample action
+                    dist = Normal(action_mean, action_std)
+                    action = dist.sample()
+                    log_prob = dist.log_prob(action)
+                
+                # Take step in environment
+                next_state, reward, done, truncated, info = env.step(action.cpu().numpy())
+                next_state = self._normalize_state(next_state)
+                
+                # Store transition
+                states.append(state)
+                actions.append(action.cpu().numpy())
+                rewards.append(reward)
+                values.append(value.cpu().numpy())
+                log_probs.append(log_prob.cpu().numpy())
+                dones.append(done)
+                
+                current_episode_reward += reward
+                
+                if done or truncated:
+                    episode_count += 1
+                    episode_rewards.append(current_episode_reward)
+                    logger.info(f"Episode {episode_count} finished with reward {current_episode_reward:.2f}")
+                    current_episode_reward = 0
+                    state, _ = env.reset()
+                    state = self._normalize_state(state)
+                else:
+                    state = next_state
+                
+                # Update policy if we have enough samples
+                if len(states) >= batch_size:
+                    logger.info(f"Updating policy with batch of {len(states)} samples")
+                    # Convert lists to tensors with proper shapes
+                    states_tensor = torch.FloatTensor(np.array(states)).to(self.device)
+                    actions_tensor = torch.FloatTensor(np.array(actions)).to(self.device)
+                    rewards_tensor = torch.FloatTensor(np.array(rewards)).to(self.device)
+                    values_tensor = torch.FloatTensor(np.array(values)).to(self.device)
+                    log_probs_tensor = torch.FloatTensor(np.array(log_probs)).to(self.device)
+                    dones_tensor = torch.FloatTensor(np.array(dones)).to(self.device)
+                    
+                    self.update(
+                        states_tensor,
+                        actions_tensor,
+                        rewards_tensor,
+                        values_tensor,
+                        log_probs_tensor,
+                        dones_tensor
+                    )
+                    states = []
+                    actions = []
+                    rewards = []
+                    values = []
+                    log_probs = []
+                    dones = []
+            
+            logger.info(f"Training completed. Total episodes: {episode_count}, Mean reward: {np.mean(episode_rewards):.2f}")
+            return {
+                'episode_rewards': episode_rewards,
+                'mean_reward': np.mean(episode_rewards),
+                'std_reward': np.std(episode_rewards)
+            }
     
-    def _update(self) -> Dict[str, float]:
-        """Update policy and value networks
+    def _compute_gae(self, rewards: torch.Tensor, values: torch.Tensor, 
+                    dones: torch.Tensor) -> torch.Tensor:
+        """Compute Generalized Advantage Estimation"""
+        advantages = torch.zeros_like(rewards)
+        last_gae = 0
         
-        Returns:
-            Dictionary of training metrics
-        """
-        # Convert to tensor
-        states = torch.stack(self.states)
-        actions = torch.stack(self.actions)
-        old_log_probs = torch.stack(self.log_probs).detach()
-        old_values = torch.stack(self.values).detach()
-        rewards = torch.FloatTensor(self.rewards).to(self.device)
-        masks = torch.FloatTensor(self.masks).to(self.device)
+        for t in reversed(range(len(rewards))):
+            if t == len(rewards) - 1:
+                next_value = 0
+            else:
+                next_value = values[t + 1]
+            
+            delta = rewards[t] + self.gamma * next_value * (1 - dones[t]) - values[t]
+            advantages[t] = last_gae = delta + self.gamma * self.gae_lambda * (1 - dones[t]) * last_gae
         
-        # Calculate returns and advantages
-        returns = []
-        advantages = []
-        R = 0
+        return advantages
+    
+    def learn_from_shared_experience(self, shared_buffer: List[Dict]) -> Dict[str, float]:
+        """Learn from shared experience buffer"""
+        # Filter relevant experiences
+        relevant_exp = []
         
-        for r, mask in zip(reversed(self.rewards), reversed(self.masks)):
-            R = r + self.gamma * R * mask
-            returns.insert(0, R)
+        for exp in shared_buffer:
+            # Add experience if it's successful (positive reward)
+            if exp['reward'] > 0:
+                relevant_exp.append(exp)
         
-        returns = torch.FloatTensor(returns).to(self.device)
-        advantages = returns - old_values
-        
-        # PPO update
-        total_policy_loss = 0
-        total_value_loss = 0
-        
-        for _ in range(10):  # Multiple epochs
-            # Process in batches
-            indices = torch.randperm(len(states))
-            for start in range(0, len(states), self.batch_size):
-                # Get batch indices
-                idx = indices[start:start + self.batch_size]
-                
-                # Get batch data
-                batch_states = states[idx]
-                batch_actions = actions[idx]
-                batch_old_log_probs = old_log_probs[idx]
-                batch_returns = returns[idx]
-                batch_advantages = advantages[idx]
-                
-                # Get new log probs and values
-                mean, log_std = self.policy(batch_states)
-                std = log_std.exp()
-                normal = torch.distributions.Normal(mean, std)
-                new_log_probs = normal.log_prob(batch_actions)
-                new_values = self.value(batch_states)
-                
-                # Calculate ratio and clipped ratio
-                ratio = torch.exp(new_log_probs - batch_old_log_probs)
-                clipped_ratio = torch.clamp(ratio, 1-self.epsilon, 1+self.epsilon)
-                
-                # Calculate losses
-                policy_loss = -torch.min(
-                    ratio * batch_advantages,
-                    clipped_ratio * batch_advantages
-                ).mean()
-                
-                value_loss = (new_values - batch_returns).pow(2).mean()
-                
-                # Update networks
-                self.policy_optimizer.zero_grad()
-                policy_loss.backward()
-                self.policy_optimizer.step()
-                
-                self.value_optimizer.zero_grad()
-                value_loss.backward()
-                self.value_optimizer.step()
-                
-                total_policy_loss += policy_loss.item()
-                total_value_loss += value_loss.item()
-        
-        # Calculate average losses
-        num_updates = len(states) // self.batch_size * 10
-        avg_policy_loss = total_policy_loss / num_updates
-        avg_value_loss = total_value_loss / num_updates
-        
-        return {
-            'policy_loss': avg_policy_loss,
-            'value_loss': avg_value_loss,
-            'total_loss': avg_policy_loss + avg_value_loss
-        }
+        if len(relevant_exp) > 0:
+            return self.train(relevant_exp)
+        return {'policy_loss': 0, 'value_loss': 0, 'entropy': 0}
     
     def save(self, path: str):
-        """Save the agent
-        
-        Args:
-            path: Path to save the agent
-        """
+        """Save agent's state"""
         torch.save({
-            'policy_state_dict': self.policy.state_dict(),
-            'value_state_dict': self.value.state_dict(),
-            'policy_optimizer_state_dict': self.policy_optimizer.state_dict(),
-            'value_optimizer_state_dict': self.value_optimizer.state_dict()
+            'policy_state_dict': self.network.state_dict(),
+            'value_state_dict': self.value_network.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict()
         }, path)
+        logger.info(f"Saved agent state to {path}")
     
     def load(self, path: str):
-        """Load the agent
+        """Load agent's state"""
+        checkpoint = torch.load(path, map_location=self.device)
+        self.network.load_state_dict(checkpoint['policy_state_dict'])
+        self.value_network.load_state_dict(checkpoint['value_state_dict'])
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        logger.info(f"Loaded agent state from {path}")
+    
+    def update(self, states, actions, rewards, values, log_probs, dones):
+        """Update policy and value networks using PPO"""
+        # Compute returns and advantages
+        advantages = self._compute_gae(rewards, values, dones)
+        returns = advantages + values
         
-        Args:
-            path: Path to load the agent from
-        """
-        checkpoint = torch.load(path)
-        self.policy.load_state_dict(checkpoint['policy_state_dict'])
-        self.value.load_state_dict(checkpoint['value_state_dict'])
-        self.policy_optimizer.load_state_dict(checkpoint['policy_optimizer_state_dict'])
-        self.value_optimizer.load_state_dict(checkpoint['value_optimizer_state_dict'])
+        # Normalize advantages
+        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        
+        # Convert to tensors if not already
+        if not isinstance(states, torch.Tensor):
+            states = torch.FloatTensor(states).to(self.device)
+        if not isinstance(actions, torch.Tensor):
+            actions = torch.FloatTensor(actions).to(self.device)
+        if not isinstance(returns, torch.Tensor):
+            returns = torch.FloatTensor(returns).to(self.device)
+        if not isinstance(advantages, torch.Tensor):
+            advantages = torch.FloatTensor(advantages).to(self.device)
+        if not isinstance(log_probs, torch.Tensor):
+            log_probs = torch.FloatTensor(log_probs).to(self.device)
+        
+        # Mini-batch updates
+        batch_size = len(states)
+        mini_batch_size = batch_size // 4  # Use 4 mini-batches
+        
+        for _ in range(self.n_epochs):
+            # Generate random permutation
+            indices = torch.randperm(batch_size)
+            
+            # Mini-batch updates
+            for start in range(0, batch_size, mini_batch_size):
+                end = start + mini_batch_size
+                mb_indices = indices[start:end]
+                
+                # Get mini-batch data
+                mb_states = states[mb_indices]
+                mb_actions = actions[mb_indices]
+                mb_returns = returns[mb_indices]
+                mb_advantages = advantages[mb_indices]
+                mb_old_log_probs = log_probs[mb_indices]
+                
+                # Get current policy outputs
+                action_mean, action_std = self.network(mb_states)
+                current_values = self.value_network(mb_states)
+                
+                # Calculate log probabilities
+                dist = Normal(action_mean, action_std)
+                current_log_probs = dist.log_prob(mb_actions)
+                entropy = dist.entropy().mean()
+                
+                # Calculate ratios and surrogate losses
+                ratios = torch.exp(current_log_probs - mb_old_log_probs)
+                surr1 = ratios * mb_advantages
+                surr2 = torch.clamp(ratios, 1 - self.clip_epsilon, 1 + self.clip_epsilon) * mb_advantages
+                
+                # Calculate losses
+                policy_loss = -torch.min(surr1, surr2).mean()
+                value_loss = 0.5 * ((current_values - mb_returns) ** 2).mean()
+                
+                # Combined loss
+                total_loss = policy_loss + self.c1 * value_loss - self.c2 * entropy
+                
+                # Update networks
+                self.optimizer.zero_grad()
+                total_loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.network.parameters(), 0.5)
+                torch.nn.utils.clip_grad_norm_(self.value_network.parameters(), 0.5)
+                self.optimizer.step()

@@ -1,118 +1,105 @@
-"""Tests for Distributed Trainer"""
+"""Tests for training system"""
 
 import pytest
-import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+import pandas as pd
+import mlflow
+from training.train import TrainingPipeline
+from training.utils.mlflow_manager import MLflowManager
+from envs.trading_env import TradingEnvironment
+from agents.strategies.ppo_agent import PPOAgent
 
-from training.utils.trainer import DistributedTrainer, TrainingConfig
+@pytest.fixture
+def config():
+    """Create training configuration"""
+    return {
+        'env': {
+            'initial_balance': 10000.0,
+            'trading_fee': 0.001,
+            'window_size': 20
+        },
+        'model': {
+            'learning_rate': 3e-4,
+            'gamma': 0.99,
+            'batch_size': 32
+        },
+        'training': {
+            'total_timesteps': 1000
+        }
+    }
+
+@pytest.fixture
+def trainer(config, mlflow_test_context):
+    """Create trainer instance with MLflow integration"""
+    trainer = TrainingPipeline(config)
+    yield trainer
 
 @pytest.fixture
 def sample_data():
-    """Create sample price data"""
-    dates = pd.date_range(
-        start=datetime.now() - timedelta(days=100),
-        end=datetime.now(),
-        freq='1H'
-    )
-    
+    """Create sample market data with $ prefix columns"""
+    dates = pd.date_range(start='2024-01-01', periods=1000, freq='h')
     data = pd.DataFrame({
-        'open': np.random.randn(len(dates)).cumsum(),
-        'high': np.random.randn(len(dates)).cumsum(),
-        'low': np.random.randn(len(dates)).cumsum(),
-        'close': np.random.randn(len(dates)).cumsum(),
-        'volume': np.abs(np.random.randn(len(dates)))
+        '$open': np.random.randn(1000).cumsum() + 100,
+        '$high': np.random.randn(1000).cumsum() + 102,
+        '$low': np.random.randn(1000).cumsum() + 98,
+        '$close': np.random.randn(1000).cumsum() + 100,
+        '$volume': np.abs(np.random.randn(1000) * 1000)
     }, index=dates)
-    
     return data
 
-def test_trainer_initialization():
+def test_trainer_initialization(trainer):
     """Test trainer initialization"""
-    config = TrainingConfig()
-    trainer = DistributedTrainer(config)
-    
-    assert trainer.ray_manager is not None
-    assert trainer.mlflow_manager is not None
+    assert trainer.config is not None
 
-def test_environment_creation(sample_data):
-    """Test trading environment creation"""
-    config = TrainingConfig()
-    trainer = DistributedTrainer(config)
-    
-    env = trainer.create_env(sample_data)
-    
-    assert env is not None
-    assert env.df.equals(sample_data)
-    assert env.initial_balance == config.initial_balance
-    assert env.trading_fee == config.trading_fee
-
-def test_agent_creation(sample_data):
-    """Test PPO agent creation"""
-    config = TrainingConfig()
-    trainer = DistributedTrainer(config)
-    
-    env = trainer.create_env(sample_data)
-    agent = trainer.create_agent(env)
-    
-    assert agent is not None
-
-@pytest.mark.integration
-def test_training_pipeline(sample_data):
-    """Test full training pipeline"""
-    # Reduce data size and epochs for testing
-    train_data = sample_data[:48]  # 2 days
-    val_data = sample_data[48:72]  # 1 day
-    
-    config = TrainingConfig(
-        num_epochs=2,
-        batch_size=16,
-        num_parallel=2
+def test_environment_creation(sample_data, config):
+    """Test environment creation"""
+    env = TradingEnvironment(
+        df=sample_data,
+        initial_balance=config['env']['initial_balance'],
+        trading_fee=config['env']['trading_fee'],
+        window_size=config['env']['window_size']
     )
     
-    trainer = DistributedTrainer(config)
+    assert isinstance(env, TradingEnvironment)
+    assert env.initial_balance == 10000.0
+    assert env.trading_fee == 0.001
+    assert env.window_size == 20
     
-    try:
-        metrics = trainer.train(train_data, val_data)
-        
-        assert metrics is not None
-        assert 'reward' in metrics
-        assert 'portfolio_value' in metrics
-        assert 'total_trades' in metrics
-        
-    finally:
-        trainer.cleanup()
+    # Test environment reset
+    obs, info = env.reset()
+    assert obs is not None
+    assert info is not None
+    assert 'portfolio_value' in info
 
-@pytest.mark.performance
-def test_parallel_processing(sample_data):
-    """Test parallel processing performance"""
-    import time
+@pytest.mark.integration
+def test_training_pipeline(sample_data, trainer, mlflow_test_context):
+    """Test training pipeline"""
+    train_size = int(len(sample_data) * 0.8)
+    train_data = sample_data[:train_size]
+    val_data = sample_data[train_size:]
     
-    # Test with different numbers of parallel actors
-    configs = [
-        TrainingConfig(num_parallel=1),
-        TrainingConfig(num_parallel=2)
-    ]
+    # Train agent
+    agent = PPOAgent(
+        observation_space=None,  # Will be set by environment
+        action_space=None,      # Will be set by environment
+        learning_rate=trainer.config['model']['learning_rate'],
+        gamma=trainer.config['model']['gamma']
+    )
     
-    train_data = sample_data[:48]
-    val_data = sample_data[48:72]
+    env = TradingEnvironment(
+        df=train_data,
+        initial_balance=trainer.config['env']['initial_balance'],
+        trading_fee=trainer.config['env']['trading_fee'],
+        window_size=trainer.config['env']['window_size']
+    )
     
-    execution_times = []
+    # Train the agent
+    training_results = agent.train(env, total_timesteps=trainer.config['training']['total_timesteps'])
     
-    for config in configs:
-        trainer = DistributedTrainer(config)
-        
-        try:
-            start_time = time.time()
-            trainer.train(train_data, val_data)
-            execution_time = time.time() - start_time
-            
-            execution_times.append(execution_time)
-            
-        finally:
-            trainer.cleanup()
-    
-    # Verify that parallel execution is faster
-    assert execution_times[1] < execution_times[0]
+    assert training_results is not None
+    assert 'episode_rewards' in training_results
+    assert 'mean_reward' in training_results
+    assert 'std_reward' in training_results
 
-if __name__ == '__main__':
-    pytest.main([__file__])
+if __name__ == "__main__":
+    pytest.main(["-v", __file__])

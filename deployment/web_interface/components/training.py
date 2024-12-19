@@ -167,9 +167,10 @@ def show_training():
             
             # Create environment
             env = TradingEnvironment(
-                train_data,
-                initial_balance=10000,
-                transaction_fee=0.001
+                df=train_data,
+                initial_balance=10000.0,
+                trading_fee=0.001,
+                window_size=20
             )
             
             # Create agent

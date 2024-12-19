@@ -20,22 +20,22 @@ class RiskAwareBacktester(Backtester):
                  data: pd.DataFrame,
                  risk_config: Optional[RiskConfig] = None,
                  initial_balance: float = 10000.0,
-                 transaction_fee: float = 0.001):
+                 trading_fee: float = 0.001):
         """
         Initialize risk-aware backtester
         
         Args:
-            data: DataFrame with OHLCV data
+            data: DataFrame with OHLCV data (must have $ prefixed columns)
             risk_config: Risk management configuration
             initial_balance: Initial portfolio balance
-            transaction_fee: Trading fee as decimal
+            trading_fee: Trading fee as decimal
         """
         # Initialize risk manager first
         self.risk_manager = RiskManager(risk_config or RiskConfig())
         self.trade_counter = 0  # For generating trade IDs
         
         # Then initialize parent class
-        super().__init__(data, initial_balance, transaction_fee)
+        super().__init__(data, initial_balance, trading_fee)
         
     def reset(self):
         """Reset backtester and risk manager state"""
@@ -55,17 +55,19 @@ class RiskAwareBacktester(Backtester):
         if len(self.data) < window:
             return 0.0
             
-        returns = self.data['close'].pct_change()
+        returns = self.data['$close'].pct_change()
         volatility = returns.rolling(window).std().iloc[-1]
         return volatility if not np.isnan(volatility) else 0.0
         
     def get_current_leverage(self) -> float:
-        """Calculate current portfolio leverage"""
-        if self.balance <= 0:
-            return float('inf')
+        """Calculate current leverage ratio"""
+        if self.position == 0:
+            return 0.0
             
-        total_position_value = self.position * self.data['close'].iloc[-1]
-        return abs(total_position_value / self.balance)
+        total_position_value = self.position * self.data['$close'].iloc[-1]
+        portfolio_value = self.balance + total_position_value
+        
+        return abs(total_position_value / portfolio_value) if portfolio_value > 0 else 0.0
         
     def execute_trade(self,
                      timestamp: datetime,
@@ -87,7 +89,7 @@ class RiskAwareBacktester(Backtester):
             return super().execute_trade(timestamp, 0, price_data)
             
         # Get current state
-        portfolio_value = self.balance + (self.position * price_data['close'])
+        portfolio_value = self.balance + (self.position * price_data['$close'])
         volatility = self.calculate_volatility()
         leverage = self.get_current_leverage()
         
@@ -95,7 +97,7 @@ class RiskAwareBacktester(Backtester):
         risk_assessment = self.risk_manager.process_trade_signal(
             timestamp=pd.Timestamp(timestamp),
             portfolio_value=portfolio_value,
-            price=price_data['close'],
+            price=price_data['$close'],
             volatility=volatility,
             current_leverage=leverage
         )
@@ -104,7 +106,7 @@ class RiskAwareBacktester(Backtester):
         if not risk_assessment['allowed']:
             logger.info(f"Trade rejected by risk management: {risk_assessment['reason']}")
             result = super().execute_trade(timestamp, 0, price_data)
-            result['portfolio_value'] = self.balance + (self.position * price_data['close'])
+            result['portfolio_value'] = self.balance + (self.position * price_data['$close'])
             return result
             
         # Adjust position size based on risk limits
@@ -121,7 +123,7 @@ class RiskAwareBacktester(Backtester):
         trade_result = super().execute_trade(
             timestamp, risk_adjusted_action, price_data
         )
-        trade_result['portfolio_value'] = self.balance + (self.position * price_data['close'])
+        trade_result['portfolio_value'] = self.balance + (self.position * price_data['$close'])
         
         # Update risk management if trade was executed
         if abs(risk_adjusted_action) > 1e-5:
@@ -131,7 +133,7 @@ class RiskAwareBacktester(Backtester):
             self.risk_manager.update_after_trade(
                 trade_id=trade_id,
                 timestamp=pd.Timestamp(timestamp),
-                entry_price=price_data['close'],
+                entry_price=price_data['$close'],
                 position_type='long' if action > 0 else 'short'
             )
             

@@ -1,299 +1,361 @@
-# Development Guidelines
+Below is a revised `development_guid.md` that incorporates the core principles, detailed naming and formatting rules, testing standards, and a recommended step-by-step refactoring workflow. This guide should serve as a standalone document that developers can refer to for maintaining consistency and quality across the codebase.
 
-## Core Development Principles
+[MLflow Configuration & Best Practices]
 
-### 1. Data Format Standards
-- OHLCV columns must use `$` prefix: `$open`, `$high`, `$low`, `$close`, `$volume`
-- Maintain this convention throughout the entire pipeline
-- Example:
-```python
-df = pd.DataFrame({
-    '$open': [...],
-    '$high': [...],
-    '$low': [...],
-    '$close': [...],
-    '$volume': [...]
-})
-```
+1. **MLflow Directory Structure**:
+   - Base directory: `./mlflow_runs/`
+   - Experiment directories: `./mlflow_runs/<experiment_name>/`
+   - Artifact format: Use parquet for DataFrames
+   - Clean up MLflow directories on initialization:
+     ```python
+     mlflow_dirs = ["./mlruns", "./mlflow_runs"]
+     ```
 
-### 2. Logging Standards
-```python
-import logging
-import os
-from datetime import datetime
+2. **Experiment Lifecycle**:
+   - Always delete existing experiment before creating new one
+   - Wait for operations to complete:
+     ```python
+     time.sleep(0.5)  # After experiment creation/deletion
+     ```
+   - Log dummy metric to ensure meta.yaml creation:
+     ```python
+     mlflow.log_metric("_dummy", 0.0)
+     ```
 
-# Setup pattern
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+3. **Run Management**:
+   - End active run before starting new one (unless nested)
+   - Verify run creation and status
+   - Add wait times between operations
+   - Log dummy metrics before artifact operations
 
-# File handler for debugging
-log_dir = "logs"
-os.makedirs(log_dir, exist_ok=True)
-file_handler = logging.FileHandler(
-    os.path.join(log_dir, f"{__name__}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
-)
-file_handler.setLevel(logging.DEBUG)
-file_handler.setFormatter(
-    logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-)
+4. **Critical Components (DO NOT MODIFY)**:
+   - `MLflowManager.__init__()`: Experiment creation logic
+   - `MLflowManager.start_run()`: Run initialization with meta.yaml creation
+   - `MLflowManager.end_run()`: Run cleanup and verification
+   - `MLflowManager.cleanup()`: Resource cleanup logic
 
-# Console handler for important info
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-console_handler.setFormatter(
-    logging.Formatter('%(levelname)s - %(message)s')
-)
+5. **Testing Requirements**:
+   - Use `mlflow_test_context` fixture for isolated tests
+   - Clean up MLflow resources after each test
+   - Verify experiment and run existence
+   - Check for meta.yaml creation
 
-logger.addHandler(file_handler)
-logger.addHandler(console_handler)
-```
+[Current Progress & Next Steps]
 
-### 3. Error Handling Pattern
-```python
-def safe_execute(func: Callable, *args, **kwargs) -> Any:
-    """Standard error handling wrapper"""
-    try:
-        result = func(*args, **kwargs)
-        if isinstance(result, pd.Series) and result.isnull().any():
-            logger.warning(f"NaN values found in {func.__name__}, applying forward/backward fill")
-            result = result.ffill().bfill()
-        return result
-    except Exception as e:
-        logger.error(f"Error in {func.__name__}: {str(e)}", exc_info=True)
-        raise
-```
+1. **Completed**:
+   - MLflow initialization and cleanup ✓
+   - Meta.yaml creation fix ✓
+   - Run lifecycle management ✓
+   - Artifact logging stability ✓
 
-### 4. Testing Standards
+2. **Pending**:
+   - Risk backtesting column validation
+   - Multi-agent environment fixes
+   - Paper trading environment updates
+   - Network initialization issues
 
-#### Test Structure
-```python
-@pytest.fixture
-def sample_data():
-    """Create sample OHLCV data for testing"""
-    dates = pd.date_range(start='2023-01-01', end='2023-01-10', freq='1h')
-    return pd.DataFrame({
-        '$open': np.random.randn(len(dates)) * 100 + 1000,
-        '$high': np.random.randn(len(dates)) * 100 + 1000,
-        '$low': np.random.randn(len(dates)) * 100 + 1000,
-        '$close': np.random.randn(len(dates)) * 100 + 1000,
-        '$volume': np.abs(np.random.randn(len(dates)) * 1000 + 5000)
-    }, index=dates)
+3. **DO NOT MODIFY**:
+   - `training/utils/mlflow_manager.py`
+   - `training/hyperopt/hyperopt_tuner.py`
+   - `tests/training/hyperopt/test_hyperopt_tuner.py`
+   - `tests/test_mlflow_logger.py`
 
-def test_functionality(sample_data):
-    """Test description with clear purpose"""
-    # Arrange
-    expected_result = ...
-    
-    # Act
-    actual_result = function_under_test(sample_data)
-    
-    # Assert
-    assert actual_result == expected_result
-```
+[Current State Analysis (2024-12-17)]
 
-#### Required Test Cases
-1. Success cases with valid data
-2. Error cases with invalid input
-3. Edge cases (empty data, NaN values, boundary conditions)
-4. Integration tests for full pipeline
+1. **Stabilized Components (DO NOT MODIFY)**:
+   - MLflow Manager (`training/utils/mlflow_manager.py`)
+   - Hyperopt Tuner (`training/hyperopt/hyperopt_tuner.py`)
+   - Related Tests:
+     - `tests/training/hyperopt/test_hyperopt_tuner.py`
+     - `tests/test_mlflow_logger.py`
 
-### 5. Data Validation Rules
+2. **Current Issues & Priorities**:
 
-#### Price Data
-- High prices must be >= Low prices
-- Volume must be non-negative
-- No gaps in timestamp sequence
-- No duplicate timestamps
-
-#### Technical Indicators
-- RSI must be between 0 and 100
-- Moving averages must be between min and max price
-- Bollinger Bands: Upper > Middle > Lower
-- Volume indicators must be non-negative
-
-### 6. Cache Management
-```python
-class CacheManager:
-    def __init__(self, cache_dir: str):
-        self.cache_dir = Path(cache_dir)
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-    
-    def get_cache_path(self, identifier: str) -> Path:
-        """Generate consistent cache file path"""
-        return self.cache_dir / f"{identifier}.csv"
-    
-    def save(self, df: pd.DataFrame, identifier: str):
-        """Save data with proper column handling"""
-        cache_path = self.get_cache_path(identifier)
-        df.to_csv(cache_path)
-        logger.info(f"Cached data to: {cache_path}")
-    
-    def load(self, identifier: str) -> Optional[pd.DataFrame]:
-        """Load data with validation"""
-        cache_path = self.get_cache_path(identifier)
-        if cache_path.exists():
-            df = pd.read_csv(cache_path)
-            if self._validate_cache(df):
-                return df
-        return None
-```
-
-### 7. Feature Generation Standards
-
-#### Input Requirements
-- Must have all required OHLCV columns with `$` prefix
-- Timestamps must be sorted and unique
-- No NaN values in input (or handled explicitly)
-
-#### Output Requirements
-- All features must be properly named
-- No NaN values in output
-- All features within valid ranges
-- Documentation of feature calculations
-
-### 8. Integration Testing Checklist
-
-```python
-def test_integration():
-    """Full pipeline integration test"""
-    # 1. Data Loading
-    assert data is not None
-    assert all required columns present
-    assert no invalid values
-    
-    # 2. Feature Generation
-    assert all features generated
-    assert no NaN values
-    assert features in valid ranges
-    
-    # 3. Model Integration
-    assert model accepts features
-    assert predictions in expected format
-    
-    # 4. Performance
-    assert execution time within limits
-    assert memory usage acceptable
-```
-
-### 9. Performance Guidelines
-
-#### Data Processing
-- Use caching for historical data
-- Implement progress tracking
-- Monitor memory usage
-- Log execution times
-
-#### Optimization Tips
-```python
-# Progress tracking
-def process_with_progress(items):
-    total = len(items)
-    for i, item in enumerate(items, 1):
-        logger.info(f"Processing {i}/{total}")
-        yield process_item(item)
-
-# Memory optimization
-def process_in_chunks(df, chunk_size=1000):
-    for chunk in np.array_split(df, len(df) // chunk_size + 1):
-        process_chunk(chunk)
-```
-
-### 10. Documentation Standards
-
-#### Function Documentation
-```python
-def function_name(param1: type1, param2: type2) -> return_type:
-    """Clear description of function purpose
-    
-    Args:
-        param1: Description of first parameter
-        param2: Description of second parameter
-        
-    Returns:
-        Description of return value
-        
-    Raises:
-        Exception1: Description of when this error occurs
-        Exception2: Description of when this error occurs
-    
-    Example:
+   a. **High Priority - Data & Environment Structure**:
+      - Risk Backtesting Data Columns:
         ```python
-        result = function_name(param1, param2)
+        REQUIRED_COLUMNS = {
+            '$open', '$high', '$low', '$close', '$volume'
+        }
         ```
-    """
-```
+      - Multi-Agent Environment Reset:
+        - Fix `env.reset()` return type
+        - Ensure proper observation space format
+      
+   b. **Medium Priority - Environment Consistency**:
+      - PaperTrading Environment:
+        - Use `trading_fee` consistently (not `transaction_fee`)
+        - Ensure `$`-prefixed columns
+      - PolicyNetwork Initialization:
+        - Resolve `shared` attribute expectation
+        - Update tests or implement shared layer
+      
+   c. **Lower Priority - Logic & Tests**:
+      - Risk Manager Tests:
+        - Align "Should be invalid" expectations
+        - Verify trade limit logic
+      - Tuner/Hyperopt Details:
+        - Handle `episodes` parameter
+        - Implement or remove `run_optimization`
+
+3. **Directory Management**:
+   - Test Fixtures:
+     ```python
+     @pytest.fixture(scope="function")
+     def test_dir():
+         temp_dir = tempfile.mkdtemp()
+         yield temp_dir
+         if os.path.exists(temp_dir):
+             shutil.rmtree(temp_dir)
+     ```
+   - MLflow Test Tracking:
+     - Clean up `.trash` directories
+     - Handle temporary experiment paths
+
+4. **Action Plan**:
+   a. **Data Column Standardization**:
+      - Create/update data generation fixtures
+      - Validate OHLCV columns in all scenarios
+      - Add column validation to environment initialization
+   
+   b. **Environment Fixes**:
+      - Fix Multi-Agent reset method
+      - Update PaperTrading fee parameter
+      - Resolve PolicyNetwork initialization
+   
+   c. **Test Alignment**:
+      - Update Risk Manager test expectations
+      - Clean up Tuner parameter handling
+      - Improve directory management fixtures
+
+5. **Testing Guidelines**:
+   - Run tests after each component fix
+   - Verify failure count decreases
+   - Document any test expectation changes
+   - Use proper test isolation and cleanup
+
+```markdown
+# Development Guide
+
+This development guide defines the core principles, naming and formatting rules, testing standards, and a recommended workflow for refactoring and maintaining the trading bot codebase. By following these guidelines, we ensure code clarity, maintainability, and consistent behavior across all components.
+
+---
+
+## Core Principles
+
+1. **MVP Stability**:  
+   - Preserve the stability of core files (`train.py`, `trading_env.py`, `ppo_agent.py`).
+   - Extend functionality via new modules or wrappers rather than directly modifying stable core components.
+
+2. **Incremental Improvements**:  
+   - Implement and test new features in isolation.
+   - Only integrate into the main pipeline once fully validated.
+
+3. **Testing and CI/CD**:  
+   - Write tests for every new component (unit and integration tests).
+   - Run tests before merging changes.
+   - Utilize CI/CD pipelines (e.g., GitHub Actions) for automated testing and linting.
+
+4. **Documentation & Transparency**:  
+   - Document all code changes, function signatures, and parameter definitions.
+   - Maintain comprehensive docstrings and comments.
+   - Update this guide and other documentation files regularly.
+
+---
+
+## Naming and Formatting Rules
+
+### Data Columns
+- **OHLCV Columns**: Always use `$` prefix.
+  - Required: `$open`, `$high`, `$low`, `$close`, `$volume`
+  - Additional features: `$<feature_name>` (e.g., `$rsi`, `$macd_signal`)
+- **Rationale**: Ensures a global standard that all data-related components recognize, simplifying debugging and validation.
+
+### Environment Parameters
+- **Data Parameter**: Use `df` for all pandas DataFrame inputs (no `data`, `dataframe`, etc.).
+- **Fee Parameter**: Use `trading_fee` everywhere (no `transaction_fee` or `fee` alone).
+
+### Observation Space
+- **Shape**: `(window_size, n_features)` (2D array) from the environment.
+- **Flattening**: If needed, flatten `(window_size, n_features)` inside the model/preprocessing stage, not in the environment.
+- **Consistency**: All tests and components must agree on this shape.
+
+### MLflow Configuration
+- **Experiment Directory**: `./mlflow_runs/`
+- **File Format**: Prefer parquet over CSV for logging artifacts.
+- **Naming Pattern**: Use consistent experiment names (e.g., `trading_bot_dev` or `trading_bot_prod`).
+
+### Async & Paper Trading
+- **Async Methods**: Clearly name asynchronous functions (e.g., `async def initialize()`, `async def run_stream()`).
+- **Mocking Real-Time Data**: Mock WebSocket or external calls in tests. Document how to do so consistently.
+- **Cleanup**: Ensure every async component has a `cleanup()` or `teardown()` method.
+
+### Hyperparameter Optimization (Ray Tune)
+- **Ray Configuration**: Use `storage_path` for Ray's result directories (avoid `local_dir`).
+- **Loggers**: Update code to the current Ray Tune API; do not revert to older parameters.
+- **Version Control**: Document the Ray Tune version and features in use.
+
+### General Code Style
+- **Function/Variable Names**: `snake_case` for Python functions and variables.
+- **Class Names**: `PascalCase` for classes.
+- **Constants**: `UPPER_CASE` for constants.
+- **Indentation**: 4 spaces, no tabs.
+- **Line Length**: Aim for ≤100 characters per line.
+- **Imports & PEP8**: Follow PEP8 and keep imports organized.
+
+### Documentation Standards
+- **Docstrings**: Every public class, method, or function must have a docstring.
+- **Comments**: Explain non-obvious choices, avoid outdated comments.
+
+---
+
+## Testing Standards
+
+### Test Requirements
+1. **Unit Tests**: Each new function/module must have unit tests covering:
+   - Success cases
+   - Error handling
+   - Edge cases (empty data, NaN values, boundary conditions)
+   
+2. **Integration Tests**: After unit tests pass, ensure the entire pipeline works together:
+   - Data pipeline → Feature generation → Model → Backtesting  
+   - Check for consistent naming, formatting, and data handling throughout.
+
+3. **Performance & Stress Tests**:
+   - Optional but recommended for long-running tasks.
+   - Ensure memory usage, GPU utilization, and run times are within acceptable bounds.
+
+### Testing Conventions
+- Use `pytest` for Python tests.
+- Use fixtures for reusable test data.
+- Separate tests by functionality (e.g., `test_data_pipeline.py`, `test_agents.py`, `test_backtest.py`).
+- Follow the Arrange-Act-Assert pattern in tests.
+
+---
+
+## Data Validation Rules
+
+1. **Price Data**:
+   - `$high >= $low`
+   - `$volume >= 0`
+   - No timestamp gaps or duplicates
+
+2. **Technical Indicators**:
+   - RSI: 0 ≤ RSI ≤ 100
+   - Moving Averages within price range
+   - Bollinger Bands: Upper ≥ Middle ≥ Lower
+   - Volume indicators must be non-negative
+
+3. **NaN Handling**:
+   - Detect and fill NaN values with forward/backward fill.
+   - Log warnings when NaNs are detected.
+
+---
+
+## Caching and Feature Generation
+
+- **Cache Manager**:  
+  - Store cached data consistently.
+  - Validate cached data before use.
+  - Document cache invalidation policies.
+
+- **Feature Generation**:
+  - Input must be `$`-prefixed OHLCV columns.
+  - Output must have no NaNs and be within valid ranges.
+  - Clearly document feature calculations.
+
+---
+
+## Refactoring & Migration Workflow
+
+If the codebase requires a major refactoring to align with these guidelines, follow this suggested order of operations:
+
+1. **Update Configuration & Constants**:  
+   - Files: `config/*.yaml`  
+   - Rename parameters (e.g., `transaction_fee`), ensure `$` columns in configs.
+
+2. **Refactor Data Pipeline**:
+   - Files: `data_loader.py`, `feature_generator.py`  
+   - Apply `$`-prefixed columns, `df` parameter, and validate data.
+
+3. **Standardize the Environment**:
+   - Files: `trading_env.py`, `base_env.py`  
+   - Use `df` and `transaction_fee`, ensure `(window_size, n_features)` observation.
+
+4. **Align Agents & Models**:
+   - Files: `ppo_agent.py`, `policy_network.py`, `value_network.py`  
+   - Handle 2D input consistently, flatten only in model code.
+
+5. **Unify Backtester & Scenarios**:
+   - Files: `backtest.py`, `advanced_backtest.py`  
+   - Standardize metrics, columns, and parameter names.
+
+6. **MLflow & Logging Setup**:
+   - Files: `mlflow_manager.py`, tests  
+   - Ensure `mlflow_runs/` directory, parquet format, consistent experiment naming.
+
+7. **Async & Paper Trading**:
+   - Files: `paper_trading.py`, WebSocket mocks  
+   - Fix async patterns, ensure cleanup, follow naming conventions.
+
+8. **Hyperopt & Ray Tune**:
+   - Files: `hyperopt_tuner.py`, tests  
+   - Use `storage_path`, follow latest Ray API.
+
+9. **Integration Tests & CI/CD**:
+   - Run integration tests after each step.
+   - Confirm consistent naming, formatting, and directory structures.
+
+10. **Documentation**:
+    - Update `README.md` and `DEVELOPMENT_GUIDELINES.md` to reflect all changes.
+    - Add a changelog or migration guide.
+
+---
 
 ## Debugging Checklist
 
-When debugging issues:
+1. **Logs**:
+   - Check DEBUG logs for warnings and errors.
+   - Look at execution times and memory usage logs.
 
-1. Check Logs First
-   - Review DEBUG level logs
-   - Look for warnings and errors
-   - Check execution times
+2. **Data Validation**:
+   - Ensure `$` prefix in columns.
+   - Check for NaNs and invalid ranges.
 
-2. Validate Data
-   - Verify column names ($ prefix)
-   - Check for NaN values
-   - Verify data ranges
-   - Check timestamp sequence
+3. **Component Isolation**:
+   - Test individual components (data loader, feature generator, agent).
+   - Run unit tests to pinpoint the issue.
 
-3. Test Components
-   - Isolate the failing component
-   - Use unit tests
-   - Check edge cases
-   - Verify cache integrity
+4. **Integration Checks**:
+   - Verify that data flows correctly through the pipeline.
+   - Ensure no shape or naming mismatches occur between components.
 
-4. Performance Issues
-   - Review memory usage
-   - Check execution times
-   - Verify cache usage
-   - Look for bottlenecks
+5. **Performance Reviews**:
+   - Check if caching is effective.
+   - Profile memory and CPU/GPU usage.
 
-5. Integration Issues
-   - Verify pipeline connections
-   - Check data transformations
-   - Validate feature generation
-   - Test full pipeline
+---
 
-## Common Issues and Solutions
+## Common Issues & Solutions
 
-1. Missing Features
-   ```python
-   # Check feature generation
-   expected_features = ['RSI', 'SMA_5', ...]
-   missing = [f for f in expected_features if f not in df.columns]
-   if missing:
-       logger.error(f"Missing features: {missing}")
-   ```
+- **Missing Features**:  
+  Check feature generator output, log missing columns, update pipeline accordingly.
 
-2. NaN Values
-   ```python
-   # Check for NaN values
-   nan_cols = df.columns[df.isnull().any()].tolist()
-   if nan_cols:
-       logger.error(f"NaN values in columns: {nan_cols}")
-   ```
+- **NaN Values**:  
+  Fill forward/backward and log warnings.
 
-3. Data Range Issues
-   ```python
-   # Validate price relationships
-   if not (df['$high'] >= df['$low']).all():
-       logger.error("Invalid price relationships")
-   ```
+- **Data Range Errors**:  
+  Validate `$high >= $low`, correct any data anomalies.
 
-4. Performance Problems
-   ```python
-   # Monitor execution time
-   start_time = time.time()
-   result = process_data(df)
-   elapsed = time.time() - start_time
-   if elapsed > threshold:
-       logger.warning(f"Performance warning: {elapsed:.2f}s")
-   ```
+- **Performance Slowdown**:  
+  Monitor execution time, optimize batch sizes, leverage Ray for parallel processing.
+
+---
 
 ## References
 
 - [Project Repository](https://github.com/your-repo)
 - [Issue Tracker](https://github.com/your-repo/issues)
-- [Documentation](https://your-docs-site.com) 
+- [README.md](./README.md)
+
+By adhering to these principles, rules, and workflow steps, you ensure a consistent, robust, and maintainable trading bot codebase.

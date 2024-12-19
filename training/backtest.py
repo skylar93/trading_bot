@@ -1,151 +1,54 @@
+import logging
 import numpy as np
 import pandas as pd
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, Any, Union, List
 from datetime import datetime
-import logging
 from pathlib import Path
-from .evaluation import TradingMetrics
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class Backtester:
-    """Cryptocurrency trading strategy backtester"""
+    """Backtesting system for trading strategies"""
     
-    def __init__(self, 
-                 data: pd.DataFrame,
-                 initial_balance: float = 10000.0,
-                 transaction_fee: float = 0.001,
-                 slippage: float = 0.001):
-        """
-        Initialize Backtester
+    REQUIRED_COLUMNS = {'$open', '$high', '$low', '$close', '$volume'}
+    
+    def __init__(self, data: pd.DataFrame, initial_balance: float = 10000.0, trading_fee: float = 0.001):
+        """Initialize backtester
         
         Args:
-            data: DataFrame with OHLCV data and features
+            data: DataFrame with OHLCV data (must have $ prefixed columns)
             initial_balance: Initial portfolio balance
-            transaction_fee: Trading fee as a decimal
-            slippage: Expected slippage as a decimal
+            trading_fee: Trading fee as decimal
         """
-        self.data = data
+        # Validate required columns
+        missing_columns = self.REQUIRED_COLUMNS - set(data.columns)
+        if missing_columns:
+            raise ValueError(f"Missing required columns: {list(missing_columns)}")
+            
+        self.data = data.copy()
         self.initial_balance = initial_balance
-        self.transaction_fee = transaction_fee
-        self.slippage = slippage
+        self.trading_fee = trading_fee
+        self.logger = logging.getLogger(self.__class__.__name__)
         
         self.reset()
-    
+        
     def reset(self):
         """Reset backtester state"""
-        self.balance = self.initial_balance
-        self.position = 0
+        self.portfolio_values = [self.initial_balance]  # Initialize with starting balance
         self.trades = []
-        self.portfolio_values = [self.initial_balance]
-        self.current_trade = None
-    
-    def _calculate_transaction_costs(self, price: float, size: float) -> float:
-        """Calculate transaction costs including fees and slippage"""
-        fee = price * size * self.transaction_fee
-        slip = price * size * self.slippage
-        return fee + slip
-    
-    def execute_trade(self, 
-                     timestamp: datetime,
-                     action: float,  # -1 to 1
-                     price_data: Dict[str, float]) -> Dict:
-        """
-        Execute a trade
+        self.position = 0
+        self.balance = self.initial_balance
+        self.peak_value = self.initial_balance
         
-        Args:
-            timestamp: Current timestamp
-            action: Trading action (-1 to 1, where -1 is full sell, 1 is full buy)
-            price_data: Dictionary with current prices (open, high, low, close)
-            
-        Returns:
-            Dictionary with trade results
-        """
-        if abs(action) < 1e-5:  # No trade
-            return {
-                'timestamp': timestamp,
-                'action': 0,
-                'price': price_data['close'],
-                'pnl': 0,
-                'costs': 0,
-                'balance': self.balance,
-                'position': self.position
-            }
-        
-        # Determine trade direction and size
-        is_buy = action > 0
-        price = price_data['close']  # Using close price for simplicity
-        
-        if is_buy:
-            # Calculate maximum possible position size
-            max_size = self.balance / (price * (1 + self.transaction_fee + self.slippage))
-            size = max_size * abs(action)
-            
-            # Calculate costs and update position
-            costs = self._calculate_transaction_costs(price, size)
-            total_cost = (price * size) + costs
-            
-            if total_cost <= self.balance:
-                self.balance -= total_cost
-                self.position += size
-                
-                # Record trade entry
-                self.current_trade = {
-                    'entry_time': timestamp,
-                    'entry_price': price,
-                    'size': size,
-                    'type': 'long'
-                }
-        else:
-            # Selling
-            size = self.position * abs(action)
-            costs = self._calculate_transaction_costs(price, size)
-            
-            self.position -= size
-            proceeds = (price * size) - costs
-            self.balance += proceeds
-            
-            # Record trade exit if there was an entry
-            if self.current_trade is not None:
-                trade = {
-                    'entry_time': self.current_trade['entry_time'],
-                    'exit_time': timestamp,
-                    'entry_price': self.current_trade['entry_price'],
-                    'exit_price': price,
-                    'size': size,
-                    'type': self.current_trade['type'],
-                    'pnl': proceeds - (self.current_trade['entry_price'] * size),
-                    'return': (price / self.current_trade['entry_price'] - 1) * 100
-                }
-                self.trades.append(trade)
-                self.current_trade = None
-        
-        # Calculate current portfolio value
-        portfolio_value = self.balance + (self.position * price)
-        self.portfolio_values.append(portfolio_value)
-        
-        return {
-            'timestamp': timestamp,
-            'action': action,
-            'price': price,
-            'size': size,
-            'costs': costs,
-            'balance': self.balance,
-            'position': self.position,
-            'portfolio_value': portfolio_value
-        }
-    
     def run(self, 
-            agent: Any,
-            window_size: int = 20,
-            verbose: bool = True) -> Dict:
-        """
-        Run backtest
+            strategy: Union[Any, Any], 
+            window_size: int = 20, 
+            verbose: bool = False) -> Dict[str, Any]:
+        """Run backtest with given strategy
         
         Args:
-            agent: Trading agent with get_action(state) method
-            window_size: Size of the observation window
+            strategy: Trading strategy object with get_action method
+            window_size: Size of observation window
             verbose: Whether to print progress
             
         Returns:
@@ -153,162 +56,309 @@ class Backtester:
         """
         self.reset()
         
-        timestamps = []
-        portfolio_values_with_time = []
+        if len(self.data) < window_size:
+            raise ValueError(f"Data length ({len(self.data)}) must be >= window_size ({window_size})")
         
-        for i in range(window_size, len(self.data)):
-            # Prepare state
-            observation = self.data.iloc[i-window_size:i]
-            timestamp = self.data.index[i]
-            
-            # Get action from agent
-            action = agent.get_action(observation)
-            
-            # Execute trade
-            price_data = {
-                'open': self.data.iloc[i]['open'],
-                'high': self.data.iloc[i]['high'],
-                'low': self.data.iloc[i]['low'],
-                'close': self.data.iloc[i]['close']
-            }
-            
-            result = self.execute_trade(timestamp, action, price_data)
-            
-            # Record timestamp and portfolio value
-            timestamps.append(timestamp)
-            portfolio_values_with_time.append(
-                (timestamp, result['portfolio_value'])
-            )
-            
-            if verbose and i % 100 == 0:
-                logger.info(f"Progress: {i}/{len(self.data)} - "
-                          f"Portfolio Value: {result['portfolio_value']:.2f}")
+        try:
+            # Run strategy
+            for i in range(window_size, len(self.data)):
+                # Get current window of data
+                window_data = self.data.iloc[i-window_size:i].copy()
+                current_data = self.data.iloc[i].copy()
+                timestamp = current_data.name
+                
+                # Get strategy action
+                try:
+                    action = strategy.get_action(window_data)
+                    if not isinstance(action, (int, float, np.ndarray)):
+                        self.logger.warning(f"Invalid action type: {type(action)}, expected float")
+                        continue
+                    action = float(action)  # Ensure action is float
+                except Exception as e:
+                    self.logger.error(f"Error getting action from strategy: {str(e)}")
+                    continue
+                
+                # Execute trade
+                price_data = {
+                    '$open': current_data['$open'],
+                    '$high': current_data['$high'],
+                    '$low': current_data['$low'],
+                    '$close': current_data['$close'],
+                    '$volume': current_data['$volume']
+                }
+                trade_result = self.execute_trade(timestamp, action, price_data)
+                
+                # Update portfolio value even if trade was skipped
+                if 'portfolio_value' not in trade_result:
+                    portfolio_value = self._calculate_portfolio_value(price_data['$close'])
+                    self.portfolio_values.append(portfolio_value)
+                    self.peak_value = max(self.peak_value, portfolio_value)
+                
+                if verbose and i % 100 == 0:
+                    self.logger.info(f"Progress: {i}/{len(self.data)}")
+                    
+        except Exception as e:
+            self.logger.error(f"Error during backtest: {str(e)}")
+            raise
         
-        # Calculate performance metrics
-        portfolio_values = np.array(self.portfolio_values)
-        metrics = TradingMetrics.evaluate_strategy(portfolio_values, self.trades)
+        # Calculate metrics
+        metrics = self._calculate_metrics()
+        
+        # Ensure portfolio values match the data length
+        expected_length = len(self.data) - window_size + 1
+        if len(self.portfolio_values) < expected_length:
+            last_value = self.portfolio_values[-1] if self.portfolio_values else self.initial_balance
+            self.portfolio_values.extend([last_value] * (expected_length - len(self.portfolio_values)))
+        elif len(self.portfolio_values) > expected_length:
+            self.portfolio_values = self.portfolio_values[:expected_length]
         
         return {
             'metrics': metrics,
             'trades': self.trades,
             'portfolio_values': self.portfolio_values,
-            'portfolio_values_with_time': portfolio_values_with_time,
-            'timestamps': timestamps
+            'timestamps': self.data.index[window_size-1:].tolist()
         }
     
-    def plot_results(self, results: Dict, save_path: Optional[str] = None):
-        """
-        Plot backtest results
+    def execute_trade(self, timestamp: pd.Timestamp, action: float, price_data: Dict[str, float]) -> Dict[str, Any]:
+        """Execute trade based on action
         
         Args:
-            results: Dictionary with backtest results
-            save_path: Optional path to save the plot
+            timestamp: Current timestamp
+            action: Action from strategy (-1 to 1)
+            price_data: Dictionary with current price data
+            
+        Returns:
+            Dictionary with trade results
         """
         try:
-            import matplotlib.pyplot as plt
-            from matplotlib.dates import DateFormatter
+            # Validate price data
+            required_columns = {'$open', '$high', '$low', '$close', '$volume'}
+            missing_cols = required_columns - set(price_data.keys())
+            if missing_cols:
+                self.position = 0
+                return {
+                    'timestamp': timestamp,
+                    'position': self.position,
+                    'balance': self.balance,
+                    'action': 'error',
+                    'reason': f"Missing required columns: {missing_cols}"
+                }
             
-            # Create figure with subplots
-            fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(15, 15))
+            # Bound action between -1 and 1
+            action = max(min(action, 1.0), -1.0)
             
-            # Prepare time series data
-            times = [t for t, _ in results['portfolio_values_with_time']]
-            values = [v for _, v in results['portfolio_values_with_time']]
+            # Skip very small actions (increased threshold)
+            if abs(action) < 1e-4:  # Increased threshold for small actions
+                self.position = 0  # Reset position for very small actions
+                return {
+                    'timestamp': timestamp,
+                    'position': self.position,
+                    'balance': self.balance,
+                    'action': 'skip',
+                    'reason': 'action too small'
+                }
             
-            # Plot portfolio value
-            ax1.plot(times, values, label='Portfolio Value')
-            ax1.set_title('Portfolio Value Over Time')
-            ax1.set_xlabel('Date')
-            ax1.set_ylabel('Value ($)')
-            ax1.legend()
-            ax1.grid(True)
-            ax1.xaxis.set_major_formatter(DateFormatter('%Y-%m-%d'))
+            current_price = price_data['$close']
             
-            # Plot drawdown
-            running_max = np.maximum.accumulate(values)
-            drawdown = np.array(values) / running_max - 1
-            ax2.fill_between(times, drawdown, 0, color='red', alpha=0.3)
-            ax2.set_title('Drawdown')
-            ax2.set_xlabel('Date')
-            ax2.set_ylabel('Drawdown %')
-            ax2.grid(True)
-            ax2.xaxis.set_major_formatter(DateFormatter('%Y-%m-%d'))
-            
-            # Plot trade points
-            for trade in results['trades']:
-                if trade['pnl'] > 0:
-                    color = 'g'
-                    marker = '^'
-                else:
-                    color = 'r'
-                    marker = 'v'
-                ax1.scatter(trade['exit_time'], trade['exit_price'], 
-                          color=color, marker=marker, s=100)
-            
-            # Plot daily returns
-            returns = pd.Series(values).pct_change().fillna(0)
-            # Ensure times and returns have the same length
-            ax3.bar(times, returns, color='blue', alpha=0.5)
-            ax3.set_title('Returns')
-            ax3.set_xlabel('Date')
-            ax3.set_ylabel('Return %')
-            ax3.grid(True)
-            ax3.xaxis.set_major_formatter(DateFormatter('%Y-%m-%d'))
-            
-            plt.tight_layout()
-            
-            if save_path:
-                plt.savefig(save_path)
-                plt.close()
-            else:
-                plt.show()
+            # Calculate trade size
+            if action > 0:  # Buy
+                # Check if balance is too low for any meaningful trade
+                if self.balance < 10:  # Minimum balance requirement
+                    self.position = 0  # Reset position for insufficient balance
+                    return {
+                        'timestamp': timestamp,
+                        'position': self.position,
+                        'balance': self.balance,
+                        'action': 'skip',
+                        'reason': 'insufficient balance for minimum trade'
+                    }
                 
-        except ImportError:
-            logger.warning("matplotlib is required for plotting")
+                max_shares = self.balance / (current_price * (1 + self.trading_fee))
+                trade_shares = max_shares * abs(action)
+                
+                # Skip if trade size is too small
+                if trade_shares < 1e-4:
+                    self.position = 0  # Reset position for very small trades
+                    return {
+                        'timestamp': timestamp,
+                        'position': self.position,
+                        'balance': self.balance,
+                        'action': 'skip',
+                        'reason': 'trade size too small'
+                    }
+                
+                cost = trade_shares * current_price * (1 + self.trading_fee)
+                
+                if cost > self.balance:  # Added balance check
+                    self.logger.warning("Insufficient balance for trade")
+                    self.position = 0  # Reset position for insufficient balance
+                    return {
+                        'timestamp': timestamp,
+                        'position': self.position,
+                        'balance': self.balance,
+                        'action': 'skip',
+                        'reason': 'insufficient balance'
+                    }
+                
+                self.balance -= cost
+                self.position += trade_shares
+                
+                # Clean up dust after buy
+                if self.position < 1e-4:
+                    self.position = 0
+                
+                trade = {
+                    'timestamp': timestamp,
+                    'entry_time': timestamp,
+                    'type': 'buy',
+                    'size': trade_shares,
+                    'price': current_price,
+                    'cost': cost,
+                    'balance': self.balance,
+                    'position': self.position,
+                    'action': 'buy',
+                    'reason': 'trade executed'
+                }
+                
+            else:  # Sell
+                # Skip if no position to sell
+                if self.position < 1e-4:
+                    self.position = 0  # Clean up any dust
+                    return {
+                        'timestamp': timestamp,
+                        'position': self.position,
+                        'balance': self.balance,
+                        'action': 'skip',
+                        'reason': 'no position to sell'
+                    }
+                
+                trade_shares = self.position * abs(action)
+                
+                # Skip if trade size is too small
+                if trade_shares < 1e-4:
+                    self.position = 0  # Reset position for very small trades
+                    return {
+                        'timestamp': timestamp,
+                        'position': self.position,
+                        'balance': self.balance,
+                        'action': 'skip',
+                        'reason': 'trade size too small'
+                    }
+                
+                proceeds = trade_shares * current_price * (1 - self.trading_fee)
+                
+                self.balance += proceeds
+                self.position -= trade_shares
+                
+                # Clean up any dust (very small remaining position)
+                if self.position < 1e-4:
+                    self.position = 0
+                
+                trade = {
+                    'timestamp': timestamp,
+                    'entry_time': timestamp,
+                    'type': 'sell',
+                    'size': trade_shares,
+                    'price': current_price,
+                    'revenue': proceeds,
+                    'balance': self.balance,
+                    'position': self.position,
+                    'action': 'sell',
+                    'reason': 'trade executed'
+                }
             
-    def save_results(self, results: Dict, save_dir: str):
-        """
-        Save backtest results to files
+            self.trades.append(trade)
+            
+            # Update portfolio value
+            portfolio_value = self._calculate_portfolio_value(current_price)
+            self.portfolio_values.append(portfolio_value)
+            self.peak_value = max(self.peak_value, portfolio_value)
+            
+            trade['portfolio_value'] = portfolio_value
+            return trade
+            
+        except Exception as e:
+            self.logger.error(f"Error executing trade: {str(e)}")
+            self.position = 0  # Reset position on error
+            return {
+                'timestamp': timestamp,
+                'error': str(e),
+                'position': self.position,
+                'balance': self.balance,
+                'action': 'error',
+                'reason': str(e)
+            }
+    
+    def _calculate_portfolio_value(self, current_price: float) -> float:
+        """Calculate current portfolio value
         
         Args:
-            results: Dictionary with backtest results
-            save_dir: Directory to save results
+            current_price: Current asset price
+            
+        Returns:
+            Total portfolio value
         """
-        save_dir = Path(save_dir)
-        save_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Save metrics
-        metrics_df = pd.DataFrame([results['metrics']])
-        metrics_df.to_csv(save_dir / 'metrics.csv', index=False)
-        
-        # Save trades
-        trades_df = pd.DataFrame(results['trades'])
-        trades_df.to_csv(save_dir / 'trades.csv', index=False)
-        
-        # Save portfolio values
-        portfolio_df = pd.DataFrame(
-            results['portfolio_values_with_time'],
-            columns=['timestamp', 'portfolio_value']
-        )
-        portfolio_df.to_csv(save_dir / 'portfolio_values.csv', index=False)
-        
-        # Save plots
-        self.plot_results(results, save_path=str(save_dir / 'results_plot.png'))
-        
-        logger.info(f"Results saved to {save_dir}")
+        return self.balance + (self.position * current_price)
     
-    def _record_trade(self, action, price, timestamp):
-        """Record a trade with proper datetime handling"""
-        if isinstance(timestamp, (int, float)):
-            timestamp = pd.Timestamp.fromtimestamp(timestamp)
-        elif isinstance(timestamp, str):
-            timestamp = pd.Timestamp(timestamp)
+    def _calculate_metrics(self) -> Dict[str, float]:
+        """Calculate trading metrics
         
-        trade = {
-            'action': action,
-            'price': price,
-            'entry_time': timestamp,
-            'exit_time': None,
-            'profit': 0.0
-        }
-        self.trades.append(trade)
+        Returns:
+            Dictionary with trading metrics
+        """
+        try:
+            # Calculate returns
+            values = np.array(self.portfolio_values)
+            returns = np.diff(values) / values[:-1]
+            
+            # Total return
+            total_return = (values[-1] / values[0]) - 1 if len(values) > 1 else 0
+            
+            # Sharpe ratio (assuming risk-free rate = 0)
+            sharpe_ratio = np.mean(returns) / np.std(returns) * np.sqrt(252) if len(returns) > 1 else 0
+            
+            # Sortino ratio (downside deviation)
+            negative_returns = returns[returns < 0]
+            sortino_ratio = (np.mean(returns) / np.std(negative_returns) * np.sqrt(252)
+                           if len(negative_returns) > 0 else 0)
+            
+            # Maximum drawdown
+            peak = values[0]
+            max_drawdown = 0
+            
+            for value in values[1:]:
+                if value > peak:
+                    peak = value
+                drawdown = (peak - value) / peak
+                max_drawdown = min(max_drawdown, -drawdown)
+            
+            # Win rate
+            profitable_trades = sum(1 for trade in self.trades 
+                                 if ('revenue' in trade and trade['revenue'] > trade.get('cost', 0)) or
+                                    ('cost' in trade and trade['cost'] < trade.get('revenue', float('inf'))))
+            total_trades = len(self.trades)
+            win_rate = profitable_trades / total_trades if total_trades > 0 else 0
+            
+            return {
+                'total_return': total_return,
+                'sharpe_ratio': sharpe_ratio,
+                'sortino_ratio': sortino_ratio,
+                'max_drawdown': max_drawdown,
+                'total_trades': total_trades,
+                'win_rate': win_rate,
+                'final_balance': self.balance,
+                'final_portfolio_value': values[-1] if len(values) > 0 else self.balance
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error calculating metrics: {str(e)}")
+            return {
+                'total_return': 0,
+                'sharpe_ratio': 0,
+                'sortino_ratio': 0,
+                'max_drawdown': 0,
+                'total_trades': len(self.trades),
+                'win_rate': 0,
+                'final_balance': self.balance,
+                'final_portfolio_value': self.balance
+            }

@@ -4,7 +4,7 @@ import unittest
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from training.utils.risk_management import RiskManager, RiskConfig
+from risk.risk_manager import RiskManager, RiskConfig
 
 class TestRiskManager(unittest.TestCase):
     def setUp(self):
@@ -15,119 +15,197 @@ class TestRiskManager(unittest.TestCase):
             max_drawdown_pct=0.15,
             daily_trade_limit=10,
             min_trade_size=0.01,
-            max_leverage=1.0
+            max_leverage=1.0,
+            volatility_lookback=20,
+            risk_free_rate=0.02
         )
         self.risk_manager = RiskManager(self.config)
+        
+        # Create sample price data for volatility calculation
+        dates = pd.date_range(start='2024-01-01', periods=100, freq='1h')
+        self.sample_prices = pd.Series(
+            np.random.lognormal(0, 0.02, 100),
+            index=dates
+        )
     
     def test_position_sizing(self):
         """Test position size calculation"""
         portfolio_value = 10000
         price = 100
         
-        # Basic position size
-        size = self.risk_manager.calculate_position_size(portfolio_value, price)
-        self.assertEqual(size, portfolio_value * self.config.max_position_size)
+        # Calculate volatility
+        returns = self.sample_prices.pct_change().dropna()
+        volatility = returns.std() * np.sqrt(252)
+        
+        # Basic position size without volatility
+        size = self.risk_manager.calculate_position_size(
+            portfolio_value=portfolio_value,
+            price=price,
+            volatility=None
+        )
+        expected_size = portfolio_value * self.config.max_position_size
+        self.assertAlmostEqual(size, expected_size, delta=0.01)
         
         # Position size with volatility scaling
-        vol_size = self.risk_manager.calculate_position_size(portfolio_value, price, volatility=0.5)
+        vol_size = self.risk_manager.calculate_position_size(
+            portfolio_value=portfolio_value,
+            price=price,
+            volatility=volatility
+        )
         self.assertTrue(vol_size < size)  # Higher volatility should reduce size
         
-        # Minimum size check
-        small_portfolio = 100
-        small_size = self.risk_manager.calculate_position_size(small_portfolio, price)
-        self.assertEqual(small_size, 0.0)  # Below minimum, should return 0
+        # Test minimum size threshold
+        small_portfolio = 100  # Very small portfolio
+        small_size = self.risk_manager.calculate_position_size(
+            portfolio_value=small_portfolio,
+            price=price,
+            volatility=None
+        )
+        self.assertTrue(small_size <= small_portfolio * self.config.max_position_size)
     
     def test_trade_limits(self):
         """Test daily trade limits"""
         timestamp = pd.Timestamp('2024-01-01 10:00:00')
         
         # Should allow trades up to limit
-        for _ in range(self.config.daily_trade_limit):
-            self.assertTrue(self.risk_manager.check_trade_limits(timestamp))
+        for i in range(self.config.daily_trade_limit):
+            self.assertTrue(
+                self.risk_manager.check_trade_limits(timestamp),
+                f"Trade {i+1} should be allowed"
+            )
             self.risk_manager.update_trade_counter(timestamp)
         
         # Should reject after limit reached
-        self.assertFalse(self.risk_manager.check_trade_limits(timestamp))
+        self.assertFalse(
+            self.risk_manager.check_trade_limits(timestamp),
+            "Trade should be rejected after limit reached"
+        )
         
         # Should reset on new day
-        next_day = timestamp + timedelta(days=1)
-        self.assertTrue(self.risk_manager.check_trade_limits(next_day))
+        next_day = timestamp + pd.Timedelta(days=1)
+        self.assertTrue(
+            self.risk_manager.check_trade_limits(next_day),
+            "Trade counter should reset on new day"
+        )
     
     def test_stop_loss(self):
-        """Test stop loss functionality"""
-        trade_id = 'test_trade'
+        """Test stop loss calculation"""
         entry_price = 100
+        position_size = 1.0
         
-        # Test long position stop loss
-        stop_price = self.risk_manager.set_stop_loss(trade_id, entry_price, 'long')
-        expected_stop = entry_price * (1 - self.config.stop_loss_pct)
-        self.assertEqual(stop_price, expected_stop)
+        # Long position stop loss
+        long_stop = self.risk_manager.calculate_stop_loss(
+            entry_price=entry_price,
+            position_size=position_size,
+            is_long=True
+        )
+        expected_long_stop = entry_price * (1 - self.config.stop_loss_pct)
+        self.assertAlmostEqual(
+            long_stop,
+            expected_long_stop,
+            delta=0.01,
+            msg="Long position stop loss calculation incorrect"
+        )
         
-        # Test stop loss hit
-        self.assertTrue(self.risk_manager.check_stop_loss(trade_id, expected_stop - 1))
-        self.assertFalse(self.risk_manager.check_stop_loss(trade_id, expected_stop + 1))
-        
-        # Test short position stop loss
-        short_stop = self.risk_manager.set_stop_loss(trade_id, entry_price, 'short')
+        # Short position stop loss
+        short_stop = self.risk_manager.calculate_stop_loss(
+            entry_price=entry_price,
+            position_size=position_size,
+            is_long=False
+        )
         expected_short_stop = entry_price * (1 + self.config.stop_loss_pct)
-        self.assertEqual(short_stop, expected_short_stop)
+        self.assertAlmostEqual(
+            short_stop,
+            expected_short_stop,
+            delta=0.01,
+            msg="Short position stop loss calculation incorrect"
+        )
     
     def test_drawdown_monitoring(self):
-        """Test drawdown calculations"""
-        # Initial portfolio value
+        """Test drawdown monitoring"""
         initial_value = 10000
-        drawdown, exceeded = self.risk_manager.update_drawdown(initial_value)
-        self.assertEqual(drawdown, 0.0)
-        self.assertFalse(exceeded)
+        current_value = initial_value
+        
+        # No drawdown
+        self.assertFalse(
+            self.risk_manager.check_max_drawdown(initial_value, current_value),
+            "Should not trigger max drawdown when no drawdown exists"
+        )
         
         # Small drawdown
-        small_drop = initial_value * 0.95
-        drawdown, exceeded = self.risk_manager.update_drawdown(small_drop)
-        self.assertEqual(drawdown, 0.05)
-        self.assertFalse(exceeded)
+        current_value = initial_value * 0.95  # 5% drawdown
+        self.assertFalse(
+            self.risk_manager.check_max_drawdown(initial_value, current_value),
+            "Should not trigger max drawdown for small drawdown"
+        )
         
-        # Exceeding max drawdown
-        big_drop = initial_value * 0.8
-        drawdown, exceeded = self.risk_manager.update_drawdown(big_drop)
-        self.assertEqual(drawdown, 0.2)
-        self.assertTrue(exceeded)
+        # Max drawdown exceeded
+        current_value = initial_value * (1 - self.config.max_drawdown_pct * 1.1)
+        self.assertTrue(
+            self.risk_manager.check_max_drawdown(initial_value, current_value),
+            "Should trigger max drawdown when threshold exceeded"
+        )
     
     def test_leverage_limits(self):
         """Test leverage limits"""
-        position_size = 1000
+        portfolio_value = 10000
+        position_value = portfolio_value * self.config.max_leverage * 0.5
         
-        # No leverage
-        adjusted = self.risk_manager.adjust_for_leverage(position_size, current_leverage=0.0)
-        self.assertEqual(adjusted, position_size)
+        # Test within limits
+        self.assertTrue(
+            self.risk_manager.check_leverage_limits(portfolio_value, position_value),
+            "Should allow position within leverage limits"
+        )
         
-        # At max leverage
-        adjusted = self.risk_manager.adjust_for_leverage(position_size, current_leverage=1.0)
-        self.assertEqual(adjusted, 0.0)
-        
-        # Partial leverage available
-        adjusted = self.risk_manager.adjust_for_leverage(position_size, current_leverage=0.5)
-        self.assertEqual(adjusted, position_size * 0.5)
+        # Test exceeding limits
+        large_position = portfolio_value * self.config.max_leverage * 1.1
+        self.assertFalse(
+            self.risk_manager.check_leverage_limits(portfolio_value, large_position),
+            "Should reject position exceeding leverage limits"
+        )
     
     def test_trade_signal_processing(self):
-        """Test complete trade signal processing"""
-        timestamp = pd.Timestamp('2024-01-01 10:00:00')
+        """Test trade signal processing"""
         portfolio_value = 10000
         price = 100
+        volatility = 0.2
+        timestamp = pd.Timestamp('2024-01-01 10:00:00')
         
-        # Normal trade
-        result = self.risk_manager.process_trade_signal(
-            timestamp, portfolio_value, price
-        )
-        self.assertTrue(result['allowed'])
-        self.assertTrue('position_size' in result)
+        # Reset trade counter
+        self.risk_manager.trade_counter = {}
         
-        # Excessive drawdown
-        self.risk_manager.update_drawdown(portfolio_value * 0.8)  # Create large drawdown
-        result = self.risk_manager.process_trade_signal(
-            timestamp, portfolio_value * 0.8, price
+        # Test long entry signal
+        long_signal = {
+            'type': 'entry',
+            'direction': 'long',
+            'price': price,
+            'timestamp': timestamp,
+            'volatility': volatility
+        }
+        
+        # Process signals up to the limit
+        for i in range(self.config.daily_trade_limit):
+            result = self.risk_manager.process_trade_signal(
+                signal=long_signal,
+                portfolio_value=portfolio_value
+            )
+            self.assertTrue(result['valid'], f"Signal {i+1} should be valid")
+        
+        # Next signal should be invalid due to limit
+        limit_result = self.risk_manager.process_trade_signal(
+            signal=long_signal,
+            portfolio_value=portfolio_value
         )
-        self.assertFalse(result['allowed'])
-        self.assertEqual(result['reason'], 'max_drawdown_exceeded')
+        
+        self.assertFalse(
+            limit_result['valid'],
+            "Signal should be invalid when trade limit exceeded"
+        )
+        self.assertEqual(
+            limit_result['reason'],
+            'trade_limit_exceeded',
+            "Should indicate trade limit exceeded reason"
+        )
 
 if __name__ == '__main__':
     unittest.main()

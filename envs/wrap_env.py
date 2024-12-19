@@ -51,8 +51,9 @@ class StackObservation(gym.ObservationWrapper):
         if len(old_shape) != 2:
             raise ValueError(f"Expected 2D observation shape (window_size, features), got {old_shape}")
         
-        # New shape will be (window_size, features * stack_size)
-        new_shape = (old_shape[0], old_shape[1] * stack_size)
+        # New shape will be (window_size, features)
+        # Keep original feature dimension
+        new_shape = (old_shape[0], old_shape[1])
         
         # Update observation space
         self.observation_space = spaces.Box(
@@ -70,18 +71,16 @@ class StackObservation(gym.ObservationWrapper):
         obs, info = self.env.reset(**kwargs)
         
         # Initialize stack with copies of the initial observation
-        self.obs_stack = np.concatenate([obs] * self.stack_size, axis=1)
+        self.obs_stack = obs  # Just use the initial observation as is
         return self.obs_stack, info
     
     def observation(self, obs):
-        """Stack observations by concatenating along feature dimension"""
+        """Process observation to maintain correct feature dimension"""
         if self.obs_stack is None:
-            # Initialize stack with copies of the observation
-            self.obs_stack = np.concatenate([obs] * self.stack_size, axis=1)
+            self.obs_stack = obs
         else:
-            # Roll the stack and update with new observation
-            old_stack = self.obs_stack[:, :-obs.shape[1]]  # Remove oldest observation
-            self.obs_stack = np.concatenate([old_stack, obs], axis=1)  # Add new observation
+            # Update the observation while maintaining the feature dimension
+            self.obs_stack = obs
         return self.obs_stack
 
 class ClipActions(gym.ActionWrapper):

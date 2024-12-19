@@ -13,6 +13,14 @@ class Position:
     entry_price: float
     entry_time: pd.Timestamp
     
+    @property
+    def value(self) -> float:
+        """Get position value"""
+        if self.type == 'long':
+            return self.size
+        else:  # short
+            return -self.size
+    
     def calculate_pnl(self, current_price: float) -> float:
         """Calculate unrealized PnL"""
         if self.type == 'long':
@@ -134,12 +142,13 @@ class TradingEnvironment(gym.Env):
         """Take a step in the environment"""
         action_value = action[0]  # Extract scalar value from action array
         
-        # Calculate reward before taking action
-        reward = self._calculate_reward(action_value)
+        # Store previous portfolio value for reward calculation
+        prev_portfolio_value = self.balance + (self.position.value * self.current_price if self.position else 0)
         
         # Process the action
         current_price = self.df['$close'].iloc[self.current_step]
         current_time = self.df.index[self.current_step]
+        self.current_price = current_price  # Store for later use
         
         # Close existing position if action is in opposite direction
         if self.position is not None:
@@ -167,6 +176,10 @@ class TradingEnvironment(gym.Env):
         done = self.current_step >= len(self.df) - 1
         truncated = False  # For gymnasium compatibility
         
+        # Calculate reward (change in portfolio value)
+        current_portfolio_value = self.balance + (self.position.value * current_price if self.position else 0)
+        reward = (current_portfolio_value - prev_portfolio_value) / prev_portfolio_value
+        
         # Get new observation
         obs = self._get_observation()
         
@@ -175,7 +188,8 @@ class TradingEnvironment(gym.Env):
             'balance': self.balance,
             'position': self.position,
             'current_price': current_price,
-            'timestamp': current_time
+            'timestamp': current_time,
+            'portfolio_value': current_portfolio_value
         }
         
         return obs, reward, done, truncated, info

@@ -14,12 +14,12 @@ class SimplifiedTradingEnv(gym.Env):
     def __init__(self, 
                  df: pd.DataFrame,
                  initial_balance: float = 10000.0,
-                 transaction_fee: float = 0.001,
+                 trading_fee: float = 0.001,
                  window_size: int = 20):
         super().__init__()
         self.df = df
         self.initial_balance = initial_balance
-        self.transaction_fee = transaction_fee
+        self.trading_fee = trading_fee
         self.window_size = window_size
         
         self.action_space = gym.spaces.Box(
@@ -56,13 +56,13 @@ class SimplifiedTradingEnv(gym.Env):
         if abs(action) > 0.05:  # Threshold to prevent tiny trades
             if action > 0:  # Buy
                 shares_to_buy = (self.balance * abs(action)) / current_price
-                cost = shares_to_buy * current_price * (1 + self.transaction_fee)
+                cost = shares_to_buy * current_price * (1 + self.trading_fee)
                 if cost <= self.balance:
                     self.position += shares_to_buy
                     self.balance -= cost
             else:  # Sell
                 shares_to_sell = self.position * abs(action)
-                revenue = shares_to_sell * current_price * (1 - self.transaction_fee)
+                revenue = shares_to_sell * current_price * (1 - self.trading_fee)
                 self.position -= shares_to_sell
                 self.balance += revenue
         

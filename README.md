@@ -1,190 +1,169 @@
+Below is a revised `README.md` that integrates the guidelines, rules, and refactoring steps discussed. It highlights the current project state, the development guidelines, and the workflow recommended. This document is meant to replace your current `README.md`.
+
+```markdown
 # Trading Bot Project
+
+A reinforcement learning-based trading bot using PPO agents, comprehensive backtesting, and real-time integration for future live trading scenarios. The codebase follows strict development guidelines and naming conventions to ensure maintainability, reproducibility, and robust testing.
+
+---
 
 ## Latest Achievements 🎯
 
 - **Risk-Aware Backtesting System Implemented (2024-12-13)**:
   - Portfolio returns: +1.42%
-  - Sharpe Ratio: 0.43
-  - Sortino Ratio: 0.60
-  - Max Drawdown: -4.26%
-  - Tested with flash crash and low liquidity scenarios
-  - Dynamic position sizing and stop-loss mechanisms integrated
-  - Initiated hyperparameter optimization pipeline using Ray Tune
-  - Unit tests for `hyperopt_env.py`, `hyperopt_agent.py`, `hyperopt_tuner.py` completed
-  - Optimization pipeline separated for independent execution
+  - Sharpe Ratio: 0.43, Sortino Ratio: 0.60, Max Drawdown: -4.26%
+  - Dynamic position sizing and stop-loss integrated
+  - Scenario-based testing (flash crash, low liquidity)
+  - Initiated hyperparameter optimization with Ray Tune and MLflow tracking
+  - Completed unit tests for `hyperopt_env.py`, `hyperopt_agent.py`, and `hyperopt_tuner.py`
+  - Optimization pipeline decoupled for independent execution
 
 - **Advanced Backtesting & Visualization**:
-  - Scenario-based testing (flash crash, low liquidity)
+  - Flash crash and low liquidity scenario analysis
   - Comprehensive metrics (Sharpe, Sortino, MDD)
   - Portfolio visualization and trade analysis
-  - Real-time monitoring of simulated results
-  - Risk management metrics and scenarios integrated
+  - Real-time simulation monitoring
+  - Enhanced risk management metrics
 
 - **Hyperparameter Optimization**:
-  - Modular structure under `training/hyperopt/`
-  - Ray Tune integration for learning rate, batch size, network architecture tuning
-  - MLflow for result tracking and reproducibility
+  - Under `training/hyperopt/` modules
+  - Ray Tune integration for tuning (learning rate, batch size, architectures)
+  - MLflow for tracking experiments and reproducibility
   - Dedicated script `scripts/run_hyperopt.py` for full hyperparameter search
 
-- **Resource Optimization System (New)**:
-  - Under `training/monitoring/` (e.g., `metrics_collector.py`, `performance_analyzer.py`, `worker_manager.py`, `optimizer.py`)
+- **Resource Optimization System**:
+  - Located in `training/monitoring/*` (e.g., `metrics_collector.py`, `worker_manager.py`)
   - Ray Actor model for distributed processing
-  - Dynamic resource scaling (2 to 8 workers)
-  - Automated optimization of batch sizes, worker allocation, and resource usage
-  - Real-time performance monitoring (batch processing time, memory, GPU utilization)
+  - Dynamic worker scaling (2 to 8 workers)
+  - Performance metrics (batch time, memory, GPU utilization)
+  - Automated optimization of batch sizes and resource usage
 
 - **Real-Time Trading Preparation**:
   - CCXT WebSocket integration for live data streaming
-  - Paper trading environment for real-time testing (`training/paper_trading.py`)
-  - `websocket_loader.py` for asynchronous data handling
-  - Environment modifications in `trading_env.py` to support live trading scenarios
+  - Paper trading environment (`paper_trading.py`) for real-time strategy testing
+  - `trading_env.py` adapted for on-the-fly decision-making
+
+---
 
 ## Core Architecture Components
 
-### A. Data Pipeline Layer
-
-- **Frameworks**: TA-Lib + ccxt
-- **Pipeline**:
+### Data Pipeline Layer
+- **Tech Stack**: TA-Lib + ccxt
+- **Flow**:  
+  `Raw Data (ccxt) → TA-Lib Pipeline → Feature Store → Training Data`
+- **Structure**:
   ```
-  Raw Data (ccxt) → TA-Lib Pipeline → Feature Store → Training Data
-  ```
-- **Directory Structure**:
-  ```
-  /data
-    /raw
-    /processed
-    /features
-    /utils/data_loader.py
-    /utils/feature_generator.py
-    /utils/websocket_loader.py
+  data/
+    raw/
+    processed/
+    features/
+    utils/data_loader.py
+    utils/feature_generator.py
+    utils/websocket_loader.py
   ```
 
-### B. Training and Inference Layer
-
+### Training and Inference Layer
 - **Frameworks**: RLlib + PPO Agent
-- **Architecture**:
-  ```
-  Market Environment
-    └── PPO Agent (Currently Active)
-  ```
-- **Key Files**:
-  - `train.py` (Stable training pipeline)
-  - `ppo_agent.py` (Core PPO agent)
-  - `trading_env.py` (Stable single-agent environment)
-  - `multi_agent_env.py` (Multi-agent environment)
-  - `evaluation.py`, `backtest.py`, `advanced_backtest.py` (Evaluation & Backtesting)
-  - `hyperopt/` (Hyperparameter tuning modules)
-  
-### C. Web Interface Layer
+- **Key Components**:
+  - `train.py`: Stable single-agent training
+  - `ppo_agent.py`: PPO agent
+  - `trading_env.py`: Stable trading environment (single-agent)
+  - `train_multi_agent.py`: Multi-agent environment
+  - `evaluation.py`, `backtest.py`, `advanced_backtest.py`: Evaluation & scenario testing
+  - `training/hyperopt/`: Hyperparameter tuning modules
 
+### Web Interface Layer
 - **Frameworks**: FastAPI + Streamlit
 - **Features**:
-  ```
-  Web UI (Streamlit)
-    ├── Model Selection
-    ├── Parameter Tuning
-    ├── Live Monitoring
-    └── Performance Visualization
-
-  API Server (FastAPI)
-    ├── Training Control
-    ├── Model Management
-    └── Data Pipeline Control
-  ```
+  - Model selection, parameter tuning, monitoring
+  - Live performance visualization
 - **File**:
   - `deployment/web_interface/app.py`
 
-## Completed Features
+---
 
-1. **Data Pipeline** ✅
-   - ccxt for data ingestion
-   - 44 technical indicators via TA-Lib
-   - Data caching for efficiency
+## Completed Features ✅
 
-2. **Reinforcement Learning** ✅
+1. **Data Pipeline**:  
+   - ccxt ingestion, 44 TA-Lib indicators
+   - `$`-prefixed column names for OHLCV (e.g., `$open`, `$close`)
+   - Caching for performance
+
+2. **Reinforcement Learning**:  
    - PPO agent implementation
-   - Stable training pipeline (`train.py`)
-   - MLflow tracking integrated
-   - Successful training runs validated
+   - Stable training (`train.py`)
+   - MLflow integrated
+   - Validated training runs
 
-3. **Backtesting System** ✅
-   - Performance metrics: Sharpe, Sortino, MDD
-   - Portfolio visualization and trade analysis
-   - Real-time monitoring of simulation results
-   - `backtest.py`, `advanced_backtest.py` for scenario testing
+3. **Backtesting System**:  
+   - Metrics: Sharpe, Sortino, MDD
+   - Scenario tests (flash crash, low liquidity)
+   - Real-time simulation monitoring
 
-4. **Visualization Tools** ✅
-   - Portfolio value tracking
-   - Returns distribution
-   - Drawdown analysis
-   - Risk metric visualizations (`visualization.py`)
+4. **Visualization Tools**:  
+   - Portfolio value, returns distribution, drawdown
+   - Risk metric visualizations
 
-5. **Advanced Scenario Testing** ✅
-   - Flash crash scenarios (sudden price drops, partial recovery)
-   - Low liquidity conditions (reduced volumes, high volatility)
-   - Metrics for survival rate, recovery time, execution feasibility
+5. **Advanced Scenarios**:  
+   - Flash crash and low liquidity tests
+   - Risk management with dynamic sizing, stop-loss
 
-6. **Risk-Aware Backtesting** ✅
-   - Dynamic position sizing
-   - Stop-loss mechanisms & drawdown limits
-   - Real-time leverage monitoring
-   - Enhanced risk metrics in backtesting results
+6. **Risk-Aware Backtesting**:  
+   - Leverage, drawdown control
+   - Stop-loss mechanisms validated
 
-7. **Hyperparameter Optimization** (Ongoing) ✅
-   - `training/hyperopt/` for modular tuning environment
-   - `hyperopt_env.py`, `hyperopt_agent.py`, `hyperopt_tuner.py` implemented
-   - Ray Tune integration for parameter search
-   - MLflow logging for reproducibility
-   - `scripts/run_hyperopt.py` for dedicated optimization runs
+7. **Hyperparameter Optimization**:  
+   - `training/hyperopt/` modules
+   - Ray Tune for parameter search
+   - MLflow for reproducibility
 
-8. **Real-Time Trading Preparation**
-   - CCXT WebSocket integration for live data streams
-   - `trading_env.py` adapted for on-the-fly action application
-   - `paper_trading.py` for sandbox testing of live strategies
+8. **Real-Time Trading Preparation**:  
+   - CCXT WebSocket integration
+   - `paper_trading.py` for sandbox tests
 
-9. **Resource Optimization & Monitoring System**
-   - Ray Actor model for distributed processing
-   - Worker management and scaling (2 to 8 workers)
-   - Real-time performance metrics (batch time, memory, GPU)
-   - Automated optimization of batch sizes and resource allocation
+9. **Resource Optimization & Monitoring**:  
+   - Ray Actor model for distributed tasks
+   - Worker scaling and performance metrics
 
-## Integrated Architecture Workflow
-
-```
-Data Sources (Exchanges) → ccxt → Raw Data Storage
-                                  ↓
-                              TA-Lib Pipeline
-                                  ↓
-                              Feature Store
-                                  ↓
-                          RLlib Training Pipeline
-                                  ↓
-                          Model Store (MLflow)
-                                  ↓
-                       FastAPI Backend + Streamlit UI
-```
+---
 
 ## Development Guidelines
 
-- **MVP First**: Focus on core functionality, test components individually, avoid unnecessary complexity.
-- **Stable Core**: `train.py`, `trading_env.py`, `ppo_agent.py` are stable; extend rather than modify.
-- **Testing and CI/CD**: Always test (`test_training.py`) before deploying changes. Consider GitHub Actions for automation.
-- **Modular Design**: Add new features via separate modules (inheritance, composition) without altering stable core.
-- **Documentation**: Thoroughly document changes and new modules.
+**Refer to**: [DEVELOPMENT_GUIDELINES.md](DEVELOPMENT_GUIDELINES.md) for full details.
 
-For all development work, please refer to our [Development Guidelines](DEVELOPMENT_GUIDELINES.md). This document contains:
+### Key Naming & Formatting Rules
 
-- Code standards and best practices
-- Testing requirements
-- Data validation rules
-- Debugging procedures
-- Common issues and solutions
+- **Data Columns**: Always use `$` prefix (e.g., `$open`, `$close`).
+- **Parameters**: Use `df` for DataFrame parameters, `transaction_fee` for fees.
+- **Observation Shape**: `(window_size, n_features)` 2D arrays from the environment. Flatten only inside the model if needed.
+- **MLflow**: Use `./mlflow_runs/` for experiments and parquet format.
+- **Async and Paper Trading**: Follow consistent async method naming, mock WebSocket in tests, ensure cleanup methods.
 
-Following these guidelines ensures consistent code quality and makes debugging easier.
+### Testing Standards
+
+- Use pytest for unit and integration tests.
+- Test success, error, and edge cases.
+- Validate data formats, handle NaN with ffill/bfill.
+- Integration tests check full pipeline (data → features → model → backtest).
+
+### Refactoring and Migration Steps (if needed)
+
+1. Update config files (`config/*.yaml`) to match naming conventions.
+2. Refactor data pipeline (`data_loader.py`, `feature_generator.py`) to `$` columns.
+3. Standardize `trading_env.py` parameters and observation shapes.
+4. Align PPO agent and networks with `(window_size, n_features)` inputs.
+5. Unify backtester metrics and scenario outputs.
+6. Configure MLflow experiments under `./mlflow_runs/`.
+7. Fix async patterns in paper trading and mock WebSocket in tests.
+8. Update Hyperopt code to use `storage_path` for Ray Tune.
+9. Re-run integration tests and CI/CD pipelines after each step.
+10. Document changes and update guidelines.
+
+---
 
 ## Running the Project
 
-1. Setup
+1. **Setup**
    ```bash
    cd Users/skylar/Desktop/trading_bot
    python -m venv venv
@@ -192,178 +171,131 @@ Following these guidelines ensures consistent code quality and makes debugging e
    pip install -r requirements.txt
    ```
 
-2. Test Core System
+2. **Test Core System**
    ```bash
-   python test_training.py
+   pytest tests/
    ```
 
-3. Launch Web UI
+3. **Launch Web UI**
    ```bash
    streamlit run deployment/web_interface/app.py
    ```
 
-4. Execute Hyperparameter Optimization
+4. **Hyperparameter Optimization**
    ```bash
    python scripts/run_hyperopt.py
    ```
-   - Monitor results via MLflow UI.
+   - Monitor via MLflow UI.
 
-## Key Files & Components
+---
 
-```
-trading_bot/
-├─ config/
-│  ├─ default_config.yaml         # Core configuration
-│  ├─ env_settings.yaml           # Environment settings
-│  └─ model_config.yaml           # Model architecture settings
-│
-├─ data/
-│  ├─ raw/
-│  │  └─ crypto/                  # Raw cryptocurrency data
-│  ├─ processed/
-│  │  ├─ features/               # Processed features
-│  │  └─ cache/                  # Cached computations
-│  └─ utils/
-│     ├─ data_loader.py          # Data loading utilities
-│     ├─ feature_generator.py    # Feature generation
-│     └─ validation.py           # Data validation
-│
-├─ agents/
-│  ├─ base/
-│  │  ├─ base_agent.py          # Abstract base agent
-│  │  └─ agent_factory.py       # Agent creation factory
-│  ├─ strategies/
-│  │  └─ ppo_agent.py          # PPO implementation
-│  └─ models/
-│     ├─ policy_network.py      # Policy network architectures
-│     └─ value_network.py       # Value network architectures
-│
-├─ envs/
-│  ├─ base_env.py              # Base trading environment
-│  └─ trading_env.py           # Main trading environment
-│
-├─ training/
-│  ├─ train.py                 # Single-agent training
-│  ├─ train_multi_agent.py     # Multi-agent training
-│  ├─ evaluation.py            # Performance evaluation
-│  ├─ backtest.py             # Basic backtesting
-│  ├─ advanced_backtest.py     # Advanced scenario testing
-│  └─ utils/
-│     ├─ metrics.py            # Performance metrics
-│     └─ callbacks.py          # Training callbacks
-│
-├─ deployment/
-│  ├─ web_interface/
-│  │  ├─ app.py               # Streamlit main app
-│  │  ├─ pages/              # Multi-page components
-│  │  │  ├─ training.py      # Training interface
-│  │  │  ├─ backtest.py      # Backtesting interface
-│  │  │  └─ monitor.py       # Monitoring interface
-│  │  └─ utils/
-│  │     └─ state_management.py  # Session state management
-│  └─ api/
-│     ├─ main.py             # FastAPI main app
-│     └─ routers/
-│        ├─ training.py      # Training endpoints
-│        └─ data.py          # Data endpoints
-│
-└─ tests/
-   ├─ test_environment.py    # Environment tests
-   ├─ test_agents.py        # Agent tests
-   └─ test_training.py      # Training pipeline tests
-```
-
-## Dependencies and Roles
-```
-graph TD
-    A[environment.py] --> B[agents.py]
-    B --> C[train.py]
-    B --> D[backtest.py]
-    D --> E[evaluation.py]
-    F[async_feature_generator.py] --> G[app.py]
-    H[data_management.py] --> G
-```
-
-## Visual Results
-
-- **Key Visualizations**:
-  - Portfolio value tracking over time
-  - Returns distribution with Sharpe and Sortino ratios
-  - Drawdown analysis and maximum drawdown periods
-  - Scenario annotations (flash crash markers, low liquidity notes)
-  - Risk-adjusted metrics and trade-level details
-
-Latest results in `training_viz/training_progress_ep0.png`:
-- Positive returns (+1.42%)
-- Stable Sharpe ratio (0.43)
-- Controlled max drawdown (-4.26%)
-- Effective risk management in volatile scenarios
-
-## Testing Changes
-
-1. **Core Testing**:
-   - `python test_training.py` for baseline checks
-   - Validate MLflow logs and metrics
-
-2. **Scenario Testing**:
-   - `tests/test_advanced_backtest.py` for scenario validations
-   - Ensure scenario-specific metrics match expectations
-
-3. **Risk Management Testing**:
-   - `tests/test_risk_backtest.py` to ensure dynamic position sizing, stop-loss, and drawdown mechanisms function correctly
-
-## Critical Notes
+## Additional Notes
 
 - **MVP Stability**:  
-  - Do not modify stable core files (`train.py`, `trading_env.py`, `ppo_agent.py`)
-  - Extend functionality via new modules
-
+  Focus on core stable files: `train.py`, `trading_env.py`, `ppo_agent.py`.
+  
 - **Code Changes**:  
-  - Use inheritance and composition
-  - Keep changes isolated and well-documented
+  Use inheritance and composition. Follow naming conventions and formatting rules from the guidelines.
 
-- **Success Factors**:  
-  - MVP bot runs successfully
-  - Advanced scenarios and risk-aware features operational
-  - Visualization and metrics tracking robust
-  - CI/CD and resource optimization in progress
+- **Experiment Tracking**:  
+  Use MLflow for all runs and experiments. Stick to the documented directories and parameter naming.
 
-## Latest Updates 🔄
+- **CI/CD**:  
+  Integrate GitHub Actions or similar for automated testing and linting.
 
-### Recent Improvements (2024-03-20)
-- **Environment Wrapper GPU Support** ✅
-  - Added GPU acceleration to observation normalization
-  - Improved memory efficiency in observation stacking
-  - NaN handling and numerical stability fixes
-  - MLflow integration for environment metrics
+- **Resource Monitoring**:  
+  Ray Actor model for scaling workers and optimizing batch sizes. Validate performance with tests and logs.
 
-- **Data Pipeline Optimization** ✅
-  - Fixed feature generation issues
-  - Improved PVT calculation
-  - Updated naming conventions
-  - All data pipeline tests passing
+## Additional Guidelines and Recommendations
 
-### Current Active Components
-- **PPO Agent**: Located in `training/agents.py` (primary implementation)
-- **Environment Wrapper**: Located in `envs/wrap_env.py` (GPU-enabled)
-- **Base Environment**: Located in `envs/base_env.py`
+### Environment Variables and Configuration
 
-### Deprecated Components ⚠️
-- `agents/strategies/ppo_agent.py` is no longer in use
-- Use `training/agents.py` for the current PPO implementation
+To maintain flexibility and security in different deployment contexts (development, staging, production), we employ environment variables and external configuration files:
 
-### Next Steps 🎯
-1. **GPU Support Enhancement**
-   - Update PPO agent for efficient GPU utilization
-   - Batch processing optimization
-   - Memory management improvements
+- **Required Variables**:  
+  - `EXCHANGE_API_KEY`, `EXCHANGE_API_SECRET` for CCXT-based data retrieval  
+  - `MLFLOW_TRACKING_URI` for experiment logging  
+  - `REDIS_URL`, `POSTGRES_URL` (if database or caching layers are employed)  
+  - `WEB_SOCKET_ENDPOINT` for real-time data streams
 
-2. **MLflow Integration**
-   - Enhanced metric logging
-   - Hyperparameter tracking
-   - Experiment management
+- **Credential Management**:  
+  - Store API keys and secrets in a `.env` file that is not committed to version control.  
+  - For production or sensitive deployments, consider using a secure secrets management solution such as HashiCorp Vault or AWS Secrets Manager.  
+  - The cursor and CI/CD pipelines may inject credentials as environment variables at runtime.
 
-3. **Multi-Agent System**
-   - Parallel environment handling
-   - Experience sharing mechanism
-   - Distributed training support
+- **Configuration Environments**:
+  - **Development**: Local `.env.development` file and local config overrides.  
+  - **Staging**: `.env.staging` loaded on staging servers, possibly with test exchange keys.  
+  - **Production**: `.env.production` managed by Ops team or secret vault integration.  
+  - Switch between environments by setting a `ENV` variable or passing a command-line argument; the application’s startup script or Dockerfile can select the correct configuration.
+
+### Dependency Versioning and Management
+
+Consistent dependency management ensures reproducible builds and predictable behavior across different machines and stages:
+
+- **Recommended Approach**:
+  - Use a `requirements.txt` file pinned with exact versions for stability.  
+  - Alternatively, adopt Poetry for handling dependencies and virtual environments, which generates a `poetry.lock` file for strict reproducibility.
+  
+- **Freezing Dependencies**:
+  - If using `requirements.txt`, after installing or upgrading dependencies, run `pip freeze > requirements.txt` to lock versions.  
+  - If using Poetry, rely on `poetry.lock` for version consistency.
+
+### Contribution Guidelines
+
+For teams working collaboratively or expecting external contributions, establish clear contribution policies:
+
+- **Feature Proposals & Bug Fixes**:
+  - Open a GitHub issue or pull request (PR) describing the proposed changes or bug fixes.  
+  - Include tests and documentation updates with each PR.
+  
+- **Code Review & Branching**:
+  - Use a standard branch naming convention: `feature/<short_description>`, `fix/<issue_number>`.  
+  - Require at least one code review approval before merging into `main` or `master`.
+  
+- **Style Enforcement**:
+  - Integrate `pre-commit` hooks to run linting (pylint), type checks (mypy), and tests (pytest) before commits.  
+  - The cursor (or CI/CD) will reject merges that fail these checks.
+
+### Known Limitations and Future Improvements
+
+While the current system is robust, there are known areas for enhancement:
+
+- **Known Edge Cases**:
+  - Extremely low liquidity scenarios may not fully reflect real exchange order book microstructure.
+  - High latency environments or rate-limiting behaviors from some exchanges need further testing.
+  
+- **Roadmap**:
+  - Additional exchange integrations (e.g., futures, options).  
+  - Advanced risk models (e.g., VaR-based constraints, regime detection).
+  - UI enhancements for Streamlit dashboards (real-time order book visualization, portfolio heatmaps).
+
+### Performance Benchmarks
+
+Performance goals help guide optimization efforts and ensure scalability:
+
+- **Targets**:
+  - Training runtime: Complete a single training epoch within a set time (e.g., < 5 minutes for standard configuration).
+  - Maximum acceptable latency for real-time updates: < 1 second end-to-end from data ingestion to action decision.
+  - Memory/GPU usage: Keep GPU utilization high without causing out-of-memory errors, and log these metrics with MLflow or Ray Tune’s logging.
+
+- **Profiling & Benchmarking**:
+  - Use built-in Python profiling (`cProfile`, `line_profiler`) to identify bottlenecks.
+  - Leverage Ray’s dashboard and MLflow logging for performance metrics at scale.
+  - Document the results and optimizations in `performance_notes.md` or a dedicated section in the repo.
+
+### Security and Compliance Considerations
+
+For systems that may eventually handle real-world trades or sensitive financial data:
+
+- **Security Requirements**:
+  - Encrypt all secrets at rest and in transit.
+  - Sanitize logs to avoid printing API keys or sensitive info.
+  
+- **Compliance**:
+  - If operating in regulated environments, consider KYC/AML checks and regulatory reporting.
+  - Use security scanning tools (like `bandit`) and type checking (`mypy`) regularly.
+  
+- **Recommended Tools**:
+  - `bandit` for Python security linting.
+  - Regular dependency vulnerability scans (e.g., `pip-audit`).

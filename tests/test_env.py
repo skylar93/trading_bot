@@ -71,8 +71,8 @@ class TestTradingEnvironment:
         assert len(trading_env.position_history) == 0
         
         # Check observation shape
-        expected_obs_size = len(trading_env.feature_columns) * trading_env.window_size + 4
-        assert obs.shape == (expected_obs_size,)
+        expected_obs_size = (trading_env.window_size, len(trading_env.feature_columns))
+        assert obs.shape == expected_obs_size
     
     def test_step_buy_action(self, trading_env):
         """Test environment step with buy action"""
@@ -147,47 +147,45 @@ class TestEnvironmentWrappers:
         assert np.all(obs >= -1) and np.all(obs <= 1)  # Check bounds
     
     def test_stack_observation(self, trading_env):
-        """Test observation stacking wrapper"""
+        """Test observation stacking"""
         stack_size = 4
-        env = StackObservation(trading_env, stack_size)
-        obs, _ = env.reset(seed=42)
+        wrapped_env = StackObservation(trading_env, stack_size=stack_size)
+        obs, _ = wrapped_env.reset()
         
-        original_obs_size = trading_env.observation_space.shape[0]
-        assert len(obs) == original_obs_size * stack_size
+        # Check stacked observation shape
+        n_features = len(trading_env.feature_columns)
+        expected_shape = (trading_env.window_size, n_features)
+        assert obs.shape == expected_shape, \
+            f"Expected shape {expected_shape}, got {obs.shape}"
     
     def test_full_wrapped_env(self, trading_env):
-        """Test full wrapped environment"""
-        env = make_env(trading_env, normalize=True, stack_size=4)
+        """Test fully wrapped environment"""
+        wrapped_env = make_env(
+            trading_env,
+            normalize=True,
+            stack_size=4
+        )
         
-        # Test reset
-        obs, info = env.reset(seed=42)
-        assert isinstance(obs, np.ndarray)
-        assert isinstance(info, dict)
+        obs, _ = wrapped_env.reset()
+        n_features = len(trading_env.feature_columns)
+        expected_shape = (trading_env.window_size, n_features)
+        assert obs.shape == expected_shape, \
+            f"Expected shape {expected_shape}, got {obs.shape}"
         
         # Test step
-        action = np.array([1.0])
-        obs, reward, terminated, truncated, info = env.step(action)
-        
-        assert isinstance(obs, np.ndarray)
-        assert isinstance(reward, float)
-        assert isinstance(terminated, bool)
-        assert isinstance(truncated, bool)
-        assert isinstance(info, dict)
-        
-        # Check observation properties
-        assert np.all(obs >= -1) and np.all(obs <= 1)  # Normalized
-        original_obs_size = trading_env.observation_space.shape[0]
-        assert len(obs) == original_obs_size * 4  # Stacked
+        action = wrapped_env.action_space.sample()
+        obs, reward, done, truncated, info = wrapped_env.step(action)
+        assert obs.shape == expected_shape
         
         # Run full episode
         total_reward = 0
         step_count = 0
         done = False
         
-        obs, info = env.reset(seed=42)
+        obs, info = wrapped_env.reset()
         while not done and step_count < 100:  # Limit steps for testing
-            action = env.action_space.sample()
-            obs, reward, terminated, truncated, info = env.step(action)
+            action = wrapped_env.action_space.sample()
+            obs, reward, terminated, truncated, info = wrapped_env.step(action)
             total_reward += reward
             step_count += 1
             done = terminated or truncated

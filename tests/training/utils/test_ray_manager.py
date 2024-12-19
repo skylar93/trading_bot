@@ -2,16 +2,20 @@
 
 import pytest
 import numpy as np
+import ray
 from training.utils.ray_manager import (
     RayConfig,
     BatchConfig,
     RayManager,
-    TrainingActor,
-    EvaluationActor
+    RayActor
 )
 
-class TestTrainingActor(TrainingActor):
+@ray.remote
+class TestTrainingActor(RayActor):
     """Test implementation of TrainingActor"""
+    
+    def __init__(self, config):
+        self.config = config
     
     def process_batch(self, batch_data: np.ndarray) -> dict:
         """Simple batch processing for testing"""
@@ -20,8 +24,12 @@ class TestTrainingActor(TrainingActor):
             'metrics': {'batch_size': len(batch_data)}
         }
 
-class TestEvaluationActor(EvaluationActor):
+@ray.remote
+class TestEvaluationActor(RayActor):
     """Test implementation of EvaluationActor"""
+    
+    def __init__(self, config):
+        self.config = config
     
     def process_batch(self, batch_data: np.ndarray) -> dict:
         """Simple batch processing for testing"""

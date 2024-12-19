@@ -9,12 +9,12 @@ from gymnasium import spaces
 class TradingEnvironment(gym.Env):
     """Custom Trading Environment that follows gym interface"""
     
-    def __init__(self, data: pd.DataFrame, initial_balance: float = 10000, transaction_fee: float = 0.001):
+    def __init__(self, data: pd.DataFrame, initial_balance: float = 10000, trading_fee: float = 0.001):
         super(TradingEnvironment, self).__init__()
         
         self.data = data
         self.initial_balance = initial_balance
-        self.transaction_fee = transaction_fee
+        self.trading_fee = trading_fee
         
         # Define action space (0: sell, 1: hold, 2: buy)
         self.action_space = spaces.Discrete(3)
@@ -71,7 +71,7 @@ class TradingEnvironment(gym.Env):
         if action == 0:  # Sell
             if self.position > 0:
                 sell_value = current_price * self.position
-                fee = sell_value * self.transaction_fee
+                fee = sell_value * self.trading_fee
                 self.balance += (sell_value - fee)
                 self.trades.append({
                     'type': 'sell',
@@ -84,11 +84,11 @@ class TradingEnvironment(gym.Env):
                 
         elif action == 2:  # Buy
             if self.position == 0:
-                max_quantity = self.balance / (current_price * (1 + self.transaction_fee))
+                max_quantity = self.balance / (current_price * (1 + self.trading_fee))
                 self.position = max_quantity
                 self.position_value = current_price
                 buy_value = current_price * self.position
-                fee = buy_value * self.transaction_fee
+                fee = buy_value * self.trading_fee
                 self.balance -= (buy_value + fee)
                 self.trades.append({
                     'type': 'buy',

@@ -3,10 +3,13 @@ import numpy as np
 import pandas as pd
 import sys
 import os
+import logging
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from training.advanced_backtest import ScenarioBacktester
 from agents.strategies.ppo_agent import PPOAgent
+
+logger = logging.getLogger(__name__)
 
 class MockAgent:
     """Mock agent for testing"""
@@ -16,6 +19,7 @@ class MockAgent:
 class TestScenarioBacktester(unittest.TestCase):
     def setUp(self):
         self.backtester = ScenarioBacktester()
+        self.backtester.logger = logging.getLogger(self.backtester.__class__.__name__)
         self.agent = MockAgent()
     
     def test_flash_crash_data_generation(self):
@@ -28,11 +32,11 @@ class TestScenarioBacktester(unittest.TestCase):
         
         self.assertEqual(len(data), 1000)
         self.assertTrue(all(col in data.columns 
-                          for col in ['open', 'high', 'low', 'close', 'volume']))
+                          for col in ['$open', '$high', '$low', '$close', '$volume']))
         
         # Verify crash occurs
-        pre_crash = data['close'].iloc[499]
-        post_crash = data['close'].iloc[500]
+        pre_crash = data['$close'].iloc[499]
+        post_crash = data['$close'].iloc[500]
         self.assertTrue(post_crash < pre_crash * 0.9)
     
     def test_low_liquidity_data_generation(self):
@@ -46,8 +50,8 @@ class TestScenarioBacktester(unittest.TestCase):
         self.assertEqual(len(data), 1000)
         
         # Verify low liquidity period
-        normal_volume = data['volume'].iloc[0:300].mean()
-        low_liq_volume = data['volume'].iloc[300:400].mean()
+        normal_volume = data['$volume'].iloc[0:300].mean()
+        low_liq_volume = data['$volume'].iloc[300:400].mean()
         self.assertTrue(low_liq_volume < normal_volume * 0.2)
     
     def test_flash_crash_scenario(self):

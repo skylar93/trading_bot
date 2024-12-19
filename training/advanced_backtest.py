@@ -14,9 +14,16 @@ class ScenarioBacktester(Backtester):
     """Advanced backtester with scenario generation capabilities"""
     
     def __init__(self, initial_balance: float = 10000.0):
-        """Initialize with no data - will be generated per scenario"""
-        self.initial_balance = initial_balance
-        self.transaction_fee = 0.001
+        """Initialize with empty DataFrame containing required columns"""
+        empty_df = pd.DataFrame({
+            '$open': [],
+            '$high': [],
+            '$low': [],
+            '$close': [],
+            '$volume': []
+        })
+        super().__init__(empty_df, initial_balance)  # Initialize parent with empty DataFrame
+        self.trading_fee = 0.001
         self.slippage = 0.001
     
     def generate_flash_crash_data(self, 
@@ -37,11 +44,11 @@ class ScenarioBacktester(Backtester):
         
         # Generate OHLCV data
         data = pd.DataFrame({
-            'open': prices,
-            'high': prices * (1 + np.random.uniform(0, 0.002, length)),
-            'low': prices * (1 - np.random.uniform(0, 0.002, length)),
-            'close': prices,
-            'volume': np.random.uniform(100000, 200000, length)
+            '$open': prices,
+            '$high': prices * (1 + np.random.uniform(0, 0.002, length)),
+            '$low': prices * (1 - np.random.uniform(0, 0.002, length)),
+            '$close': prices,
+            '$volume': np.random.uniform(100000, 200000, length)
         }, index=timestamps)
         
         return data
@@ -65,11 +72,11 @@ class ScenarioBacktester(Backtester):
         volumes[low_liq_start:low_liq_start+low_liq_length] *= 0.1
         
         data = pd.DataFrame({
-            'open': prices,
-            'high': prices * (1 + np.random.uniform(0, 0.002, length)),
-            'low': prices * (1 - np.random.uniform(0, 0.002, length)),
-            'close': prices,
-            'volume': volumes
+            '$open': prices,
+            '$high': prices * (1 + np.random.uniform(0, 0.002, length)),
+            '$low': prices * (1 - np.random.uniform(0, 0.002, length)),
+            '$close': prices,
+            '$volume': volumes
         }, index=timestamps)
         
         return data
@@ -86,16 +93,24 @@ class ScenarioBacktester(Backtester):
         results = self.run(agent, window_size, verbose)
         
         # Add scenario-specific metrics
-        max_drawdown_idx = np.argmax(np.maximum.accumulate(results['portfolio_values']) - results['portfolio_values'])
-        recovery_time = len(results['portfolio_values']) - max_drawdown_idx
+        portfolio_values = results['portfolio_values']
+        max_drawdown_idx = np.argmax(np.maximum.accumulate(portfolio_values) - portfolio_values)
+        recovery_time = len(portfolio_values) - max_drawdown_idx
         
         results['scenario_metrics'] = {
             'max_drawdown_idx': max_drawdown_idx,
             'recovery_time_periods': recovery_time,
-            'survived_crash': results['portfolio_values'][-1] > self.initial_balance * 0.5
+            'survived_crash': portfolio_values[-1] > self.initial_balance * 0.5,
+            'crash_size': (max(portfolio_values[:max_drawdown_idx]) - min(portfolio_values[max_drawdown_idx:])) / max(portfolio_values[:max_drawdown_idx])
         }
         
-        return results
+        return {
+            'metrics': results['metrics'],
+            'trades': results['trades'],
+            'portfolio_values': results['portfolio_values'],
+            'timestamps': results['timestamps'],
+            'scenario_metrics': results['scenario_metrics']
+        }
     
     def run_low_liquidity_scenario(self,
                                 agent: Any,
@@ -109,16 +124,27 @@ class ScenarioBacktester(Backtester):
         results = self.run(agent, window_size, verbose)
         
         # Calculate liquidity-specific metrics
-        trade_costs = [trade.get('costs', 0) for trade in results['trades']]
+        trade_costs = [trade.get('cost', 0) for trade in results['trades']]
         avg_cost = np.mean(trade_costs) if trade_costs else 0
+        
+        # Get timestamps from results
+        timestamps = results['timestamps']
         
         results['scenario_metrics'] = {
             'avg_trade_cost': avg_cost,
             'trade_count_low_liq': len([t for t in results['trades'] 
-                                      if 300 <= results['timestamps'].index(t['exit_time']) < 400])
+                                      if 300 <= timestamps.index(t['entry_time']) < 400]),
+            'avg_slippage': np.mean([t.get('slippage', 0) for t in results['trades']]),
+            'max_slippage': max([t.get('slippage', 0) for t in results['trades']], default=0)
         }
         
-        return results
+        return {
+            'metrics': results['metrics'],
+            'trades': results['trades'],
+            'portfolio_values': results['portfolio_values'],
+            'timestamps': results['timestamps'],
+            'scenario_metrics': results['scenario_metrics']
+        }
 
     def plot_scenario_results(self, results: Dict, scenario_type: str, save_path: Optional[str] = None):
         """Enhanced plotting for scenario results"""

@@ -2,7 +2,7 @@
 
 import ray
 from ray.util.actor_pool import ActorPool
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Type
 import logging
 import numpy as np
 from dataclasses import dataclass
@@ -111,7 +111,7 @@ class RayManager:
     
     def create_actor_pool(
         self, 
-        actor_class: RayActor,
+        actor_class: Type[RayActor],
         actor_config: Dict[str, Any],
         num_actors: int
     ) -> ActorPool:
@@ -125,12 +125,17 @@ class RayManager:
         Returns:
             Pool of Ray actors
         """
-        actors = [
-            ray.remote(actor_class).remote(actor_config)
-            for _ in range(num_actors)
-        ]
-        return ActorPool(actors)
-    
+        try:
+            # Create remote actors
+            actors = [
+                actor_class.remote(actor_config)
+                for _ in range(num_actors)
+            ]
+            return ActorPool(actors)
+        except Exception as e:
+            logger.error(f"Error creating actor pool: {str(e)}")
+            raise
+
     def process_in_parallel(
         self,
         actor_pool: ActorPool,
@@ -147,31 +152,30 @@ class RayManager:
         Returns:
             List of results from processing
         """
-        # Split data into batches
-        num_batches = len(data) // batch_config.batch_size
-        batches = np.array_split(data, num_batches)
-        
-        # Submit batches to actor pool
-        result_refs = []
-        for batch in batches:
-            if len(batch) > 0:
-                ref = actor_pool.submit(
-                    lambda actor, b: actor.process_batch.remote(b), 
-                    batch
-                )
-                result_refs.append(ref)
-        
-        # Get results
-        results = []
-        for ref in result_refs:
-            try:
-                result = actor_pool.get_next_unordered()
-                results.append(result)
-            except Exception as e:
-                logger.error(f"Error processing batch: {str(e)}")
-        
-        return results
-    
+        try:
+            # Split data into batches
+            num_batches = max(1, len(data) // batch_config.batch_size)
+            batches = np.array_split(data, num_batches)
+            
+            # Submit all batches
+            results = []
+            for batch in batches:
+                if len(batch) > 0:
+                    # Submit batch and get result
+                    actor_pool.submit(
+                        lambda a, b: a.process_batch.remote(b),
+                        batch
+                    )
+                    # Get next result directly
+                    result = actor_pool.get_next_unordered()
+                    results.append(result)
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error in parallel processing: {str(e)}")
+            raise
+
     def shutdown(self):
         """Shutdown Ray"""
         if ray.is_initialized():

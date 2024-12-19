@@ -6,25 +6,15 @@ import pandas as pd
 import numpy as np
 import tempfile
 import yaml
+import logging
 from datetime import datetime, timedelta
+from pathlib import Path
+import shutil
+import mlflow
+import time
+from training.utils.mlflow_manager import MLflowManager
 
-@pytest.fixture
-def sample_data():
-    """Create sample price data for testing"""
-    dates = pd.date_range(
-        start=datetime.now() - timedelta(days=100),
-        end=datetime.now(),
-        freq='1H'
-    )
-    
-    return pd.DataFrame({
-        'timestamp': dates,
-        'open': np.random.randn(len(dates)).cumsum(),
-        'high': np.random.randn(len(dates)).cumsum(),
-        'low': np.random.randn(len(dates)).cumsum(),
-        'close': np.random.randn(len(dates)).cumsum(),
-        'volume': np.abs(np.random.randn(len(dates)))
-    }).set_index('timestamp')
+logger = logging.getLogger(__name__)
 
 @pytest.fixture
 def temp_dir():
@@ -32,10 +22,76 @@ def temp_dir():
     temp_dir = tempfile.mkdtemp()
     yield temp_dir
     try:
-        import shutil
         shutil.rmtree(temp_dir)
-    except:
-        pass
+    except Exception as e:
+        logger.error(f"Failed to cleanup temp directory: {str(e)}")
+        raise
+
+@pytest.fixture(scope="function")
+def mlflow_test_context():
+    """Create a temporary MLflow context for testing"""
+    # Create temporary directory
+    temp_dir = tempfile.mkdtemp()
+    
+    try:
+        # Set up MLflow tracking
+        mlflow.set_tracking_uri(f"file://{temp_dir}")
+        
+        # Clean up any existing experiments
+        experiment = mlflow.get_experiment_by_name("test_experiment")
+        if experiment:
+            mlflow.delete_experiment(experiment.experiment_id)
+            time.sleep(0.5)
+        
+        # Initialize MLflow manager with temp directory
+        mlflow_manager = MLflowManager(
+            experiment_name="test_experiment",
+            tracking_dir=temp_dir
+        )
+        
+        yield mlflow_manager
+        
+    finally:
+        # Clean up MLflow resources and temp directory
+        try:
+            mlflow_manager.cleanup()
+        except Exception:
+            pass
+            
+        try:
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+        except Exception:
+            pass
+
+@pytest.fixture
+def sample_data():
+    """Create sample price data for testing with $ prefix columns"""
+    dates = pd.date_range(
+        start=datetime.now() - timedelta(days=100),
+        end=datetime.now(),
+        freq='1H'
+    )
+    
+    # Generate consistent OHLCV data
+    base_price = 100
+    returns = np.random.normal(0, 0.01, len(dates))
+    prices = base_price * np.exp(np.cumsum(returns))
+    
+    df = pd.DataFrame({
+        'timestamp': dates,
+        '$open': prices * (1 + np.random.uniform(-0.001, 0.001, len(dates))),
+        '$high': prices * (1 + np.random.uniform(0, 0.002, len(dates))),
+        '$low': prices * (1 - np.random.uniform(0, 0.002, len(dates))),
+        '$close': prices,
+        '$volume': np.abs(np.random.normal(1000, 100, len(dates)))
+    })
+    
+    # Ensure high is highest and low is lowest
+    df['$high'] = df[['$open', '$high', '$low', '$close']].max(axis=1)
+    df['$low'] = df[['$open', '$high', '$low', '$close']].min(axis=1)
+    
+    return df.set_index('timestamp')
 
 @pytest.fixture
 def config_path(temp_dir):
@@ -87,14 +143,21 @@ def mock_env():
             self.reset()
             
         def reset(self):
-            return np.zeros(10)  # State
+            obs = np.zeros((20, 5))  # (window_size, features)
+            info = {'portfolio_value': 10000.0}
+            return obs, info
             
         def step(self, action):
             reward = np.random.randn()
             done = np.random.random() > 0.9
-            next_state = np.random.randn(10)
-            info = {'portfolio_value': 10000 * (1 + reward)}
-            return next_state, reward, done, info
+            truncated = False
+            next_state = np.random.randn(20, 5)  # (window_size, features)
+            info = {
+                'portfolio_value': 10000 * (1 + reward),
+                'position': action[0],
+                'current_price': 100.0
+            }
+            return next_state, reward, done, truncated, info
             
     return MockEnv()
 
@@ -105,11 +168,17 @@ def mock_agent():
         def __init__(self):
             pass
             
-        def select_action(self, state):
-            return np.random.randn()
+        def get_action(self, state):
+            return np.array([np.random.uniform(-1, 1)])
             
         def train(self, *args, **kwargs):
-            return {'loss': np.random.randn()}
+            return {
+                'loss': np.random.randn(),
+                'metrics': {
+                    'sharpe_ratio': np.random.rand(),
+                    'max_drawdown': -np.random.rand() * 0.1
+                }
+            }
             
         def save(self, path):
             pass
@@ -122,12 +191,24 @@ def mock_dataloader():
     class MockDataLoader:
         def fetch_data(self, start_date, end_date):
             dates = pd.date_range(start=start_date, end=end_date, freq='1H')
-            return pd.DataFrame({
-                'open': np.random.randn(len(dates)),
-                'high': np.random.randn(len(dates)),
-                'low': np.random.randn(len(dates)),
-                'close': np.random.randn(len(dates)),
-                'volume': np.abs(np.random.randn(len(dates)))
+            
+            # Generate consistent OHLCV data
+            base_price = 100
+            returns = np.random.normal(0, 0.01, len(dates))
+            prices = base_price * np.exp(np.cumsum(returns))
+            
+            df = pd.DataFrame({
+                '$open': prices * (1 + np.random.uniform(-0.001, 0.001, len(dates))),
+                '$high': prices * (1 + np.random.uniform(0, 0.002, len(dates))),
+                '$low': prices * (1 - np.random.uniform(0, 0.002, len(dates))),
+                '$close': prices,
+                '$volume': np.abs(np.random.normal(1000, 100, len(dates)))
             }, index=dates)
+            
+            # Ensure high is highest and low is lowest
+            df['$high'] = df[['$open', '$high', '$low', '$close']].max(axis=1)
+            df['$low'] = df[['$open', '$high', '$low', '$close']].min(axis=1)
+            
+            return df
             
     return MockDataLoader()
