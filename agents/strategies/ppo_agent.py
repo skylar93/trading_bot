@@ -163,7 +163,7 @@ class PPOAgent(BaseAgent):
             return action.reshape(1)
     
     def train(self, env_or_experiences, total_timesteps: int = 1000, batch_size: int = 64) -> Dict[str, Any]:
-        """Train the agent
+        """Train the agent in batch mode
         
         Args:
             env_or_experiences: Either a gym environment or a list of experiences
@@ -310,6 +310,29 @@ class PPOAgent(BaseAgent):
                 'mean_reward': np.mean(episode_rewards),
                 'std_reward': np.std(episode_rewards)
             }
+    
+    def train_step(self, state, action, reward, next_state, done) -> None:
+        """Train the agent on a single state transition.
+        
+        Args:
+            state: Current state
+            action: Action taken
+            reward: Reward received
+            next_state: Next state
+            done: Whether episode is done
+        """
+        # Store experience
+        self.buffer.append({
+            'state': state,
+            'action': action,
+            'reward': reward,
+            'done': done
+        })
+        
+        # Train if we have enough samples
+        if len(self.buffer) >= self.batch_size:
+            self.train(self.buffer)
+            self.buffer = []  # Clear buffer after training
     
     def _compute_gae(self, rewards: torch.Tensor, values: torch.Tensor, 
                     dones: torch.Tensor) -> torch.Tensor:

@@ -6,6 +6,10 @@ from datetime import datetime, timedelta
 from training.train_multi_agent import train_multi_agent_system
 from envs.multi_agent_env import MultiAgentTradingEnv
 from agents.strategies.ppo_agent import PPOAgent
+import mlflow
+import tempfile
+import shutil
+import os
 
 @pytest.fixture
 def sample_data():
@@ -41,6 +45,17 @@ def agent_configs():
             'fee_multiplier': 1.0
         }
     ]
+
+@pytest.fixture(scope="function")
+def temp_mlflow_dir():
+    """Create a temporary directory for MLflow tracking."""
+    temp_dir = tempfile.mkdtemp()
+    old_tracking_uri = mlflow.get_tracking_uri()
+    mlflow.set_tracking_uri(f"file://{temp_dir}")
+    yield temp_dir
+    mlflow.set_tracking_uri(old_tracking_uri)
+    if os.path.exists(temp_dir):
+        shutil.rmtree(temp_dir)
 
 def test_multi_agent_env_creation(sample_data, agent_configs):
     """Test multi-agent environment creation"""
@@ -187,7 +202,7 @@ def test_different_strategies(sample_data):
         elif config['strategy'] == 'mean_reversion':
             assert obs.shape[0] >= config['window']
 
-def test_training_stability(sample_data, agent_configs, tmp_path):
+def test_training_stability(temp_mlflow_dir, sample_data, agent_configs, tmp_path):
     """Test stability of multi-agent training"""
     # Create environment and agents
     env = MultiAgentTradingEnv(sample_data, agent_configs)

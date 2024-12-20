@@ -28,8 +28,8 @@ class RiskManager:
             config: Risk management configuration
         """
         self.config = config
-        self.trade_counter = {}  # {date: count}
-        self.logger = logging.getLogger(__name__)
+        self.trade_counter = {}  # Dictionary to track daily trades
+        self.logger = logging.getLogger(self.__class__.__name__)
     
     def calculate_position_size(self,
                               portfolio_value: float,
@@ -61,50 +61,24 @@ class RiskManager:
         return max_size
     
     def check_trade_limits(self, timestamp: pd.Timestamp) -> bool:
-        """Check if trade is allowed under daily limits
-        
-        Args:
-            timestamp: Current timestamp
+        """Check if trade is allowed based on daily limits"""
+        date_key = timestamp.date()
+        if date_key not in self.trade_counter:
+            self.trade_counter[date_key] = 0
             
-        Returns:
-            Whether trade is allowed
-        """
-        date = timestamp.date()
-        
-        # Clean up old dates
-        today = pd.Timestamp.now().date()
-        old_dates = [d for d in self.trade_counter.keys() if d < today]
-        for d in old_dates:
-            del self.trade_counter[d]
-            
-        # Get current count
-        count = self.trade_counter.get(date, 0)
-        
-        # Check if limit would be exceeded
-        if count > self.config.daily_trade_limit:
-            self.logger.warning(f"Daily trade limit ({self.config.daily_trade_limit}) reached for {date}")
+        # Return False if limit is reached
+        if self.trade_counter[date_key] >= self.config.daily_trade_limit:
+            self.logger.warning(f"Daily trade limit reached for {date_key}")
             return False
             
         return True
     
     def update_trade_counter(self, timestamp: pd.Timestamp) -> None:
-        """Update daily trade counter
-        
-        Args:
-            timestamp: Trade timestamp
-        """
-        date = timestamp.date()
-        
-        # Clean up old dates
-        today = pd.Timestamp.now().date()
-        old_dates = [d for d in self.trade_counter.keys() if d < today]
-        for d in old_dates:
-            del self.trade_counter[d]
-        
-        # Update counter
-        count = self.trade_counter.get(date, 0)
-        self.trade_counter[date] = count + 1
-        self.logger.info(f"Trade counter for {date} updated to {self.trade_counter[date]}")
+        """Update the trade counter for the given date"""
+        date_key = timestamp.date()
+        if date_key not in self.trade_counter:
+            self.trade_counter[date_key] = 0
+        self.trade_counter[date_key] += 1
     
     def calculate_stop_loss(self,
                           entry_price: float,
@@ -157,72 +131,21 @@ class RiskManager:
         leverage = position_value / portfolio_value
         return leverage <= self.config.max_leverage
     
-    def process_trade_signal(self, signal: Dict[str, Any], portfolio_value: float) -> Dict[str, Any]:
-        """Process trade signal with risk checks
-        
-        Args:
-            signal: Trade signal dictionary
-            portfolio_value: Current portfolio value
-            
-        Returns:
-            Processed signal with risk parameters
-        """
-        # Validate signal
-        required_fields = ['timestamp', 'price', 'direction', 'type']
+    def process_trade_signal(self, signal: dict) -> bool:
+        """Process and validate trade signal"""
+        # Check for required fields
+        required_fields = ['timestamp', 'type', 'price', 'size']
         if not all(field in signal for field in required_fields):
-            return {
-                'valid': False,
-                'size': 0.0,
-                'reason': 'invalid_signal_format'
-            }
+            self.logger.warning("Invalid trade signal: missing required fields")
+            return False
             
-        if signal['direction'] not in ['long', 'short']:
-            return {
-                'valid': False,
-                'size': 0.0,
-                'reason': 'invalid_direction'
-            }
+        # Validate signal values
+        if signal['price'] <= 0 or signal['size'] <= 0:
+            self.logger.warning("Invalid trade signal: price or size must be positive")
+            return False
             
-        # Get current count
-        date = signal['timestamp'].date()
-        count = self.trade_counter.get(date, 0)
-        
-        # Check if limit would be exceeded
-        if count >= self.config.daily_trade_limit:
-            return {
-                'valid': False,
-                'size': 0.0,
-                'reason': 'trade_limit_exceeded'
-            }
-        
-        # Calculate position size
-        size = self.calculate_position_size(
-            portfolio_value=portfolio_value,
-            price=signal['price'],
-            volatility=signal.get('volatility')
-        )
-        
-        if size == 0:
-            return {
-                'valid': False,
-                'size': 0.0,
-                'reason': 'size_too_small'
-            }
-        
-        # Calculate stop loss
-        is_long = signal['direction'] == 'long'
-        stop_loss = self.calculate_stop_loss(
-            entry_price=signal['price'],
-            position_size=size,
-            is_long=is_long
-        )
-        
-        # All checks passed, update trade counter
-        self.update_trade_counter(signal['timestamp'])
-        
-        return {
-            'valid': True,
-            'size': size,
-            'stop_loss': stop_loss,
-            'direction': signal['direction']
-        }
+        # Check trade limits
+        if not self.check_trade_limits(pd.Timestamp(signal['timestamp'])):
+            return False
+            
+        return True
