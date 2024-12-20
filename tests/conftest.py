@@ -28,41 +28,59 @@ def temp_dir():
         raise
 
 @pytest.fixture(scope="function")
-def mlflow_test_context():
-    """Create a temporary MLflow context for testing"""
-    # Create temporary directory
+def mlflow_test_context(request):
+    """Create temporary MLflow test context with unique experiment name.
+    
+    This fixture ensures that each test gets a unique MLflow experiment name
+    and properly cleans up after itself.
+    """
+    # Create temp directory for MLflow tracking
     temp_dir = tempfile.mkdtemp()
     
+    # Create SQLite database in temp directory
+    db_path = os.path.join(temp_dir, "mlflow.db")
+    tracking_uri = f"sqlite:///{db_path}"
+    
+    # Create unique experiment name using timestamp, test name, and random suffix
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    test_name = request.node.name.replace("[", "_").replace("]", "_")
+    random_suffix = os.urandom(4).hex()
+    experiment_name = f"test_experiment_{test_name}_{timestamp}_{random_suffix}"
+    
+    # Set up MLflow
+    mlflow.set_tracking_uri(tracking_uri)
+    
+    # Create MLflow manager
+    mlflow_manager = MLflowManager(
+        experiment_name=experiment_name,
+        tracking_dir=temp_dir
+    )
+    
+    yield mlflow_manager
+    
+    # Cleanup
+    if mlflow.active_run():
+        mlflow.end_run()
+        time.sleep(0.1)
+    
     try:
-        # Set up MLflow tracking
-        mlflow.set_tracking_uri(f"file://{temp_dir}")
-        
-        # Clean up any existing experiments
-        experiment = mlflow.get_experiment_by_name("test_experiment")
+        # End any active runs
+        experiment = mlflow.get_experiment_by_name(experiment_name)
         if experiment:
+            for run in mlflow.search_runs([experiment.experiment_id]):
+                if run.info.status == "RUNNING":
+                    mlflow.end_run(run_id=run.info.run_id)
+            # Delete experiment
             mlflow.delete_experiment(experiment.experiment_id)
-            time.sleep(0.5)
-        
-        # Initialize MLflow manager with temp directory
-        mlflow_manager = MLflowManager(
-            experiment_name="test_experiment",
-            tracking_dir=temp_dir
-        )
-        
-        yield mlflow_manager
-        
-    finally:
-        # Clean up MLflow resources and temp directory
-        try:
-            mlflow_manager.cleanup()
-        except Exception:
-            pass
-            
-        try:
-            if os.path.exists(temp_dir):
-                shutil.rmtree(temp_dir)
-        except Exception:
-            pass
+    except:
+        pass
+    
+    # Clean up temp directory
+    if os.path.exists(temp_dir):
+        shutil.rmtree(temp_dir)
+    
+    # Reset MLflow tracking URI
+    mlflow.set_tracking_uri("")
 
 @pytest.fixture
 def sample_data():

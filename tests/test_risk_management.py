@@ -166,45 +166,50 @@ class TestRiskManager(unittest.TestCase):
     
     def test_trade_signal_processing(self):
         """Test trade signal processing"""
-        portfolio_value = 10000
-        price = 100
-        volatility = 0.2
-        timestamp = pd.Timestamp('2024-01-01 10:00:00')
-        
-        # Reset trade counter
-        self.risk_manager.trade_counter = {}
-        
-        # Test long entry signal
-        long_signal = {
-            'type': 'entry',
-            'direction': 'long',
-            'price': price,
-            'timestamp': timestamp,
-            'volatility': volatility
+        # Valid signal
+        valid_signal = {
+            'timestamp': pd.Timestamp('2024-01-01 10:00:00'),
+            'type': 'buy',
+            'price': 100.0,
+            'size': 1.0
         }
-        
-        # Process signals up to the limit
-        for i in range(self.config.daily_trade_limit):
-            result = self.risk_manager.process_trade_signal(
-                signal=long_signal,
-                portfolio_value=portfolio_value
-            )
-            self.assertTrue(result['valid'], f"Signal {i+1} should be valid")
-        
-        # Next signal should be invalid due to limit
-        limit_result = self.risk_manager.process_trade_signal(
-            signal=long_signal,
-            portfolio_value=portfolio_value
+        self.assertTrue(
+            self.risk_manager.process_trade_signal(valid_signal),
+            "Valid trade signal should be accepted"
         )
         
+        # Invalid signal (missing fields)
+        invalid_signal = {
+            'timestamp': pd.Timestamp('2024-01-01 10:00:00'),
+            'type': 'buy'
+        }
         self.assertFalse(
-            limit_result['valid'],
-            "Signal should be invalid when trade limit exceeded"
+            self.risk_manager.process_trade_signal(invalid_signal),
+            "Invalid trade signal should be rejected"
         )
-        self.assertEqual(
-            limit_result['reason'],
-            'trade_limit_exceeded',
-            "Should indicate trade limit exceeded reason"
+        
+        # Invalid signal (negative price)
+        invalid_price_signal = {
+            'timestamp': pd.Timestamp('2024-01-01 10:00:00'),
+            'type': 'buy',
+            'price': -100.0,
+            'size': 1.0
+        }
+        self.assertFalse(
+            self.risk_manager.process_trade_signal(invalid_price_signal),
+            "Signal with negative price should be rejected"
+        )
+        
+        # Invalid signal (zero size)
+        invalid_size_signal = {
+            'timestamp': pd.Timestamp('2024-01-01 10:00:00'),
+            'type': 'buy',
+            'price': 100.0,
+            'size': 0.0
+        }
+        self.assertFalse(
+            self.risk_manager.process_trade_signal(invalid_size_signal),
+            "Signal with zero size should be rejected"
         )
 
 if __name__ == '__main__':

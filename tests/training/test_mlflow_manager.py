@@ -25,10 +25,9 @@ def sample_data():
 
 def test_mlflow_manager_init(mlflow_test_context):
     """Test MLflow manager initialization"""
-    assert mlflow_test_context is not None
-    assert isinstance(mlflow_test_context, MLflowManager)
-    assert mlflow_test_context.experiment_name == "test_experiment"
+    assert mlflow_test_context.experiment_name.startswith("test_experiment_")
     assert mlflow_test_context.experiment_id is not None
+    assert mlflow.active_run() is None
 
 def test_run_lifecycle(mlflow_test_context):
     """Test MLflow run lifecycle"""

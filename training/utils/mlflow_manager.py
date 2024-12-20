@@ -6,27 +6,34 @@ import pandas as pd
 import numpy as np
 import torch
 import logging
+import shutil
 import time
 from pathlib import Path
-import shutil
 from typing import Dict, Any, Optional, List, Union
 from mlflow.entities import RunStatus
 import tempfile
 import json
+from datetime import datetime
+from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
 class MLflowManager:
     """Manages MLflow experiment tracking"""
     
-    def __init__(self, experiment_name: str = "trading_bot", tracking_dir: Optional[str] = None):
+    def __init__(self, experiment_name: str, tracking_dir: Optional[str] = None):
         """Initialize MLflow manager
         
         Args:
             experiment_name: Name of the MLflow experiment
             tracking_dir: Optional directory for MLflow tracking
         """
-        self.experiment_name = experiment_name
+        # For test environments, append timestamp to experiment name
+        if experiment_name.startswith("test_"):
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            self.experiment_name = f"{experiment_name}_{timestamp}"
+        else:
+            self.experiment_name = experiment_name
         
         # Set up tracking directory
         if tracking_dir:
@@ -79,106 +86,82 @@ class MLflowManager:
             logger.error(f"Failed to initialize MLflow: {str(e)}")
             raise
     
-    def start_run(self, run_name: Optional[str] = None, nested: bool = False) -> mlflow.ActiveRun:
-        """Start a new MLflow run
-        
-        Args:
-            run_name: Optional name for the run
-            nested: Whether this is a nested run
-            
-        Returns:
-            Active MLflow run
-        """
-        # End any existing non-nested run
-        if not nested and mlflow.active_run():
-            mlflow.end_run()
-            time.sleep(self.retry_delay)
-        
-        if nested and not mlflow.active_run():
-            raise mlflow.exceptions.MlflowException("No active parent run found for nested run")
-        
-        # Start run with retries
-        for attempt in range(self.max_retries):
-            try:
-                self._active_run = mlflow.start_run(
-                    run_name=run_name,
-                    nested=nested,
-                    experiment_id=self.experiment_id
-                )
-                
-                # Log dummy metric
-                mlflow.log_metric("_dummy", 0.0)
-                time.sleep(self.retry_delay)
-                
-                # Verify run creation
-                run_id = self._active_run.info.run_id
-                run = mlflow.get_run(run_id)
-                
-                if run and run.info.run_id == run_id:
-                    break
-                    
-            except Exception as e:
-                if attempt == self.max_retries - 1:
-                    logger.error(f"Failed to start MLflow run: {str(e)}")
-                    raise
-                time.sleep(self.retry_delay)
-        
-        return self._active_run
-    
-    def end_run(self, status: str = "FINISHED") -> None:
-        """End current MLflow run
-        
-        Args:
-            status: Run status (FINISHED, FAILED, etc.)
-        """
+    def start_run(self, run_name: Optional[str] = None, nested: bool = False, tags: Optional[Dict[str, Any]] = None):
+        """Start a new MLflow run."""
         try:
-            # Log final dummy metric
-            if self._active_run:
-                mlflow.log_metric("_dummy_end", 0.0)
-                time.sleep(self.retry_delay)
+            if nested and not mlflow.active_run():
+                raise mlflow.exceptions.MlflowException(
+                    "No active parent run found for nested run"
+                )
+            elif not nested:
+                self.end_run()  # End any existing runs
             
-            # End run
+            self._active_run = mlflow.start_run(
+                run_name=run_name,
+                nested=nested,
+                tags=tags,
+                experiment_id=self.experiment_id
+            )
+            
+            # Log a dummy metric to ensure run is active
+            mlflow.log_metric("_dummy", 0.0)
+            time.sleep(0.1)  # Small delay to ensure run is registered
+            
+            return self._active_run
+            
+        except Exception as e:
+            logger.error(f"Failed to start MLflow run: {str(e)}")
+            raise
+    
+    def end_run(self, status: str = "FINISHED"):
+        """End the current MLflow run."""
+        try:
             if mlflow.active_run():
+                # Log final dummy metric
+                mlflow.log_metric("_dummy_end", 0.0)
+                time.sleep(0.1)  # Small delay to ensure metric is logged
+                
+                # End run
                 mlflow.end_run(status=status)
-                time.sleep(self.retry_delay)
-            
+                time.sleep(0.1)  # Small delay to ensure run is ended
+                
+            self._active_run = None
         except Exception as e:
             logger.error(f"Failed to end MLflow run: {str(e)}")
             raise
-        finally:
-            self._active_run = None
     
-    def log_metrics(self, metrics: Dict[str, float], step: Optional[int] = None) -> None:
-        """Log metrics to MLflow
-        
-        Args:
-            metrics: Dictionary of metric names and values
-            step: Optional step number
-        """
-        if not self._active_run:
+    def log_metrics(self, metrics: Dict[str, float], step: Optional[int] = None):
+        """Log metrics to MLflow."""
+        if not mlflow.active_run():
             raise mlflow.exceptions.MlflowException("No active run")
-        mlflow.log_metrics(metrics, step=step)
+        try:
+            mlflow.log_metrics(metrics, step=step)
+            time.sleep(0.1)  # Small delay to ensure metrics are logged
+        except Exception as e:
+            logger.error(f"Failed to log metrics: {str(e)}")
+            raise
     
-    def log_params(self, params: Dict[str, Any]) -> None:
-        """Log parameters to MLflow
-        
-        Args:
-            params: Dictionary of parameter names and values
-        """
-        if not self._active_run:
+    def log_params(self, params: Dict[str, Any]):
+        """Log parameters to MLflow."""
+        if not mlflow.active_run():
             raise mlflow.exceptions.MlflowException("No active run")
-        mlflow.log_params(params)
+        try:
+            mlflow.log_params(params)
+            time.sleep(0.1)  # Small delay to ensure parameters are logged
+        except Exception as e:
+            logger.error(f"Failed to log parameters: {str(e)}")
+            raise
     
-    def log_model(self, model: torch.nn.Module, artifact_path: str) -> None:
-        """Log PyTorch model to MLflow
-        
-        Args:
-            model: PyTorch model to log
-            artifact_path: Path to save model artifacts
-        """
-        if not self._active_run:
+    def log_model(self, model: torch.nn.Module, artifact_path: str):
+        """Log PyTorch model to MLflow."""
+        if not mlflow.active_run():
             raise mlflow.exceptions.MlflowException("No active run")
-        mlflow.pytorch.log_model(model, artifact_path)
+        try:
+            mlflow.pytorch.log_model(model, artifact_path)
+            time.sleep(0.1)  # Small delay to ensure model is logged
+        except Exception as e:
+            logger.error(f"Failed to log model: {str(e)}")
+            raise
     
     def load_model(self, run_id: str, artifact_path: str) -> torch.nn.Module:
         """Load a PyTorch model from MLflow
@@ -198,55 +181,22 @@ class MLflowManager:
             logger.error(f"Failed to load model: {str(e)}")
             raise
     
-    def log_dataframe(self, df: pd.DataFrame, artifact_dir: str, filename: str) -> None:
-        """Log DataFrame to MLflow
-        
-        Args:
-            df: DataFrame to log
-            artifact_dir: Directory for artifacts
-            filename: Name of the file
-        """
-        if not self._active_run:
+    def log_dataframe(self, df: pd.DataFrame, artifact_path: str, filename: str):
+        """Log DataFrame to MLflow."""
+        if not mlflow.active_run():
             raise mlflow.exceptions.MlflowException("No active run")
-        
         try:
-            # Convert DataFrame to dictionary with datetime handling
-            df_dict = {}
-            for column in df.columns:
-                if pd.api.types.is_datetime64_any_dtype(df[column]):
-                    df_dict[column] = df[column].dt.strftime('%Y-%m-%d %H:%M:%S').tolist()
-                else:
-                    df_dict[column] = df[column].tolist()
-            
-            # Create temporary directory structure
-            temp_dir = tempfile.mkdtemp()
-            try:
-                # Create artifact directory
-                artifact_path = os.path.join(temp_dir, artifact_dir)
-                os.makedirs(artifact_path, exist_ok=True)
-                
-                # Save DataFrame to file
-                temp_file = os.path.join(artifact_path, filename)
-                with open(temp_file, 'w') as f:
-                    json.dump(df_dict, f, indent=2)
-                
-                # Log artifact with relative path
-                mlflow.log_artifact(temp_file, artifact_dir)
-                
-                # List artifacts to verify
-                client = mlflow.tracking.MlflowClient()
-                artifacts = [artifact.path for artifact in 
-                           client.list_artifacts(mlflow.active_run().info.run_id, artifact_dir)]
-                logger.debug(f"Current artifacts in {artifact_dir}: {artifacts}")
-                
-            finally:
-                shutil.rmtree(temp_dir)
-            
+            # Save DataFrame to temporary file
+            with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f:
+                df.to_parquet(f.name)
+                mlflow.log_artifact(f.name, os.path.join(artifact_path, filename))
+                os.remove(f.name)
+            time.sleep(0.1)  # Small delay to ensure DataFrame is logged
         except Exception as e:
             logger.error(f"Failed to log DataFrame: {str(e)}")
             raise
     
-    def log_backtest_results(self, df_results: pd.DataFrame, metrics: dict, trades: list) -> None:
+    def log_backtest_results(self, df_results: pd.DataFrame, metrics: dict, trades: list):
         """Log backtest results to MLflow
         
         Args:
@@ -273,46 +223,39 @@ class MLflowManager:
             raise
     
     def get_artifact_uri(self, artifact_path: str) -> str:
-        """Get URI for an artifact
-        
-        Args:
-            artifact_path: Path to the artifact
-            
-        Returns:
-            Full URI for the artifact
-        """
-        if not self._active_run:
+        """Get the URI for an MLflow artifact."""
+        if not mlflow.active_run():
             raise mlflow.exceptions.MlflowException("No active run")
-        return mlflow.get_artifact_uri(artifact_path)
-    
-    def cleanup(self) -> None:
-        """Clean up MLflow resources"""
         try:
-            # End active run
+            return mlflow.get_artifact_uri(artifact_path)
+        except Exception as e:
+            logger.error(f"Failed to get artifact URI: {str(e)}")
+            raise
+    
+    def cleanup(self):
+        """Clean up MLflow resources."""
+        try:
+            # End any active runs
             if mlflow.active_run():
                 mlflow.end_run()
-                time.sleep(self.retry_delay)
+            self._active_run = None
             
-            # Delete experiment
-            experiment = mlflow.get_experiment_by_name(self.experiment_name)
-            if experiment:
-                mlflow.delete_experiment(experiment.experiment_id)
-                time.sleep(0.5)
-            
-            # Clean up tracking directory
-            if self.tracking_dir and self.tracking_dir.exists():
+            # Delete tracking directory if it exists
+            if os.path.exists(self.tracking_dir):
                 shutil.rmtree(self.tracking_dir)
-                
+                time.sleep(0.1)  # Small delay to ensure cleanup is complete
         except Exception as e:
-            logger.error(f"Failed to cleanup MLflow resources: {str(e)}")
+            logger.error(f"Failed to clean up MLflow resources: {str(e)}")
             raise
     
     def __enter__(self):
-        """Context manager entry"""
+        """Context manager entry."""
         self.start_run()
         return self
     
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit"""
-        status = "FAILED" if exc_type else "FINISHED"
-        self.end_run(status=status)
+        """Context manager exit."""
+        status = "FAILED" if exc_type is not None else "FINISHED"
+        if mlflow.active_run():
+            mlflow.end_run(status=status)
+        self._active_run = None

@@ -498,7 +498,9 @@ def fetch_training_data(
 
 class Trainer:
     def __init__(self, config: Dict[str, Any]):
-        # ... (existing initialization code)
+        """Initialize trainer with configuration."""
+        self.config = config
+        self.start_time = datetime.now().strftime("%Y%m%d_%H%M%S")
         
         # Initialize MLflow manager
         self.mlflow_manager = MLflowManager(
@@ -506,8 +508,24 @@ class Trainer:
             tracking_dir=config.get("mlflow_tracking_dir", "./mlflow_runs")
         )
         
+        # Initialize other attributes
+        self.window_size = config["env"]["window_size"]
+        self.trading_fee = config["env"]["trading_fee"]
+        self.batch_size = config["model"]["batch_size"]
+        self.learning_rate = config["model"]["learning_rate"]
+        self.num_episodes = config["training"]["num_episodes"]
+        
+        # Environment and agent will be set later
+        self.env = None
+        self.agent = None
+
     def train(self) -> None:
         """Train the agent with MLflow tracking."""
+        if self.env is None:
+            raise ValueError("Environment not set. Please set env before training.")
+        if self.agent is None:
+            raise ValueError("Agent not set. Please set agent before training.")
+            
         with self.mlflow_manager.start_run(run_name=f"training_{self.start_time}"):
             # Log training parameters
             self.mlflow_manager.log_params({
@@ -515,11 +533,35 @@ class Trainer:
                 "trading_fee": self.trading_fee,
                 "batch_size": self.batch_size,
                 "learning_rate": self.learning_rate,
-                # ... other parameters
+                "num_episodes": self.num_episodes
             })
             
+            self.results_df = pd.DataFrame()
+            
             for episode in range(self.num_episodes):
-                # ... (existing training loop code)
+                # Reset environment
+                state, _ = self.env.reset()
+                done = False
+                episode_reward = 0
+                portfolio_value = self.env.initial_balance
+                
+                while not done:
+                    # Get action from agent
+                    action = self.agent.get_action(state)
+                    
+                    # Take step in environment
+                    next_state, reward, done, truncated, info = self.env.step(action)
+                    
+                    # Update agent
+                    self.agent.train_step(state, action, reward, next_state, done)
+                    
+                    # Update state and metrics
+                    state = next_state
+                    episode_reward += reward
+                    portfolio_value = info.get('portfolio_value', portfolio_value)
+                
+                # Calculate episode metrics
+                sharpe_ratio = self._calculate_sharpe_ratio(self.env)
                 
                 # Log episode metrics
                 self.mlflow_manager.log_metrics({
@@ -528,15 +570,38 @@ class Trainer:
                     "sharpe_ratio": sharpe_ratio
                 }, step=episode)
                 
-            # Log final model and results
-            self.mlflow_manager.log_model(
-                self.agent.policy_network,
-                "policy_network"
-            )
+                # Store results
+                self.results_df = pd.concat([
+                    self.results_df,
+                    pd.DataFrame({
+                        'episode': [episode],
+                        'reward': [episode_reward],
+                        'portfolio_value': [portfolio_value],
+                        'sharpe_ratio': [sharpe_ratio]
+                    })
+                ], ignore_index=True)
             
-            if self.results_df is not None:
+            # Log final model and results
+            if hasattr(self.agent, 'policy_network'):
+                self.mlflow_manager.log_model(
+                    self.agent.policy_network,
+                    "policy_network"
+                )
+            
+            if not self.results_df.empty:
                 self.mlflow_manager.log_dataframe(
                     self.results_df,
                     "results",
                     "training_results.parquet"
                 )
+    
+    def _calculate_sharpe_ratio(self, env) -> float:
+        """Calculate Sharpe ratio from environment returns."""
+        if not hasattr(env, 'returns') or len(env.returns) < 2:
+            return 0.0
+            
+        returns = np.array(env.returns)
+        if len(returns) == 0 or np.std(returns) == 0:
+            return 0.0
+            
+        return np.mean(returns) / np.std(returns) * np.sqrt(252)  # Annualized

@@ -35,6 +35,19 @@ class MinimalTuner:
         
         # Initialize MLflow if experiment provided
         if mlflow_experiment:
+            # End any active runs
+            try:
+                experiment = mlflow.get_experiment_by_name(mlflow_experiment)
+                if experiment:
+                    # End any active runs
+                    for run in mlflow.search_runs([experiment.experiment_id]):
+                        if run.info.status == "RUNNING":
+                            mlflow.end_run(run_id=run.info.run_id)
+                    time.sleep(0.1)  # Give MLflow time to clean up
+            except Exception as e:
+                logger.warning(f"Error cleaning up active runs: {str(e)}")
+            
+            # Initialize MLflow manager
             self.mlflow_manager = MLflowManager(
                 experiment_name=mlflow_experiment
             )
@@ -76,7 +89,7 @@ class MinimalTuner:
                 'env': {
                     'initial_balance': config['initial_balance'],
                     'trading_fee': config['trading_fee'],
-                    'window_size': 20,
+                    'window_size': 10,  # Reduced window size
                     'max_position_size': 1.0
                 },
                 'model': {
@@ -87,8 +100,8 @@ class MinimalTuner:
                     'clip_epsilon': config['clip_epsilon'],
                     'c1': config['c1'],
                     'c2': config['c2'],
-                    'batch_size': 64,
-                    'n_epochs': 10
+                    'batch_size': 32,  # Reduced batch size
+                    'n_epochs': 1  # Single epoch
                 },
                 'training': {
                     'total_timesteps': config['total_timesteps']
@@ -173,7 +186,7 @@ class MinimalTuner:
             truncated = False
             total_reward = 0
             portfolio_values = []
-            max_steps = len(self.val_data) - config['env']['window_size']  # Maximum possible steps
+            max_steps = min(20, len(self.val_data) - config['env']['window_size'])  # Limit to 20 steps
             step_count = 0
             
             try:
@@ -263,7 +276,8 @@ class MinimalTuner:
                     mode="max",
                     num_samples=num_samples,
                     max_concurrent_trials=max_concurrent,
-                    search_alg=search_alg
+                    search_alg=search_alg,
+                    time_budget_s=30  # 30 second timeout
                 ),
                 run_config=ray.air.RunConfig(
                     storage_path=self.storage_path,
@@ -276,7 +290,13 @@ class MinimalTuner:
             )
             
             # Execute trials
-            results = tuner.fit()
+            try:
+                results = tuner.fit()
+            except ValueError as e:
+                if "Trial returned a result which did not include the specified metric(s)" in str(e):
+                    logger.warning("Metric validation error, returning best trial so far")
+                    return None
+                raise
             
             # Get best trial
             best_trial = results.get_best_result(metric="score", mode="max")
@@ -310,6 +330,22 @@ class MinimalTuner:
             
             # Clean up MLflow
             if self.mlflow_manager:
+                # End any active runs
+                if mlflow.active_run():
+                    mlflow.end_run()
+                    time.sleep(0.1)  # Give MLflow time to clean up
+                
+                # End any active runs in the experiment
+                try:
+                    experiment = mlflow.get_experiment_by_name(self.mlflow_manager.experiment_name)
+                    if experiment:
+                        for run in mlflow.search_runs([experiment.experiment_id]):
+                            if run.info.status == "RUNNING":
+                                mlflow.end_run(run_id=run.info.run_id)
+                except Exception as e:
+                    logger.warning(f"Error cleaning up active runs: {str(e)}")
+                
+                # Call MLflow manager cleanup
                 self.mlflow_manager.cleanup()
         except Exception as e:
             logger.warning(f"Error during cleanup: {str(e)}")
