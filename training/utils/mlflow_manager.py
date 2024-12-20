@@ -57,9 +57,12 @@ class MLflowManager:
         # Create or get experiment
         try:
             # End any active runs
-            if mlflow.active_run():
-                mlflow.end_run()
-                time.sleep(self.retry_delay)
+            try:
+                if mlflow.active_run():
+                    mlflow.end_run()
+                    time.sleep(self.retry_delay)
+            except Exception as e:
+                logger.warning(f"Error ending active run: {str(e)}")
             
             # Get or create experiment
             experiment = mlflow.get_experiment_by_name(self.experiment_name)
