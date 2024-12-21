@@ -1,6 +1,8 @@
 # Python related
-__pycache__/
+**pycache**/
 *.pyc
+*.egg-info/
+.pytest_cache/
 
 # Virtual environment
 venv/
@@ -19,3 +21,24 @@ docker/
 # Ignore any sensitive files
 .env
 
+# Test and coverage files
+.coverage
+.coverage.*
+htmlcov/
+test_mlflow/
+mlflow.db
+mlruns/
+
+# MLflow related
+*.parquet
+mlruns/
+mlflow.db
+
+# Temporary files
+*.tmp
+*.temp
+.DS_Store
+
+# IDE and system files
+.idea/
+.vscode/
