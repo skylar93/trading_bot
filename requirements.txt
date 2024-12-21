@@ -1,23 +1,49 @@
-numpy>=1.21.0
-pandas>=1.3.0
-torch>=1.9.0
-gymnasium>=0.26.0
-ray[tune]>=2.0.0
-mlflow>=1.20.0
-pytest>=6.2.5
-pytest-asyncio>=0.15.1
-ta>=0.7.0
-ccxt>=1.60.0
-aiohttp>=3.8.0
-plotly>=5.3.0
-streamlit>=1.0.0
-scikit-learn>=0.24.2
-optuna>=2.9.0
-wandb>=0.12.0
-python-dotenv>=0.19.0
-pytest-cov>=2.12.0
-pytest-xdist>=2.4.0
-black>=21.9b0
-pylint>=2.11.0
-mypy>=0.910
-isort>=5.9.3
+# Base Dependencies
+numpy>=2.2.0
+pandas>=2.2.3
+torch>=2.5.1
+gymnasium>=1.0.0
+ray[tune]>=2.40.0
+mlflow>=2.19.0
+ta>=0.11.0
+scikit-learn>=1.6.0
+optuna>=4.1.0
+hyperopt>=0.2.7
+wandb>=0.19.1
+
+# API & Networking
+ccxt>=4.4.41
+aiohttp>=3.10.11
+aiodns>=3.2.0
+aiohappyeyeballs>=2.4.4
+websockets>=14.1
+
+# Visualization & UI
+plotly>=5.24.1
+streamlit>=1.41.1
+seaborn>=0.13.2
+matplotlib>=3.10.0
+
+# Database
+alembic>=1.14.0
+SQLAlchemy>=2.0.36
+
+# Development Tools
+pytest>=8.3.4
+pytest-asyncio>=0.25.0
+pytest-cov>=6.0.0
+pytest-xdist>=3.6.1
+black>=24.10.0
+pylint>=3.3.2
+mypy>=1.14.0
+isort>=5.13.2
+coverage>=7.6.9
+
+# Utilities
+python-dotenv>=1.0.1
+pydantic>=2.10.4
+cloudpickle>=3.1.0
+filelock>=3.16.1
+propcache>=0.2.1
+rpds-py>=0.22.3
+narwhals>=1.19.0
