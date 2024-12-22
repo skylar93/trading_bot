@@ -19,23 +19,24 @@ import torch.nn as nn
 
 logger = logging.getLogger(__name__)
 
+
 class MLflowManager:
     """Manages MLflow experiment tracking with standardized paths and formats."""
-    
+
     def __init__(
         self,
         experiment_name: str = "default",
-        tracking_dir: str = "./mlflow_runs"
+        tracking_dir: str = "./mlflow_runs",
     ):
         """Initialize MLflow experiment manager."""
         self.experiment_name = experiment_name
         self.tracking_dir = Path(tracking_dir).absolute()
         self._active_run = None
-        
+
         # Set up MLflow tracking
         os.makedirs(self.tracking_dir, exist_ok=True)
         mlflow.set_tracking_uri(f"file://{self.tracking_dir}")
-        
+
         # Initialize experiment
         self._initialize_experiment()
 
@@ -44,7 +45,7 @@ class MLflowManager:
         try:
             # End any active runs first
             self.end_active_runs()
-            
+
             # Get or create experiment
             experiment = mlflow.get_experiment_by_name(self.experiment_name)
             if experiment:
@@ -52,12 +53,14 @@ class MLflowManager:
             else:
                 self.experiment_id = mlflow.create_experiment(
                     name=self.experiment_name,
-                    artifact_location=os.path.join(self.tracking_dir, self.experiment_name, "artifacts")
+                    artifact_location=os.path.join(
+                        self.tracking_dir, self.experiment_name, "artifacts"
+                    ),
                 )
-            
+
             # Set as active experiment
             mlflow.set_experiment(self.experiment_name)
-            
+
         except Exception as e:
             logger.error(f"Failed to initialize MLflow experiment: {str(e)}")
             raise
@@ -69,7 +72,7 @@ class MLflowManager:
             if self._active_run:
                 mlflow.end_run()
                 self._active_run = None
-            
+
             # End any other active runs
             while mlflow.active_run():
                 mlflow.end_run()
@@ -80,7 +83,7 @@ class MLflowManager:
         self,
         run_name: Optional[str] = None,
         nested: bool = False,
-        tags: Optional[Dict[str, Any]] = None
+        tags: Optional[Dict[str, Any]] = None,
     ):
         """Start a new MLflow run."""
         try:
@@ -90,15 +93,15 @@ class MLflowManager:
                 )
             elif not nested:
                 self.end_active_runs()
-            
+
             self._active_run = mlflow.start_run(
                 run_name=run_name,
                 nested=nested,
                 tags=tags,
-                experiment_id=self.experiment_id
+                experiment_id=self.experiment_id,
             )
             return self._active_run
-            
+
         except Exception as e:
             logger.error(f"Failed to start MLflow run: {str(e)}")
             raise
@@ -110,7 +113,7 @@ class MLflowManager:
             if self._active_run:
                 mlflow.end_run(status=status)
                 self._active_run = None
-            
+
             # End any remaining active runs
             while mlflow.active_run():
                 mlflow.end_run(status=status)
@@ -133,7 +136,9 @@ class MLflowManager:
         except Exception as e:
             logger.warning(f"Failed to cleanup MLflow resources: {str(e)}")
 
-    def log_metrics(self, metrics: Dict[str, float], step: Optional[int] = None):
+    def log_metrics(
+        self, metrics: Dict[str, float], step: Optional[int] = None
+    ):
         """Log metrics to MLflow."""
         if not self._active_run:
             raise mlflow.exceptions.MlflowException("No active run found")
@@ -154,7 +159,9 @@ class MLflowManager:
             mlflow.log_artifact(f.name, artifact_path)
             os.remove(f.name)
 
-    def log_artifact(self, local_path: str, artifact_path: Optional[str] = None):
+    def log_artifact(
+        self, local_path: str, artifact_path: Optional[str] = None
+    ):
         """Log a local file as an MLflow artifact."""
         if not self._active_run:
             raise mlflow.exceptions.MlflowException("No active run exists")
@@ -164,19 +171,25 @@ class MLflowManager:
         """Log backtest results including metrics, trades, and portfolio values."""
         if not self._active_run:
             raise mlflow.exceptions.MlflowException("No active run exists")
-        
-        if 'metrics' in results:
-            self.log_metrics(results['metrics'])
-        
-        if 'trades' in results and isinstance(results['trades'], pd.DataFrame):
-            with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f:
-                results['trades'].to_parquet(f.name)
+
+        if "metrics" in results:
+            self.log_metrics(results["metrics"])
+
+        if "trades" in results and isinstance(results["trades"], pd.DataFrame):
+            with tempfile.NamedTemporaryFile(
+                suffix=".parquet", delete=False
+            ) as f:
+                results["trades"].to_parquet(f.name)
                 self.log_artifact(f.name, "backtest/trades.parquet")
                 os.remove(f.name)
-        
-        if 'portfolio_values' in results and isinstance(results['portfolio_values'], pd.DataFrame):
-            with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f:
-                results['portfolio_values'].to_parquet(f.name)
+
+        if "portfolio_values" in results and isinstance(
+            results["portfolio_values"], pd.DataFrame
+        ):
+            with tempfile.NamedTemporaryFile(
+                suffix=".parquet", delete=False
+            ) as f:
+                results["portfolio_values"].to_parquet(f.name)
                 self.log_artifact(f.name, "backtest/portfolio_values.parquet")
                 os.remove(f.name)
 

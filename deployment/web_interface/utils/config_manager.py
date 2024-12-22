@@ -3,6 +3,7 @@
 import os
 import yaml
 
+
 def load_config(project_root):
     """Load or create config"""
     config_path = os.path.join(project_root, "config/default_config.yaml")
@@ -12,23 +13,21 @@ def load_config(project_root):
     else:
         return create_default_config(config_path)
 
+
 def create_default_config(config_path):
     """Create default config file"""
     config = {
-        'env': {
-            'initial_balance': 10000,
-            'trading_fee': 0.001,
-            'window_size': 20
+        "env": {
+            "initial_balance": 10000,
+            "trading_fee": 0.001,
+            "window_size": 20,
         },
-        'model': {
-            'hidden_size': 256,
-            'num_layers': 2
+        "model": {"hidden_size": 256, "num_layers": 2},
+        "training": {
+            "batch_size": 128,
+            "learning_rate": 0.0003,
+            "num_episodes": 1000,
         },
-        'training': {
-            'batch_size': 128,
-            'learning_rate': 0.0003,
-            'num_episodes': 1000
-        }
     }
     os.makedirs(os.path.dirname(config_path), exist_ok=True)
     with open(config_path, "w") as f:

@@ -1,301 +1,179 @@
-Below is a revised `README.md` that integrates the guidelines, rules, and refactoring steps discussed. It highlights the current project state, the development guidelines, and the workflow recommended. This document is meant to replace your current `README.md`.
-
-```markdown
-# Trading Bot Project
-
-A reinforcement learning-based trading bot using PPO agents, comprehensive backtesting, and real-time integration for future live trading scenarios. The codebase follows strict development guidelines and naming conventions to ensure maintainability, reproducibility, and robust testing.
+아래는 새로 업데이트된 `README.md` 내용(즉, 현재 프로젝트 상태/가이드/계획)에 기초하여 **무엇을 해결했는지**, **아직 남아 있는/추가가 필요한 부분**은 무엇인지, 그리고 **구체적으로 어떤 순서와 방식으로 진행하면 좋은지**를 정리한 상세 계획입니다. 이 계획을 따르면, `README.md`에 제시된 개발 지침과 로드맵을 보다 구체적으로 실행에 옮길 수 있습니다.
 
 ---
 
-## Latest Achievements 🎯
+## 1. 현재까지 해결한 점 (정리)
 
-- **Risk-Aware Backtesting System Implemented (2024-12-13)**:
-  - Portfolio returns: +1.42%
-  - Sharpe Ratio: 0.43, Sortino Ratio: 0.60, Max Drawdown: -4.26%
-  - Dynamic position sizing and stop-loss integrated
-  - Scenario-based testing (flash crash, low liquidity)
-  - Initiated hyperparameter optimization with Ray Tune and MLflow tracking
-  - Completed unit tests for `hyperopt_env.py`, `hyperopt_agent.py`, and `hyperopt_tuner.py`
-  - Optimization pipeline decoupled for independent execution
+1. **데이터 파이프라인 완성도**  
+   - `$` 접두사 사용, TA-Lib 통합, ccxt를 통한 데이터 수집 등이 안정화되었음.  
+   - 다양한 시나리오(Flash Crash, Low Liquidity)에 대한 데이터 생성과 테스트가 이미 통과하여, 데이터 로직의 신뢰도가 높음.
 
-- **Advanced Backtesting & Visualization**:
-  - Flash crash and low liquidity scenario analysis
-  - Comprehensive metrics (Sharpe, Sortino, MDD)
-  - Portfolio visualization and trade analysis
-  - Real-time simulation monitoring
-  - Enhanced risk management metrics
+2. **강화학습 (PPO) 및 환경 구성 안정화**  
+   - `ppo_agent.py`, `trading_env.py`, `paper_trading.py` 등 주요 파일의 테스트가 모두 성공.  
+   - Single-Agent/Multiple-Agent 환경에서의 기본 시뮬레이션 및 학습 로직이 확립됨.
 
-- **Hyperparameter Optimization**:
-  - Under `training/hyperopt/` modules
-  - Ray Tune integration for tuning (learning rate, batch size, architectures)
-  - MLflow for tracking experiments and reproducibility
-  - Dedicated script `scripts/run_hyperopt.py` for full hyperparameter search
+3. **백테스팅/시나리오 테스트 및 Risk Management**  
+   - Sharpe, Sortino, MDD, drawdown, stop-loss, leverage 제한 등 리스크 관리 요소들이 테스트를 통과.  
+   - Risk Backtesting, Advanced Backtesting, Hyperopt Tuner 모두 정상 동작.
 
-- **Resource Optimization System**:
-  - Located in `training/monitoring/*` (e.g., `metrics_collector.py`, `worker_manager.py`)
-  - Ray Actor model for distributed processing
-  - Dynamic worker scaling (2 to 8 workers)
-  - Performance metrics (batch time, memory, GPU utilization)
-  - Automated optimization of batch sizes and resource usage
+4. **Hyperparameter Optimization + MLflow Tracking**  
+   - Ray Tune과 MLflow가 성공적으로 연동되었고, `scripts/run_hyperopt.py` 통해 최적화 파이프라인 동작 확인.  
+   - MLflow `meta.yaml` 문제, 디렉토리 충돌, experiment 생성 문제 등 대부분 해결.
 
-- **Real-Time Trading Preparation**:
-  - CCXT WebSocket integration for live data streaming
-  - Paper trading environment (`paper_trading.py`) for real-time strategy testing
-  - `trading_env.py` adapted for on-the-fly decision-making
+5. **Paper Trading & Multi-Agent 부분**  
+   - Paper Trading 환경에서 limit, stop-limit, trailing-stop, iceberg 주문 등이 테스트를 통과.  
+   - Multi-Agent 환경의 `test_multi_agent.py` 관련 이슈도 대부분 해결(트레이닝 안정성 확인).
+
+6. **기본 Web Interface (Streamlit) Test**  
+   - Web UI (e.g., `streamlit run`)이 실행은 가능해졌으며, 간단한 모니터링 기능도 확인됨.  
+   - 굳이 필요 없다면 제거 가능하다는 판단 (의존성 정리 등).
 
 ---
 
-## Core Architecture Components
+## 2. 아직 남아 있거나 보완할 부분
 
-### Data Pipeline Layer
-- **Tech Stack**: TA-Lib + ccxt
-- **Flow**:  
-  `Raw Data (ccxt) → TA-Lib Pipeline → Feature Store → Training Data`
-- **Structure**:
-  ```
-  data/
-    raw/
-    processed/
-    features/
-    utils/data_loader.py
-    utils/feature_generator.py
-    utils/websocket_loader.py
-  ```
+1. **실시간 라이브 트레이딩**  
+   - `live_trading_env.py`에서 실제 거래소 체결 로직, CCXT API rate-limiting, partial fill, 슬리피지 감안 등이 좀 더 정교화될 수 있음.  
+   - 네트워크 장애, 거래소 응답 오류 등의 예외 처리가 추가 개발 필요.
 
-### Training and Inference Layer
-- **Frameworks**: RLlib + PPO Agent
-- **Key Components**:
-  - `train.py`: Stable single-agent training
-  - `ppo_agent.py`: PPO agent
-  - `trading_env.py`: Stable trading environment (single-agent)
-  - `train_multi_agent.py`: Multi-agent environment
-  - `evaluation.py`, `backtest.py`, `advanced_backtest.py`: Evaluation & scenario testing
-  - `training/hyperopt/`: Hyperparameter tuning modules
+2. **고급 리스크 모델 또는 포트폴리오 전반**  
+   - 현재는 종목(혹은 단일 자산) 단위 리스크 관리가 메인. 포트폴리오 다변화(여러 종목 동시 운용) 시, 상관관계·VaR·CVaR 등 고급 지표 필요.  
+   - 리스크 관리 코드(`risk/risk_manager.py`)가 포트폴리오 단위로 확장될 여지가 있음.
 
-### Web Interface Layer
-- **Frameworks**: FastAPI + Streamlit
-- **Features**:
-  - Model selection, parameter tuning, monitoring
-  - Live performance visualization
-- **File**:
-  - `deployment/web_interface/app.py`
+3. **코드 품질/문서화**  
+   - 아직 린팅(Black, isort), 정적 타입 체크(mypy), 보안 검사(bandit) 등의 파이프라인이 완전히 구축되지 않았을 수 있음.  
+   - UML/아키텍처 다이어그램, API 문서(`docs/api/`) 등 좀 더 자세한 문서 보강 가능.
+
+4. **Web Interface(FAST API or Streamlit) 최종 결정**  
+   - Streamlit 대시보드를 유지할지, 간단한 FastAPI 라우터만 유지할지 결정 필요.  
+   - 만약 Streamlit을 빼기로 한다면, `deployment/web_interface/` 디렉토리 제거 및 `requirements.txt`에서 `streamlit` 패키지 제거.
+
+5. **CI/CD 및 Docker 배포**  
+   - 현재 CI/CD가 간단하거나 미구현 상태일 수 있으니, GitHub Actions(또는 다른 CI) 도입/확장 필요.  
+   - Dockerfile 작성, `docker-compose` or K8s 배포 전략 고민.
+
+6. **Environment Variables & Secrets**  
+   - 아직 `.env` 파일이나 Vault 사용이 미비하다면, 운영/개발/스테이징 환경별로 분리 및 자동화가 필요.  
+   - CCXT API KEY, MLflow TRACKING URI, DB Credentials 등 민감 정보 보호.
 
 ---
 
-## Completed Features ✅
+## 3. 상세 진행 계획 (단계별)
 
-1. **Data Pipeline**:  
-   - ccxt ingestion, 44 TA-Lib indicators
-   - `$`-prefixed column names for OHLCV (e.g., `$open`, `$close`)
-   - Caching for performance
-
-2. **Reinforcement Learning**:  
-   - PPO agent implementation
-   - Stable training (`train.py`)
-   - MLflow integrated
-   - Validated training runs
-
-3. **Backtesting System**:  
-   - Metrics: Sharpe, Sortino, MDD
-   - Scenario tests (flash crash, low liquidity)
-   - Real-time simulation monitoring
-
-4. **Visualization Tools**:  
-   - Portfolio value, returns distribution, drawdown
-   - Risk metric visualizations
-
-5. **Advanced Scenarios**:  
-   - Flash crash and low liquidity tests
-   - Risk management with dynamic sizing, stop-loss
-
-6. **Risk-Aware Backtesting**:  
-   - Leverage, drawdown control
-   - Stop-loss mechanisms validated
-
-7. **Hyperparameter Optimization**:  
-   - `training/hyperopt/` modules
-   - Ray Tune for parameter search
-   - MLflow for reproducibility
-
-8. **Real-Time Trading Preparation**:  
-   - CCXT WebSocket integration
-   - `paper_trading.py` for sandbox tests
-
-9. **Resource Optimization & Monitoring**:  
-   - Ray Actor model for distributed tasks
-   - Worker scaling and performance metrics
+아래 단계들은 `README.md`에서 제시된 “Refactoring and Migration Steps” 및 “Additional Guidelines and Recommendations”를 참고하여, **구체적인 순서**와 **실행 방법**을 제안합니다.
 
 ---
 
-## Development Guidelines
+### A. 실시간 라이브 트레이딩 및 Risk 확장
 
-**Refer to**: [DEVELOPMENT_GUIDELINES.md](DEVELOPMENT_GUIDELINES.md) for full details.
+1. **`live_trading_env.py` 로직 보강**  
+   - **목표**: 실제 거래소 체결을 가정한 시나리오 테스트(네트워크 지연, 주문 취소, partial fill, slip 등).  
+   - **실행**:  
+     - [ ] CCXT 모듈로부터 체결 상태 받는 메서드 구현  
+     - [ ] 실패 시 재시도 로직, rate limit 오류 처리 로직 추가  
+     - [ ] Paper trading과 실제 trading의 핵심 차이를 분리(인터페이스 동일화)  
+   - **테스트**: `tests/test_live_trading.py`에서 네트워크 모킹, 레이트 리미트 모킹 등 추가.
 
-### Key Naming & Formatting Rules
-
-- **Data Columns**: Always use `$` prefix (e.g., `$open`, `$close`).
-- **Parameters**: Use `df` for DataFrame parameters, `transaction_fee` for fees.
-- **Observation Shape**: `(window_size, n_features)` 2D arrays from the environment. Flatten only inside the model if needed.
-- **MLflow**: Use `./mlflow_runs/` for experiments and parquet format.
-- **Async and Paper Trading**: Follow consistent async method naming, mock WebSocket in tests, ensure cleanup methods.
-
-### Testing Standards
-
-- Use pytest for unit and integration tests.
-- Test success, error, and edge cases.
-- Validate data formats, handle NaN with ffill/bfill.
-- Integration tests check full pipeline (data → features → model → backtest).
-
-### Refactoring and Migration Steps (if needed)
-
-1. Update config files (`config/*.yaml`) to match naming conventions.
-2. Refactor data pipeline (`data_loader.py`, `feature_generator.py`) to `$` columns.
-3. Standardize `trading_env.py` parameters and observation shapes.
-4. Align PPO agent and networks with `(window_size, n_features)` inputs.
-5. Unify backtester metrics and scenario outputs.
-6. Configure MLflow experiments under `./mlflow_runs/`.
-7. Fix async patterns in paper trading and mock WebSocket in tests.
-8. Update Hyperopt code to use `storage_path` for Ray Tune.
-9. Re-run integration tests and CI/CD pipelines after each step.
-10. Document changes and update guidelines.
+2. **리스크 관리자 포트폴리오 확장**  
+   - **목표**: 멀티 종목/멀티 마켓 포트폴리오로 리스크 관리 모델 확장(VaR, CVaR, Beta, 상관관계).  
+   - **실행**:  
+     - [ ] `risk_manager.py` 내 포트폴리오(여러 종목) 정보 처리, 리스크 계산함수(예: calc_var, calc_corr) 추가  
+     - [ ] 기존 single-asset 시뮬레이션과 호환되도록 인터페이스 유지  
+   - **테스트**: `tests/test_risk_management.py`에 포트폴리오 종목 2~3개로 시나리오 작성.
 
 ---
 
-## Running the Project
+### B. Web Interface (Streamlit or API) 결정 & 정리
 
-1. **Setup**
-   ```bash
-   cd Users/skylar/Desktop/trading_bot
-   python -m venv venv
-   source venv/bin/activate
-   pip install -r requirements.txt
-   ```
+1. **Streamlit 유지 시**  
+   - **목표**: 간단한 모니터링 대시보드.  
+   - **실행**:  
+     - [ ] `deployment/web_interface/app.py` 내 페이지(학습 모니터링, 실시간 포트폴리오, 시각화) 확충  
+     - [ ] `requirements.txt` 유지 (streamlit 등).  
+   - **테스트**: UI 테스트는 스크린샷 기반이거나, E2E 테스트는 별도.
 
-2. **Test Core System**
-   ```bash
-   pytest tests/
-   ```
+2. **Streamlit 제거 시**  
+   - **목표**: FastAPI + React, 혹은 API만 유지.  
+   - **실행**:  
+     - [ ] `deployment/web_interface/` 폴더 제거  
+     - [ ] `requirements.txt`에서 streamlit 의존성 삭제  
+     - [ ] `tests/test_web_interface.py` 등 제거/비활성화  
+   - **테스트**: 제거 전/후 전반적 테스트가 깨지지 않는지 확인.
 
-3. **Launch Web UI**
-   ```bash
-   streamlit run deployment/web_interface/app.py
-   ```
-
-4. **Hyperparameter Optimization**
-   ```bash
-   python scripts/run_hyperopt.py
-   ```
-   - Monitor via MLflow UI.
+(둘 중 하나를 선택하여 진행)
 
 ---
 
-## Additional Notes
+### C. CI/CD & Docker 배포 구축
 
-- **MVP Stability**:  
-  Focus on core stable files: `train.py`, `trading_env.py`, `ppo_agent.py`.
-  
-- **Code Changes**:  
-  Use inheritance and composition. Follow naming conventions and formatting rules from the guidelines.
+1. **CI/CD**  
+   - **목표**: GitHub Actions 혹은 GitLab CI에서 자동 빌드/테스트.  
+   - **실행**:  
+     - [ ] `.github/workflows/test.yaml` 생성, `pytest tests/` 실행, lint, mypy, bandit 등 추가  
+     - [ ] MLflow artifact 저장 시(원하면) S3나 artifact store 설정  
+   - **테스트**: PR 올릴 때 자동 테스트가 돌아가는지 확인.
 
-- **Experiment Tracking**:  
-  Use MLflow for all runs and experiments. Stick to the documented directories and parameter naming.
+2. **Dockerfile & docker-compose**  
+   - **목표**: 일관된 배포 환경.  
+   - **실행**:  
+     - [ ] `Dockerfile`에서 Python base image + `requirements.txt` 설치  
+     - [ ] 필요 시 `docker-compose.yaml`로 Redis, Postgres, MLflow UI 등 함께 구동  
+   - **테스트**: `docker build .` 및 `docker run`으로 로컬 실행 확인, CI/CD에서 Docker push.
 
-- **CI/CD**:  
-  Integrate GitHub Actions or similar for automated testing and linting.
+---
 
-- **Resource Monitoring**:  
-  Ray Actor model for scaling workers and optimizing batch sizes. Validate performance with tests and logs.
+### D. 코드 품질(린팅, 타입 체크, 문서화)
 
-## Additional Guidelines and Recommendations
+1. **린팅 & 타입 체크**  
+   - **목표**: PEP8 스타일 유지, 정적 타입 체크로 오류 방지.  
+   - **실행**:  
+     - [ ] `requirements.txt`에 `black`, `flake8`, `isort`, `mypy`, `bandit` 추가  
+     - [ ] `.github/workflows/lint.yaml`(또는 기존 CI)에 `flake8 .` / `mypy .` 등 추가  
+   - **테스트**: 로컬에서 `pre-commit` 훅으로 자동 포맷 및 검사.
 
-### Environment Variables and Configuration
+2. **문서(Architecture Diagram, API Docs)**  
+   - **목표**: `docs/guides/`에 아키텍처/시나리오 다이어그램, API 문서 보강.  
+   - **실행**:  
+     - [ ] UML이나 Mermaid 기반 overview diagram  
+     - [ ] `docs/api/`에 API endpoint 설명(FastAPI 기반이라면 자동 스웨거 활용)  
+   - **테스트**: 문서 링크, 이미지 경로, 문서 빌드(check README links) 등 확인.
 
-To maintain flexibility and security in different deployment contexts (development, staging, production), we employ environment variables and external configuration files:
+---
 
-- **Required Variables**:  
-  - `EXCHANGE_API_KEY`, `EXCHANGE_API_SECRET` for CCXT-based data retrieval  
-  - `MLFLOW_TRACKING_URI` for experiment logging  
-  - `REDIS_URL`, `POSTGRES_URL` (if database or caching layers are employed)  
-  - `WEB_SOCKET_ENDPOINT` for real-time data streams
+### E. Secrets & Env Management
 
-- **Credential Management**:  
-  - Store API keys and secrets in a `.env` file that is not committed to version control.  
-  - For production or sensitive deployments, consider using a secure secrets management solution such as HashiCorp Vault or AWS Secrets Manager.  
-  - The cursor and CI/CD pipelines may inject credentials as environment variables at runtime.
+1. **.env 파일 혹은 Vault 연동**  
+   - **목표**: 민감 정보(거래소 키, DB 접속 정보) 보호.  
+   - **실행**:  
+     - [ ] `.gitignore`에 `.env*` 포함  
+     - [ ] 개발/스테이징/프로덕션용 env 파일 구분  
+   - **테스트**: 로컬/서버 환경에서 `ENV=staging` 등으로 잘 로드되는지 확인.
 
-- **Configuration Environments**:
-  - **Development**: Local `.env.development` file and local config overrides.  
-  - **Staging**: `.env.staging` loaded on staging servers, possibly with test exchange keys.  
-  - **Production**: `.env.production` managed by Ops team or secret vault integration.  
-  - Switch between environments by setting a `ENV` variable or passing a command-line argument; the application’s startup script or Dockerfile can select the correct configuration.
+2. **Credential Injection**  
+   - **목표**: CI/CD 파이프라인에서 안전하게 키 주입.  
+   - **실행**:  
+     - [ ] GitHub Actions secrets에 `EXCHANGE_API_KEY` 등 저장, workflow에서 export  
+     - [ ] Docker build 시 `--build-arg` 방식 또는 runtime 환경변수 방식 점검  
+   - **테스트**: dev/staging 환경에서 교체 테스트.
 
-### Dependency Versioning and Management
+---
 
-Consistent dependency management ensures reproducible builds and predictable behavior across different machines and stages:
+## 4. 실행 순서 제안 (우선순위)
 
-- **Recommended Approach**:
-  - Use a `requirements.txt` file pinned with exact versions for stability.  
-  - Alternatively, adopt Poetry for handling dependencies and virtual environments, which generates a `poetry.lock` file for strict reproducibility.
-  
-- **Freezing Dependencies**:
-  - If using `requirements.txt`, after installing or upgrading dependencies, run `pip freeze > requirements.txt` to lock versions.  
-  - If using Poetry, rely on `poetry.lock` for version consistency.
+1. **(A) Live Trading & Risk 확장** → 고난도이지만 실제 운영 가치가 높음  
+2. **(B) Web Interface 결정** → Streamlit을 유지/삭제 빠른 결정 (의존성 정리 용이)  
+3. **(C) CI/CD & Docker** → 팀 개발·운영 시 필수  
+4. **(D) 코드 품질 개선** → lint, type check, docs  
+5. **(E) Secrets & Env** → 운영(Production) 준비 시 필수
 
-### Contribution Guidelines
+이 순서를 따르되, 팀 상황이나 당장 필요한 기능에 따라 단계 조정 가능.
 
-For teams working collaboratively or expecting external contributions, establish clear contribution policies:
+---
 
-- **Feature Proposals & Bug Fixes**:
-  - Open a GitHub issue or pull request (PR) describing the proposed changes or bug fixes.  
-  - Include tests and documentation updates with each PR.
-  
-- **Code Review & Branching**:
-  - Use a standard branch naming convention: `feature/<short_description>`, `fix/<issue_number>`.  
-  - Require at least one code review approval before merging into `main` or `master`.
-  
-- **Style Enforcement**:
-  - Integrate `pre-commit` hooks to run linting (pylint), type checks (mypy), and tests (pytest) before commits.  
-  - The cursor (or CI/CD) will reject merges that fail these checks.
+## 5. 결론
 
-### Known Limitations and Future Improvements
+- **README.md**의 가이드를 “무엇을, 왜, 어떻게” 더 구체화한 것이 이 상세 계획입니다.  
+- 현재는 테스트가 모두 통과했으므로 안정된 프로토타입 상태이며, 이후 운영(Production) 수준으로 끌어올리려면 **Live Trading / Risk Management / CI/CD / 문서화** 등을 단계적으로 보강하면 됩니다.  
+- 불필요한 의존성(예: Streamlit)이 있다면 제거를 결정하고, 대신 필요 시 REST API나 대체 대시보드를 고려하세요.
 
-While the current system is robust, there are known areas for enhancement:
-
-- **Known Edge Cases**:
-  - Extremely low liquidity scenarios may not fully reflect real exchange order book microstructure.
-  - High latency environments or rate-limiting behaviors from some exchanges need further testing.
-  
-- **Roadmap**:
-  - Additional exchange integrations (e.g., futures, options).  
-  - Advanced risk models (e.g., VaR-based constraints, regime detection).
-  - UI enhancements for Streamlit dashboards (real-time order book visualization, portfolio heatmaps).
-
-### Performance Benchmarks
-
-Performance goals help guide optimization efforts and ensure scalability:
-
-- **Targets**:
-  - Training runtime: Complete a single training epoch within a set time (e.g., < 5 minutes for standard configuration).
-  - Maximum acceptable latency for real-time updates: < 1 second end-to-end from data ingestion to action decision.
-  - Memory/GPU usage: Keep GPU utilization high without causing out-of-memory errors, and log these metrics with MLflow or Ray Tune’s logging.
-
-- **Profiling & Benchmarking**:
-  - Use built-in Python profiling (`cProfile`, `line_profiler`) to identify bottlenecks.
-  - Leverage Ray’s dashboard and MLflow logging for performance metrics at scale.
-  - Document the results and optimizations in `performance_notes.md` or a dedicated section in the repo.
-
-### Security and Compliance Considerations
-
-For systems that may eventually handle real-world trades or sensitive financial data:
-
-- **Security Requirements**:
-  - Encrypt all secrets at rest and in transit.
-  - Sanitize logs to avoid printing API keys or sensitive info.
-  
-- **Compliance**:
-  - If operating in regulated environments, consider KYC/AML checks and regulatory reporting.
-  - Use security scanning tools (like `bandit`) and type checking (`mypy`) regularly.
-  
-- **Recommended Tools**:
-  - `bandit` for Python security linting.
-  - Regular dependency vulnerability scans (e.g., `pip-audit`).
+**=>** 이렇게 제안된 순서를 토대로, 필요한 각 단계를 cursor에게 지시하거나, 필요한 파일(예: `live_trading_env.py`)을 보여 달라고 요청하여 구체적인 리팩토링/기능 개발을 진행하시면 됩니다.
