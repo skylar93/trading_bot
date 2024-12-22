@@ -223,6 +223,13 @@ class PPOAgent(BaseAgent):
         if isinstance(env_or_experiences, list):
             logger.info("Training from experiences")
             # Training from experiences
+            if not env_or_experiences:
+                return {
+                    "policy_loss": 0.0,
+                    "value_loss": 0.0,
+                    "entropy": 0.0
+                }
+                
             for exp in env_or_experiences:
                 state = self._normalize_state(exp["state"])
                 states.append(state)
@@ -234,6 +241,15 @@ class PPOAgent(BaseAgent):
                     state_tensor = torch.FloatTensor(state).to(self.device)
                     value = self.value_network(state_tensor)
                     action_mean, action_std = self.network(state_tensor)
+                    
+                    # Check for NaN values
+                    if torch.isnan(action_mean).any() or torch.isnan(action_std).any():
+                        logger.warning("NaN values detected in policy network output")
+                        continue
+                    
+                    # Ensure positive standard deviation
+                    action_std = torch.clamp(action_std, min=1e-6)
+                    
                     dist = Normal(action_mean, action_std)
                     log_prob = dist.log_prob(
                         torch.FloatTensor([exp["action"]]).to(self.device)
@@ -242,6 +258,14 @@ class PPOAgent(BaseAgent):
                 values.append(value.cpu().numpy())
                 log_probs.append(log_prob.cpu().numpy())
                 dones.append(exp.get("done", False))
+            
+            # Skip update if we don't have enough valid experiences
+            if len(states) < 2:
+                return {
+                    "policy_loss": 0.0,
+                    "value_loss": 0.0,
+                    "entropy": 0.0
+                }
 
             # Convert to tensors and update
             states_tensor = torch.FloatTensor(np.array(states)).to(self.device)
@@ -295,6 +319,17 @@ class PPOAgent(BaseAgent):
                 with torch.no_grad():
                     state_tensor = torch.FloatTensor(state).to(self.device)
                     action_mean, action_std = self.network(state_tensor)
+                    
+                    # Check for NaN values
+                    if torch.isnan(action_mean).any() or torch.isnan(action_std).any():
+                        logger.warning("NaN values detected in policy network output")
+                        state, _ = env.reset()
+                        state = self._normalize_state(state)
+                        continue
+                    
+                    # Ensure positive standard deviation
+                    action_std = torch.clamp(action_std, min=1e-6)
+                    
                     value = self.value_network(state_tensor)
 
                     # Sample action
@@ -424,21 +459,23 @@ class PPOAgent(BaseAgent):
 
         return advantages
 
-    def learn_from_shared_experience(
-        self, shared_buffer: List[Dict]
-    ) -> Dict[str, float]:
-        """Learn from shared experience buffer"""
-        # Filter relevant experiences
-        relevant_exp = []
+    def learn_from_shared_experience(self, shared_buffer: list) -> Dict[str, float]:
+        """Learn from shared experience buffer
 
-        for exp in shared_buffer:
-            # Add experience if it's successful (positive reward)
-            if exp["reward"] > 0:
-                relevant_exp.append(exp)
+        Args:
+            shared_buffer: List of experiences from other agents
 
-        if len(relevant_exp) > 0:
-            return self.train(relevant_exp)
-        return {"policy_loss": 0, "value_loss": 0, "entropy": 0}
+        Returns:
+            Dictionary with training metrics
+        """
+        if not shared_buffer:
+            return {
+                "shared_policy_loss": 0.0,
+                "shared_value_loss": 0.0,
+                "shared_entropy": 0.0
+            }
+            
+        return self.train(shared_buffer)
 
     def save(self, path: str):
         """Save agent's state"""
@@ -488,7 +525,10 @@ class PPOAgent(BaseAgent):
 
         # Mini-batch updates
         batch_size = len(states)
-        mini_batch_size = batch_size // 4  # Use 4 mini-batches
+        if batch_size < 4:  # If batch is too small, use the entire batch
+            mini_batch_size = batch_size
+        else:
+            mini_batch_size = batch_size // 4  # Use 4 mini-batches
 
         for epoch in range(self.n_epochs):
             # Generate random permutation

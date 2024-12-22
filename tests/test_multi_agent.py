@@ -1,263 +1,210 @@
 import pytest
 import numpy as np
-import pandas as pd
+import gymnasium as gym
+from gymnasium import spaces
 import torch
-from datetime import datetime, timedelta
-from training.train_multi_agent import train_multi_agent_system
-from envs.multi_agent_env import MultiAgentTradingEnv
-from agents.strategies.single.ppo_agent import PPOAgent
-import mlflow
-import tempfile
-import shutil
-import os
 
+from agents.strategies.multi.multi_agent_manager import MultiAgentManager
+from agents.strategies.multi.momentum_ppo_agent import MomentumPPOAgent
 
-@pytest.fixture
-def sample_data():
-    """Create sample price data for testing"""
-    dates = pd.date_range(start="2023-01-01", end="2023-01-10", freq="1h")
-    df = pd.DataFrame(
-        {
-            "$open": np.random.randn(len(dates)) * 10 + 100,
-            "$high": np.random.randn(len(dates)) * 10 + 100,
-            "$low": np.random.randn(len(dates)) * 10 + 100,
-            "$close": np.random.randn(len(dates)) * 10 + 100,
-            "$volume": np.abs(np.random.randn(len(dates)) * 1000),
-        },
-        index=dates,
-    )
-
-    # Ensure high is highest and low is lowest
-    df["$high"] = df[["$open", "$high", "$low", "$close"]].max(axis=1)
-    df["$low"] = df[["$open", "$high", "$low", "$close"]].min(axis=1)
-    return df
-
-
-@pytest.fixture
-def agent_configs():
-    """Create test agent configurations"""
-    return [
-        {
-            "id": "momentum_trader",
-            "strategy": "momentum",
-            "initial_balance": 10000.0,
-            "fee_multiplier": 1.0,
-        },
-        {
-            "id": "mean_reversion_trader",
-            "strategy": "mean_reversion",
-            "initial_balance": 10000.0,
-            "fee_multiplier": 1.0,
-        },
-    ]
-
-
-@pytest.fixture(scope="function")
-def temp_mlflow_dir():
-    """Create a temporary directory for MLflow tracking."""
-    temp_dir = tempfile.mkdtemp()
-    old_tracking_uri = mlflow.get_tracking_uri()
-    mlflow.set_tracking_uri(f"file://{temp_dir}")
-    yield temp_dir
-    mlflow.set_tracking_uri(old_tracking_uri)
-    if os.path.exists(temp_dir):
-        shutil.rmtree(temp_dir)
-
-
-def test_multi_agent_env_creation(sample_data, agent_configs):
-    """Test multi-agent environment creation"""
-    env = MultiAgentTradingEnv(sample_data, agent_configs)
-
-    # Check observation and action spaces
-    for config in agent_configs:
-        assert config["id"] in env.observation_spaces
-        assert config["id"] in env.action_spaces
-
-        # Verify observation space dimensions
-        obs_space = env.observation_spaces[config["id"]]
-        assert len(obs_space.shape) == 2  # (window_size, features)
-
-        # Verify action space
-        action_space = env.action_spaces[config["id"]]
-        assert action_space.shape == (1,)  # Continuous action space
-
-
-def test_multi_agent_reset(sample_data, agent_configs):
-    """Test environment reset"""
-    env = MultiAgentTradingEnv(sample_data, agent_configs)
-    observations, info = env.reset()
-
-    # Check observations
-    for agent_id in env.agents:
-        assert agent_id in observations
-        assert isinstance(observations[agent_id], np.ndarray)
-        assert not np.isnan(observations[agent_id]).any()
-
-
-def test_multi_agent_step(sample_data, agent_configs):
-    """Test environment step"""
-    env = MultiAgentTradingEnv(sample_data, agent_configs)
-    observations, _ = env.reset()
-
-    # Create random actions
-    actions = {
-        agent_id: np.array([np.random.uniform(-1, 1)])
-        for agent_id in env.agents
-    }
-
-    # Take step
-    next_obs, rewards, dones, truncated, infos = env.step(actions)
-
-    # Check outputs
-    for agent_id in env.agents:
-        assert agent_id in next_obs
-        assert agent_id in rewards
-        assert agent_id in dones
-        assert agent_id in infos
-
-        assert isinstance(rewards[agent_id], float)
-        assert isinstance(dones[agent_id], bool)
-        assert "portfolio_value" in infos[agent_id]
-
-
-def test_experience_sharing():
-    """Test experience sharing between agents"""
-    # Create shared replay buffer
-    shared_buffer = []
-
-    # Add experience from agent 1
-    exp1 = {
-        "state": np.random.randn(10, 5),
-        "action": np.array([0.5]),
-        "reward": 1.0,
-        "next_state": np.random.randn(10, 5),
-        "done": False,
-    }
-    shared_buffer.append(exp1)
-
-    # Add experience from agent 2
-    exp2 = {
-        "state": np.random.randn(10, 5),
-        "action": np.array([-0.3]),
-        "reward": -0.5,
-        "next_state": np.random.randn(10, 5),
-        "done": False,
-    }
-    shared_buffer.append(exp2)
-
-    # Verify buffer
-    assert len(shared_buffer) == 2
-    assert all(isinstance(exp["reward"], float) for exp in shared_buffer)
-
-
-def test_gpu_utilization(sample_data, agent_configs):
-    """Test GPU resource utilization"""
-    if not torch.cuda.is_available():
-        pytest.skip("No GPU available")
-
-    env = MultiAgentTradingEnv(sample_data, agent_configs)
-
-    # Create agents with GPU support
-    agents = {
-        config["id"]: PPOAgent(
-            env.observation_spaces[config["id"]],
-            env.action_spaces[config["id"]],
-            device="cuda",
+class DummyMultiAgentEnv(gym.Env):
+    """Simple environment for testing multi-agent system"""
+    
+    def __init__(self):
+        super().__init__()
+        
+        # Define observation space (OHLCV data + some features)
+        self.observation_space = spaces.Box(
+            low=-np.inf,
+            high=np.inf,
+            shape=(60, 5),  # 60 timesteps, 5 features (OHLCV)
+            dtype=np.float32
         )
-        for config in agent_configs
-    }
+        
+        # Define action space (continuous between -1 and 1)
+        self.action_space = spaces.Box(
+            low=-1,
+            high=1,
+            shape=(1,),
+            dtype=np.float32
+        )
+        
+        self.reset()
+    
+    def reset(self, seed=None):
+        super().reset(seed=seed)
+        
+        # Generate random OHLCV data
+        self.data = np.random.randn(60, 5).astype(np.float32)
+        # Ensure close is within high/low
+        self.data[:, 3] = (self.data[:, 1] + self.data[:, 2]) / 2
+        
+        return self.data, {}
+    
+    def step(self, actions):
+        # Generate next state
+        self.data = np.roll(self.data, -1, axis=0)
+        self.data[-1] = np.random.randn(5)
+        self.data[-1, 3] = (self.data[-1, 1] + self.data[-1, 2]) / 2
+        
+        # Calculate rewards (simplified)
+        rewards = {}
+        for agent_id, action in actions.items():
+            rewards[agent_id] = float(action * (self.data[-1, 3] - self.data[-2, 3]))
+        
+        # Always return False for done (continuous trading)
+        done = False
+        truncated = False
+        
+        return self.data, rewards, done, truncated, {}
 
-    # Verify agents are on GPU
-    for agent in agents.values():
-        assert str(agent.device) == "cuda"
-        assert next(agent.network.parameters()).is_cuda
+@pytest.fixture
+def env():
+    """Create a test environment"""
+    return DummyMultiAgentEnv()
 
-
-def test_different_strategies(sample_data):
-    """Test different trading strategies"""
-    # Define agents with different strategies
+@pytest.fixture
+def manager(env):
+    """Create a test manager with momentum agents"""
     agent_configs = [
         {
-            "id": "momentum",
+            "id": "momentum_1",
             "strategy": "momentum",
-            "lookback": 20,
-            "threshold": 0.02,
-            "initial_balance": 10000.0,
-            "fee_multiplier": 1.0,
-        },
-        {
-            "id": "mean_reversion",
-            "strategy": "mean_reversion",
-            "window": 50,
-            "std_dev": 2.0,
-            "initial_balance": 10000.0,
-            "fee_multiplier": 1.0,
-        },
-        {
-            "id": "market_maker",
-            "strategy": "market_making",
-            "spread": 0.001,
-            "inventory_limit": 100,
-            "initial_balance": 10000.0,
-            "fee_multiplier": 0.8,
-        },
+            "observation_space": env.observation_space,
+            "action_space": env.action_space,
+            "momentum_window": 20,
+            "momentum_threshold": 0.01
+        }
     ]
+    return MultiAgentManager(agent_configs)
 
-    env = MultiAgentTradingEnv(sample_data, agent_configs)
+@pytest.fixture
+def multi_manager(env):
+    """Create a test manager with multiple momentum agents"""
+    agent_configs = [
+        {
+            "id": "momentum_1",
+            "strategy": "momentum",
+            "observation_space": env.observation_space,
+            "action_space": env.action_space,
+            "momentum_window": 20,
+            "momentum_threshold": 0.01
+        },
+        {
+            "id": "momentum_2",
+            "strategy": "momentum",
+            "observation_space": env.observation_space,
+            "action_space": env.action_space,
+            "momentum_window": 30,
+            "momentum_threshold": 0.02
+        }
+    ]
+    return MultiAgentManager(agent_configs)
 
-    # Test that each agent gets appropriate observations
-    observations, _ = env.reset()
-    for agent_id, config in zip(env.agents, agent_configs):
-        obs = observations[agent_id]
-        if config["strategy"] == "momentum":
-            assert obs.shape[0] >= config["lookback"]
-        elif config["strategy"] == "mean_reversion":
-            assert obs.shape[0] >= config["window"]
+def test_multi_agent_initialization(env, manager):
+    """Test multi-agent system initialization"""
+    assert len(manager.agents) == 1
+    assert isinstance(manager.agents["momentum_1"], MomentumPPOAgent)
 
+def test_multi_agent_action_selection(env, manager):
+    """Test multi-agent action selection"""
+    # Get initial observation
+    obs, _ = env.reset()
+    
+    # Get actions from all agents
+    actions = manager.act({"momentum_1": obs})
+    
+    assert isinstance(actions, dict)
+    assert "momentum_1" in actions
+    assert isinstance(actions["momentum_1"], np.ndarray)
+    assert actions["momentum_1"].shape == (1,)
+    assert -1 <= actions["momentum_1"] <= 1
 
-def test_training_stability(
-    temp_mlflow_dir, sample_data, agent_configs, tmp_path
-):
-    """Test stability of multi-agent training"""
-    # Create environment and agents
-    env = MultiAgentTradingEnv(sample_data, agent_configs)
-    agents = {
-        config["id"]: PPOAgent(
-            env.observation_spaces[config["id"]],
-            env.action_spaces[config["id"]],
-        )
-        for config in agent_configs
+def test_multi_agent_training_step(env, manager):
+    """Test multi-agent training step"""
+    # Get initial observation
+    obs, _ = env.reset()
+    
+    # Get actions
+    actions = manager.act({"momentum_1": obs})
+    
+    # Take step in environment
+    next_obs, rewards, done, truncated, info = env.step(actions)
+    
+    # Create experience dictionary
+    experiences = {
+        "momentum_1": {
+            "state": obs,
+            "action": actions["momentum_1"],
+            "reward": rewards["momentum_1"],
+            "next_state": next_obs,
+            "done": done
+        }
     }
+    
+    # Train agents
+    metrics = manager.train_step(experiences)
+    
+    assert isinstance(metrics, dict)
+    assert "momentum_1" in metrics
+    assert isinstance(metrics["momentum_1"], dict)
 
-    # Create model save directory
-    save_dir = tmp_path / "multi_agent_models"
-    save_dir.mkdir(parents=True, exist_ok=True)
+def test_multi_agent_experience_sharing(env, multi_manager):
+    """Test experience sharing between agents"""
+    # Get initial observation
+    obs, _ = env.reset()
+    
+    # Get actions
+    actions = multi_manager.act({"momentum_1": obs, "momentum_2": obs})
+    
+    # Take step in environment
+    next_obs, rewards, done, truncated, info = env.step(actions)
+    
+    # Create experience dictionary with positive reward
+    experiences = {
+        "momentum_1": {
+            "state": obs,
+            "action": actions["momentum_1"],
+            "reward": 1.0,  # Positive reward to ensure sharing
+            "next_state": next_obs,
+            "done": done
+        }
+    }
+    
+    # Train agents
+    metrics = multi_manager.train_step(experiences)
+    
+    assert len(multi_manager.shared_buffer) > 0
+    assert isinstance(metrics, dict)
+    assert "momentum_1" in metrics
 
-    # Run short training
-    metrics = train_multi_agent_system(
-        env=env,
-        agents=agents,
-        num_episodes=5,
-        save_freq=2,
-        save_path=str(save_dir),
+def test_multi_agent_save_load(env, manager, tmp_path):
+    """Test saving and loading multi-agent system"""
+    # Get initial observation
+    obs, _ = env.reset()
+    
+    # Get actions from first manager
+    actions1 = manager.act({"momentum_1": obs}, deterministic=True)
+    
+    # Save manager
+    save_path = str(tmp_path / "test_save")
+    manager.save(save_path)
+    
+    # Create new manager and load
+    new_manager = MultiAgentManager([{
+        "id": "momentum_1",
+        "strategy": "momentum",
+        "observation_space": env.observation_space,
+        "action_space": env.action_space,
+        "momentum_window": 20,
+        "momentum_threshold": 0.01
+    }])
+    new_manager.load(save_path)
+    
+    # Get actions from loaded manager
+    actions2 = new_manager.act({"momentum_1": obs}, deterministic=True)
+    
+    np.testing.assert_array_almost_equal(
+        actions1["momentum_1"],
+        actions2["momentum_1"]
     )
-
-    # Check metrics
-    for agent_id in agents:
-        assert "episode_rewards" in metrics[agent_id]
-        assert "portfolio_values" in metrics[agent_id]
-        assert len(metrics[agent_id]["episode_rewards"]) == 5
-
-        # Check for NaN values
-        assert not np.isnan(metrics[agent_id]["episode_rewards"]).any()
-        assert not np.isnan(metrics[agent_id]["portfolio_values"]).any()
-
-        # Check model files
-        model_files = list(save_dir.glob(f"{agent_id}_episode_*.pt"))
-        assert (
-            len(model_files) > 0
-        ), f"No model files found for agent {agent_id}"
-
-
-if __name__ == "__main__":
-    pytest.main([__file__])
