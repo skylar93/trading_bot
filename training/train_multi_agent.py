@@ -234,14 +234,14 @@ def train_multi_agent_system(
                         logger.info(f"{metric_name}: {value:.4f}")
 
             # Save models periodically
-            if episode > 0 and episode % save_freq == 0:
+            if (episode > 0 and episode % save_freq == 0) or episode == num_episodes - 1:
                 for agent_id, agent in agents.items():
-                    try:
-                        save_file = save_path / f"{agent_id}_episode_{episode}.pt"
-                        agent.save(save_file)
-                        logger.info(f"Saved model for agent {agent_id} at episode {episode}")
-                    except Exception as e:
-                        logger.error(f"Failed to save model for agent {agent_id}: {str(e)}")
+                    model_path = save_path / f"{agent_id}_episode_{episode}.pt"
+                    torch.save({
+                        "policy_state_dict": agent.network.state_dict(),
+                        "value_state_dict": agent.value_network.state_dict(),
+                        "optimizer_state_dict": agent.optimizer.state_dict()
+                    }, model_path)
 
             # Print progress
             if episode % 10 == 0:

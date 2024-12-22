@@ -99,6 +99,11 @@ def clean_mlflow(tmp_path):
     mlflow_path = tmp_path / "mlruns"
     mlflow_path.mkdir(parents=True)
     os.environ["MLFLOW_TRACKING_URI"] = str(mlflow_path)
+    
+    # Delete any existing experiments
+    for experiment in mlflow.search_experiments():
+        mlflow.delete_experiment(experiment.experiment_id)
+    
     yield
     shutil.rmtree(mlflow_path)
 
@@ -150,13 +155,16 @@ def test_train_multi_agent_system(env, agents, tmp_path, clean_mlflow):
     save_freq = 2
     eval_freq = 2
     
+    experiment_name = "test_train_multi_agent_system"
+    
     metrics = train_multi_agent_system(
         env=env,
         agents=agents,
         num_episodes=num_episodes,
         save_path=str(save_path),
         save_freq=save_freq,
-        eval_freq=eval_freq
+        eval_freq=eval_freq,
+        experiment_name=experiment_name
     )
     
     # Check metrics structure
@@ -180,7 +188,7 @@ def test_train_multi_agent_system(env, agents, tmp_path, clean_mlflow):
     assert mlflow_path.exists()
     
     # Check experiment artifacts
-    experiment_id = mlflow.get_experiment_by_name("trading_bot_multi_agent_training").experiment_id
+    experiment_id = mlflow.get_experiment_by_name(experiment_name).experiment_id
     runs = mlflow.search_runs(experiment_id)
     assert len(runs) == 1
 
@@ -212,3 +220,56 @@ def test_train_multi_agent_system_error_handling(env, agents, tmp_path):
                 num_episodes=1,
                 save_path=str(tmp_path)
             )
+
+def test_quick_training(env, agents, tmp_path, clean_mlflow):
+    """Test a quick training run with small dataset"""
+    save_path = tmp_path / "models"
+    num_episodes = 10
+    save_freq = 5
+    eval_freq = 2
+    
+    experiment_name = "test_quick_training"
+    
+    logger.info("Starting quick training test...")
+    
+    metrics = train_multi_agent_system(
+        env=env,
+        agents=agents,
+        num_episodes=num_episodes,
+        save_path=str(save_path),
+        save_freq=save_freq,
+        eval_freq=eval_freq,
+        experiment_name=experiment_name
+    )
+    
+    # Check learning progress
+    for agent_id in agents.keys():
+        rewards = metrics[agent_id]["episode_rewards"]
+        portfolio_values = metrics[agent_id]["portfolio_values"]
+        
+        logger.info(f"\nAgent {agent_id} training summary:")
+        logger.info(f"Initial reward: {rewards[0]:.2f}")
+        logger.info(f"Final reward: {rewards[-1]:.2f}")
+        logger.info(f"Initial portfolio: {portfolio_values[0]:.2f}")
+        logger.info(f"Final portfolio: {portfolio_values[-1]:.2f}")
+        
+        # Basic learning checks
+        assert len(rewards) == num_episodes
+        assert len(portfolio_values) == num_episodes
+        
+        # Check if models were saved
+        checkpoints = list(save_path.glob(f"{agent_id}_episode_*.pt"))
+        assert len(checkpoints) == num_episodes // save_freq
+        
+        # Load and verify final model
+        final_checkpoint = save_path / f"{agent_id}_episode_{num_episodes-1}.pt"
+        if final_checkpoint.exists():
+            loaded_agent = PPOAgent(env.observation_space, env.action_space)
+            loaded_agent.load(str(final_checkpoint))
+            
+            # Test if loaded model can generate actions
+            obs = env.reset()[0][agent_id]
+            action = loaded_agent.get_action(obs)
+            assert isinstance(action, np.ndarray)
+            assert action.shape == (1,)
+            assert -1 <= action <= 1
