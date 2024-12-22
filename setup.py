@@ -5,12 +5,12 @@ setup(
     version="0.1",
     packages=find_packages(),
     install_requires=[
-        'streamlit',
-        'plotly',
-        'pandas',
-        'numpy',
-        'ccxt',
-        'ta',
-        'websockets'
-    ]
+        "streamlit",
+        "plotly",
+        "pandas",
+        "numpy",
+        "ccxt",
+        "ta",
+        "websockets",
+    ],
 )

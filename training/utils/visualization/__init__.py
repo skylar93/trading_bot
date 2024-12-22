@@ -1,3 +1,3 @@
 from .visualization import TradingVisualizer
 
-__all__ = ['TradingVisualizer']
+__all__ = ["TradingVisualizer"]
