@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from envs.trading_env import TradingEnvironment
-from agents.strategies.ppo_agent import PPOAgent
+from agents.strategies.single.ppo_agent import PPOAgent
 import ccxt
 
 
