@@ -206,8 +206,11 @@ class MomentumPPOAgent(PPOAgent):
                 0.1, 0.0
             )
         else:
-            if (state_momentum[0] > self.momentum_threshold and action > 0) or \
-               (state_momentum[0] < -self.momentum_threshold and action < 0):
+            momentum = state_momentum[0]
+            action_value = action[0] if isinstance(action, np.ndarray) else action
+            
+            if (momentum > self.momentum_threshold and action_value > 0) or \
+               (momentum < -self.momentum_threshold and action_value < 0):
                 momentum_reward = 0.1  # Reward for following momentum
             
         modified_reward = reward + momentum_reward
@@ -220,10 +223,10 @@ class MomentumPPOAgent(PPOAgent):
         # If training failed, return empty metrics
         if metrics is None:
             return {
-                "momentum_reward": 0.0,
-                "momentum_value": 0.0,
-                "momentum_volatility": 0.0,
-                "momentum_trend": 0.0
+                "momentum_reward": float(momentum_reward),
+                "momentum_value": float(momentum),
+                "momentum_volatility": float(state_momentum[1] if len(state_momentum.shape) == 1 else state_momentum[0, 1]),
+                "momentum_trend": float(state_momentum[2] if len(state_momentum.shape) == 1 else state_momentum[0, 2])
             }
         
         # Add momentum-specific metrics

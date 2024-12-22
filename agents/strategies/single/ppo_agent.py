@@ -241,15 +241,6 @@ class PPOAgent(BaseAgent):
                     state_tensor = torch.FloatTensor(state).to(self.device)
                     value = self.value_network(state_tensor)
                     action_mean, action_std = self.network(state_tensor)
-                    
-                    # Check for NaN values
-                    if torch.isnan(action_mean).any() or torch.isnan(action_std).any():
-                        logger.warning("NaN values detected in policy network output")
-                        continue
-                    
-                    # Ensure positive standard deviation
-                    action_std = torch.clamp(action_std, min=1e-6)
-                    
                     dist = Normal(action_mean, action_std)
                     log_prob = dist.log_prob(
                         torch.FloatTensor([exp["action"]]).to(self.device)
@@ -258,14 +249,6 @@ class PPOAgent(BaseAgent):
                 values.append(value.cpu().numpy())
                 log_probs.append(log_prob.cpu().numpy())
                 dones.append(exp.get("done", False))
-            
-            # Skip update if we don't have enough valid experiences
-            if len(states) < 2:
-                return {
-                    "policy_loss": 0.0,
-                    "value_loss": 0.0,
-                    "entropy": 0.0
-                }
 
             # Convert to tensors and update
             states_tensor = torch.FloatTensor(np.array(states)).to(self.device)
@@ -319,17 +302,6 @@ class PPOAgent(BaseAgent):
                 with torch.no_grad():
                     state_tensor = torch.FloatTensor(state).to(self.device)
                     action_mean, action_std = self.network(state_tensor)
-                    
-                    # Check for NaN values
-                    if torch.isnan(action_mean).any() or torch.isnan(action_std).any():
-                        logger.warning("NaN values detected in policy network output")
-                        state, _ = env.reset()
-                        state = self._normalize_state(state)
-                        continue
-                    
-                    # Ensure positive standard deviation
-                    action_std = torch.clamp(action_std, min=1e-6)
-                    
                     value = self.value_network(state_tensor)
 
                     # Sample action
