@@ -13,6 +13,7 @@ import shutil
 import mlflow
 import time
 from training.utils.mlflow_manager import MLflowManager
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -249,3 +250,11 @@ def mock_dataloader():
             return df
 
     return MockDataLoader()
+
+
+@pytest.fixture(scope="session")
+def event_loop():
+    """Create an instance of the default event loop for each test case."""
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    yield loop
+    loop.close()
