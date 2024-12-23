@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import torch
 import logging
 from pathlib import Path
+import shutil
 
 from envs.multi_agent_env import MultiAgentTradingEnv
 from agents.strategies.single.ppo_agent import PPOAgent
@@ -76,26 +77,26 @@ def evaluate_agents(
             
             for agent_id in agents.keys():
                 if not dones[agent_id]:
-                    episode_rewards[agent_id] += rewards[agent_id]
-                    portfolio_values[agent_id].append(infos[agent_id]["portfolio_value"])
+                    episode_rewards[agent_id] += float(rewards[agent_id])
+                    portfolio_values[agent_id].append(float(infos[agent_id]["portfolio_value"]))
             
             observations = next_observations
             done = all(dones.values())
         
         # Update metrics
         for agent_id in agents.keys():
-            eval_metrics[agent_id]["mean_reward"] += episode_rewards[agent_id]
-            eval_metrics[agent_id]["mean_portfolio_value"] += portfolio_values[agent_id][-1]
+            eval_metrics[agent_id]["mean_reward"] += float(episode_rewards[agent_id])
+            eval_metrics[agent_id]["mean_portfolio_value"] += float(portfolio_values[agent_id][-1])
             
             # Calculate Sharpe ratio
-            returns = np.diff(portfolio_values[agent_id]) / portfolio_values[agent_id][:-1]
-            sharpe = np.mean(returns) / (np.std(returns) + 1e-6) * np.sqrt(252)  # Annualized
+            returns = np.diff(portfolio_values[agent_id]) / np.array(portfolio_values[agent_id][:-1])
+            sharpe = float(np.mean(returns) / (np.std(returns) + 1e-6) * np.sqrt(252))  # Annualized
             eval_metrics[agent_id]["sharpe_ratio"] += sharpe
             
             # Calculate max drawdown
             peak = np.maximum.accumulate(portfolio_values[agent_id])
             drawdown = (peak - portfolio_values[agent_id]) / peak
-            max_drawdown = np.max(drawdown)
+            max_drawdown = float(np.max(drawdown))
             eval_metrics[agent_id]["max_drawdown"] = max(
                 eval_metrics[agent_id]["max_drawdown"],
                 max_drawdown
@@ -139,12 +140,36 @@ def train_multi_agent_system(
             "portfolio_values": [],
             "policy_losses": [],
             "value_losses": [],
+            "info": [],  # Store additional info for each episode
+            "positions": [],
+            "transaction_costs": [],
+            "price_impacts": [],
         }
         for agent_id in agents.keys()
     }
 
     # Set up MLflow tracking
-    mlflow.set_experiment(experiment_name)
+    try:
+        # Check if experiment exists
+        experiment = mlflow.get_experiment_by_name(experiment_name)
+        if experiment:
+            # If experiment exists in deleted state, permanently delete it from .trash
+            if experiment.lifecycle_stage == "deleted":
+                trash_path = Path(mlflow.get_tracking_uri().replace("file://", "")) / ".trash"
+                if trash_path.exists():
+                    shutil.rmtree(trash_path)
+            else:
+                # Delete the experiment if it exists
+                mlflow.delete_experiment(experiment.experiment_id)
+            logger.info(f"Deleted existing experiment: {experiment_name}")
+        
+        # Create new experiment
+        experiment_id = mlflow.create_experiment(experiment_name)
+        mlflow.set_experiment(experiment_name)
+        logger.info(f"Created new experiment: {experiment_name} with ID: {experiment_id}")
+    except Exception as e:
+        logger.error(f"Failed to setup MLflow experiment: {str(e)}")
+        raise
     
     with mlflow.start_run():
         # Log configurations
@@ -162,21 +187,19 @@ def train_multi_agent_system(
             done = False
 
             episode_rewards = {agent_id: 0 for agent_id in agents.keys()}
+            episode_info = {agent_id: [] for agent_id in agents.keys()}
             replay_buffers = {agent_id: [] for agent_id in agents.keys()}
 
             # Episode loop
             while not done:
-                # Get actions from all agents
                 actions = {}
                 for agent_id, agent in agents.items():
                     if not dones[agent_id]:
                         action = agent.get_action(observations[agent_id])
                         actions[agent_id] = action
 
-                # Take step in environment
                 next_observations, rewards, dones, truncated, infos = env.step(actions)
 
-                # Store experiences for each agent
                 for agent_id in agents.keys():
                     if not dones[agent_id]:
                         experience = {
@@ -188,8 +211,8 @@ def train_multi_agent_system(
                         }
                         replay_buffers[agent_id].append(experience)
                         episode_rewards[agent_id] += rewards[agent_id]
+                        episode_info[agent_id].append(infos[agent_id])
 
-                # Update observations
                 observations = next_observations
                 done = all(dones.values())
 
@@ -202,17 +225,31 @@ def train_multi_agent_system(
 
                     # Update metrics
                     metrics[agent_id]["episode_rewards"].append(episode_rewards[agent_id])
-                    metrics[agent_id]["portfolio_values"].append(infos[agent_id]["portfolio_value"])
+                    metrics[agent_id]["portfolio_values"].append(episode_info[agent_id][-1]["portfolio_value"])
                     metrics[agent_id]["policy_losses"].append(loss_info["policy_loss"])
                     metrics[agent_id]["value_losses"].append(loss_info["value_loss"])
+                    metrics[agent_id]["info"].extend(episode_info[agent_id])
+                    
+                    # Calculate episode statistics
+                    positions = [info["position"] for info in episode_info[agent_id]]
+                    transaction_costs = [info["transaction_cost"] for info in episode_info[agent_id]]
+                    price_impacts = [info["price_impact"] for info in episode_info[agent_id]]
+                    
+                    metrics[agent_id]["positions"].append(np.mean(positions))
+                    metrics[agent_id]["transaction_costs"].append(np.sum(transaction_costs))
+                    metrics[agent_id]["price_impacts"].append(np.mean(price_impacts))
 
                     # Log metrics to MLflow
                     mlflow.log_metrics(
                         {
                             f"{agent_id}_reward": episode_rewards[agent_id],
-                            f"{agent_id}_portfolio_value": infos[agent_id]["portfolio_value"],
+                            f"{agent_id}_portfolio_value": episode_info[agent_id][-1]["portfolio_value"],
                             f"{agent_id}_policy_loss": loss_info["policy_loss"],
                             f"{agent_id}_value_loss": loss_info["value_loss"],
+                            f"{agent_id}_avg_position": np.mean(positions),
+                            f"{agent_id}_position_volatility": np.std(positions),
+                            f"{agent_id}_total_transaction_cost": np.sum(transaction_costs),
+                            f"{agent_id}_avg_price_impact": np.mean(price_impacts),
                         },
                         step=episode,
                     )
@@ -249,11 +286,22 @@ def train_multi_agent_system(
                 for agent_id in agents.keys():
                     logger.info(f"\n{agent_id}:")
                     logger.info(f"Episode Reward: {episode_rewards[agent_id]:.2f}")
-                    logger.info(f"Portfolio Value: {infos[agent_id]['portfolio_value']:.2f}")
+                    logger.info(f"Portfolio Value: {episode_info[agent_id][-1]['portfolio_value']:.2f}")
+                    logger.info(f"Average Position: {np.mean([info['position'] for info in episode_info[agent_id]]):.2f}")
+                    logger.info(f"Total Transaction Cost: {float(np.sum([info['transaction_cost'] for info in episode_info[agent_id]])):.4f}")
                     if agent_id in loss_infos:
-                        logger.info(f"Policy Loss: {loss_infos[agent_id]['policy_loss']:.4f}")
-                        logger.info(f"Value Loss: {loss_infos[agent_id]['value_loss']:.4f}")
+                        logger.info(f"Policy Loss: {float(loss_infos[agent_id]['policy_loss']):.4f}")
+                        logger.info(f"Value Loss: {float(loss_infos[agent_id]['value_loss']):.4f}")
                 logger.info("\n-------------------")
+
+    # Convert numpy types to Python types in metrics
+    for agent_id in metrics:
+        for key in metrics[agent_id]:
+            if isinstance(metrics[agent_id][key], (np.float32, np.float64)):
+                metrics[agent_id][key] = float(metrics[agent_id][key])
+            elif isinstance(metrics[agent_id][key], list):
+                metrics[agent_id][key] = [float(x) if isinstance(x, (np.float32, np.float64)) else x 
+                                        for x in metrics[agent_id][key]]
 
     return metrics
 

@@ -70,8 +70,30 @@ class MLflowManager:
             # Get or create experiment
             experiment = mlflow.get_experiment_by_name(self.experiment_name)
             if experiment:
-                self.experiment_id = experiment.experiment_id
-            else:
+                if experiment.lifecycle_stage == "deleted":
+                    # Clean up deleted experiment completely
+                    logger.info(f"Cleaning up deleted experiment: {self.experiment_name}")
+                    # Delete from tracking store
+                    mlflow.delete_experiment(experiment.experiment_id)
+                    # Clean up trash directory
+                    trash_path = self.tracking_dir / ".trash"
+                    if trash_path.exists():
+                        shutil.rmtree(trash_path)
+                    # Clean up experiment artifacts
+                    experiment_path = self.tracking_dir / str(experiment.experiment_id)
+                    if experiment_path.exists():
+                        shutil.rmtree(experiment_path)
+                    artifact_path = Path(experiment.artifact_location.replace("file://", ""))
+                    if artifact_path.exists():
+                        shutil.rmtree(artifact_path)
+                    # Reset experiment variable for recreation
+                    experiment = None
+                    # Small delay to ensure deletion is complete
+                    time.sleep(self.retry_delay)
+                else:
+                    self.experiment_id = experiment.experiment_id
+            
+            if not experiment:
                 artifact_location = os.path.join(
                     str(self.tracking_dir), "artifacts", self.experiment_name
                 )
