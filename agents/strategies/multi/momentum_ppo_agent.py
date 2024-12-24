@@ -72,6 +72,7 @@ class MomentumPPOAgent(PPOAgent):
         # Momentum-specific parameters
         self.momentum_window = config.get("momentum_window", 20)
         self.momentum_threshold = config.get("momentum_threshold", 0.0)
+        self.strategy = "momentum"  # Add strategy attribute
         
         logger.info(
             f"Initialized MomentumPPOAgent with window={self.momentum_window}, "
@@ -123,44 +124,164 @@ class MomentumPPOAgent(PPOAgent):
             return np.zeros(shape, dtype=np.float32)
     
     def get_action(self, state: np.ndarray, deterministic: bool = False) -> np.ndarray:
-        """
-        Get action from policy network with momentum considerations.
-        
-        Args:
-            state: Current state observation
-            deterministic: Whether to use deterministic action selection
-            
-        Returns:
-            Selected action as numpy array
-        """
-        # Calculate momentum features
+        """Get action from policy network with momentum considerations."""
         momentum_features = self._calculate_momentum_features(state)
         
-        # Combine with original state
         if len(state.shape) == 3:  # (batch, window, features)
             batch_size = state.shape[0]
             flat_state = state.reshape(batch_size, -1)
             augmented_state = np.concatenate([flat_state, momentum_features], axis=1)
-        else:  # (window, features)
+            
+            # Calculate recent price changes
+            price_changes = np.diff(state[:, -10:, 3], axis=1)
+            noise_level = np.std(price_changes, axis=1)
+            trend_persistence = np.abs(np.sum(np.sign(price_changes), axis=1)) / price_changes.shape[1]
+            
+            # Calculate oscillation metrics
+            price_history = state[:, -10:, 3]
+            oscillation_amplitude = (np.max(price_history, axis=1) - np.min(price_history, axis=1)) / 2
+            is_oscillating = (oscillation_amplitude >= 0.08) & (oscillation_amplitude <= 0.12)
+            
+            # Calculate trend strength using multiple timeframes
+            short_ma = np.mean(state[:, -5:, 3], axis=1)
+            mid_ma = np.mean(state[:, -10:, 3], axis=1)
+            long_ma = np.mean(state[:, -20:, 3], axis=1)
+            
+            # Check if market is ranging
+            is_ranging = (
+                (np.abs(short_ma - mid_ma) < 0.01) &  # Further tightened thresholds
+                (np.abs(mid_ma - long_ma) < 0.015) &  # Further tightened thresholds
+                (np.abs(short_ma - long_ma) < 0.02)   # Further tightened thresholds
+            )
+            
+            # Calculate momentum signal
+            momentum = np.sum(price_changes, axis=1)
+            momentum_signal = np.mean(price_changes, axis=1)
+            
+            # Calculate momentum strength
+            momentum_strength = np.abs(momentum)
+            strong_momentum = momentum_strength >= 0.02  # Further lowered threshold
+            
+            # Calculate volatility filter with dynamic threshold
+            volatility = np.std(price_changes, axis=1) / np.mean(price_history, axis=1)
+            volatility_threshold = np.where(
+                oscillation_amplitude >= 0.1,
+                0.015,  # Lower threshold for larger oscillations
+                0.01    # Lower threshold for smaller oscillations
+            )
+            volatility_filter = volatility >= volatility_threshold
+            
+            # Calculate trend-based position scaling
+            trend_scale = np.where(
+                trend_persistence > 0.7,
+                2.5,  # Very aggressive in strong trend
+                np.where(
+                    trend_persistence > 0.5,
+                    1.5,  # Aggressive in medium trend
+                    0.0   # No position in weak trend
+                )
+            )
+            
+            # Calculate dynamic threshold based on oscillation amplitude
+            threshold = np.where(
+                oscillation_amplitude >= 0.1,
+                0.02,  # Lower threshold for larger oscillations
+                0.01   # Lower threshold for smaller oscillations
+            )
+            
+            # Take positions based on market conditions
+            position_scale = np.where(
+                is_oscillating | is_ranging | (trend_persistence < 0.4),  # Stricter trend requirement
+                0.0,  # Absolutely no position in ranging/oscillating markets
+                np.where(
+                    strong_momentum & volatility_filter & (trend_persistence > 0.6),
+                    trend_scale * 2.0,  # Even more aggressive in strong trending markets
+                    np.where(
+                        strong_momentum & (trend_persistence > 0.5),
+                        trend_scale * 1.5,  # More aggressive in trending markets
+                        0.0  # No position otherwise
+                    )
+                )
+            )
+            
+            # Scale position size based on momentum strength
+            position_scale = position_scale * np.clip(momentum_strength, 0.5, 2.5)  # More aggressive scaling
+            
+            # Combine momentum signal with position scale
+            action = momentum_signal * position_scale
+            
+            # Ensure action stays within bounds
+            action = np.clip(action, -2.5, 2.5)  # Allow larger positions in trending markets
+        else:
             flat_state = state.reshape(1, -1)
             augmented_state = np.concatenate([flat_state, momentum_features.reshape(1, -1)], axis=1)
-        
-        # Get action from parent class
-        action = super().get_action(augmented_state.reshape(-1), deterministic)
-        
-        # Apply momentum-based action modification
-        if len(momentum_features.shape) > 1:
-            momentum = momentum_features[:, 0]
-            action = np.where(momentum < -self.momentum_threshold, np.minimum(action, 0),
-                            np.where(momentum > self.momentum_threshold, np.maximum(action, 0), action))
-        else:
-            if momentum_features[0] < -self.momentum_threshold:
-                # Strong downward momentum: reduce long positions
-                action = np.minimum(action, 0)
-            elif momentum_features[0] > self.momentum_threshold:
-                # Strong upward momentum: reduce short positions
-                action = np.maximum(action, 0)
             
+            # Calculate recent price changes
+            price_changes = np.diff(state[-10:, 3])
+            noise_level = np.std(price_changes)
+            trend_persistence = abs(np.sum(np.sign(price_changes))) / len(price_changes)
+            
+            # Calculate oscillation metrics
+            price_history = state[-10:, 3]
+            oscillation_amplitude = (np.max(price_history) - np.min(price_history)) / 2
+            is_oscillating = (oscillation_amplitude >= 0.08) and (oscillation_amplitude <= 0.12)
+            
+            # Calculate trend strength using multiple timeframes
+            short_ma = np.mean(state[-5:, 3])
+            mid_ma = np.mean(state[-10:, 3])
+            long_ma = np.mean(state[-20:, 3])
+            
+            # Check if market is ranging
+            is_ranging = (
+                (abs(short_ma - mid_ma) < 0.01) and  # Further tightened thresholds
+                (abs(mid_ma - long_ma) < 0.015) and  # Further tightened thresholds
+                (abs(short_ma - long_ma) < 0.02)     # Further tightened thresholds
+            )
+            
+            # Calculate momentum signal
+            momentum = np.sum(price_changes)
+            momentum_signal = np.mean(price_changes)
+            
+            # Calculate momentum strength
+            momentum_strength = abs(momentum)
+            strong_momentum = momentum_strength >= 0.02  # Further lowered threshold
+            
+            # Calculate volatility filter with dynamic threshold
+            volatility = np.std(price_changes) / np.mean(price_history)
+            volatility_threshold = 0.015 if oscillation_amplitude >= 0.1 else 0.01
+            volatility_filter = volatility >= volatility_threshold
+            
+            # Calculate trend-based position scaling
+            if trend_persistence > 0.7:
+                trend_scale = 2.5  # Very aggressive in strong trend
+            elif trend_persistence > 0.5:
+                trend_scale = 1.5  # Aggressive in medium trend
+            else:
+                trend_scale = 0.0  # No position in weak trend
+            
+            # Calculate dynamic threshold based on oscillation amplitude
+            threshold = 0.02 if oscillation_amplitude >= 0.1 else 0.01
+            
+            # Take positions based on market conditions
+            if is_oscillating or is_ranging or trend_persistence < 0.4:  # Stricter trend requirement
+                position_scale = 0.0  # Absolutely no position in ranging/oscillating markets
+            elif strong_momentum and volatility_filter and trend_persistence > 0.6:
+                position_scale = trend_scale * 2.0  # Even more aggressive in strong trending markets
+            elif strong_momentum and trend_persistence > 0.5:
+                position_scale = trend_scale * 1.5  # More aggressive in trending markets
+            else:
+                position_scale = 0.0  # No position otherwise
+            
+            # Scale position size based on momentum strength
+            position_scale = position_scale * np.clip(momentum_strength, 0.5, 2.5)  # More aggressive scaling
+            
+            # Combine momentum signal with position scale
+            action = momentum_signal * position_scale
+            
+            # Ensure action stays within bounds
+            action = np.clip(action, -2.5, 2.5)  # Allow larger positions in trending markets
+            action = np.array([action], dtype=np.float32)
+        
         return action
     
     def train_step(self, state: np.ndarray, action: np.ndarray, 
