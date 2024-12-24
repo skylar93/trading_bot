@@ -211,29 +211,29 @@ class MeanReversionPPOAgent(PPOAgent):
             bb_upper_dist = reversion_features[:, 1]
             bb_lower_dist = reversion_features[:, 2]
             
-            # Calculate mean reversion signals with stronger bias
-            oversold_signal = (rsi < self.oversold_threshold) & (bb_lower_dist < 0.01)  # Stricter BB condition
-            overbought_signal = (rsi > self.overbought_threshold) & (bb_upper_dist < 0.01)  # Stricter BB condition
+            # Calculate mean reversion signals with moderate conditions
+            oversold_signal = (rsi < self.oversold_threshold) & (bb_lower_dist < 0.08)  # Moderate BB condition
+            overbought_signal = (rsi > self.overbought_threshold) & (bb_upper_dist < 0.08)  # Moderate BB condition
             
-            # Calculate action bias based on signals with stronger mean reversion
+            # Calculate action bias based on signals with moderate mean reversion
             action_bias = np.zeros_like(base_action)
-            action_bias[oversold_signal] = 1.0  # Strong buy bias
-            action_bias[overbought_signal] = -1.0  # Strong sell bias
+            action_bias[oversold_signal] = 1.2  # Moderate buy bias
+            action_bias[overbought_signal] = -1.2  # Moderate sell bias
             
-            # Calculate signal strength based on distance from thresholds
-            oversold_strength = np.clip((self.oversold_threshold - rsi) / self.oversold_threshold, 0, 1)
-            overbought_strength = np.clip((rsi - self.overbought_threshold) / (100 - self.overbought_threshold), 0, 1)
+            # Calculate signal strength based on distance from thresholds with moderate minimum
+            oversold_strength = np.clip((self.oversold_threshold - rsi) / self.oversold_threshold, 0.3, 0.9)
+            overbought_strength = np.clip((rsi - self.overbought_threshold) / (100 - self.overbought_threshold), 0.3, 0.9)
             
-            # Combine signal strengths
+            # Combine signal strengths with moderate base weight
             signal_strength = np.where(oversold_signal, oversold_strength,
-                                     np.where(overbought_signal, overbought_strength, 0.1))
+                                     np.where(overbought_signal, overbought_strength, 0.3))
             
-            # Blend base action with bias (more weight on bias when signal is strong)
-            action = signal_strength * action_bias + (1 - signal_strength) * base_action
+            # Blend base action with bias (balanced weight)
+            action = 0.6 * action_bias + 0.4 * base_action
             
-            # Add mean reversion scaling based on BB distances
+            # Add mean reversion scaling based on BB distances with moderate multiplier
             bb_signal = np.maximum(bb_upper_dist, bb_lower_dist)
-            action *= (1.0 + bb_signal)  # Scale action by BB distance
+            action *= (1.3 + bb_signal)  # Moderate scaling by BB distance
             
             # Ensure action stays within bounds
             action = np.clip(action, -1.0, 1.0)
@@ -242,27 +242,27 @@ class MeanReversionPPOAgent(PPOAgent):
             bb_upper_dist = reversion_features[1]
             bb_lower_dist = reversion_features[2]
             
-            # Calculate signal strength based on distance from thresholds
-            if rsi < self.oversold_threshold and bb_lower_dist < 0.01:
-                action_bias = 1.0  # Strong buy bias
-                signal_strength = np.clip((self.oversold_threshold - rsi) / self.oversold_threshold, 0.5, 0.95)
-            elif rsi > self.overbought_threshold and bb_upper_dist < 0.01:
-                action_bias = -1.0  # Strong sell bias
-                signal_strength = np.clip((rsi - self.overbought_threshold) / (100 - self.overbought_threshold), 0.5, 0.95)
+            # Calculate signal strength based on distance from thresholds with moderate scaling
+            if rsi < self.oversold_threshold and bb_lower_dist < 0.08:  # Moderate BB condition
+                action_bias = 1.2  # Moderate buy bias
+                signal_strength = np.clip((self.oversold_threshold - rsi) / self.oversold_threshold, 0.3, 0.9)
+            elif rsi > self.overbought_threshold and bb_upper_dist < 0.08:  # Moderate BB condition
+                action_bias = -1.2  # Moderate sell bias
+                signal_strength = np.clip((rsi - self.overbought_threshold) / (100 - self.overbought_threshold), 0.3, 0.9)
             else:
                 action_bias = 0.0
-                signal_strength = 0.1
+                signal_strength = 0.3
             
-            # Blend base action with bias (more weight on bias when signal is strong)
-            action = signal_strength * action_bias + (1 - signal_strength) * base_action[0]
+            # Blend base action with bias (balanced weight)
+            action = 0.6 * action_bias + 0.4 * base_action
             
-            # Add mean reversion scaling based on BB distances
+            # Add mean reversion scaling based on BB distances with moderate multiplier
             bb_signal = max(bb_upper_dist, bb_lower_dist)
-            action *= (1.0 + bb_signal)  # Scale action by BB distance
+            action *= (1.3 + bb_signal)  # Moderate scaling by BB distance
             
-            # Ensure action stays within bounds and wrap in array
-            action = np.array([np.clip(action, -1.0, 1.0)])
-            
+            # Ensure action stays within bounds
+            action = np.clip(action, -1.0, 1.0)
+        
         return action
     
     def train_step(self, state: np.ndarray, action: np.ndarray, 
