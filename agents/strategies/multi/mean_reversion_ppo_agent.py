@@ -69,11 +69,10 @@ class MeanReversionPPOAgent(PPOAgent):
         # Mean reversion specific parameters
         self.rsi_window = config.get("rsi_window", 14)
         self.bb_window = config.get("bb_window", 20)
-        self.bb_std = config.get("bb_std", 0.5)  # Even tighter bands for more frequent signals
-        self.oversold_threshold = config.get("oversold_threshold", 49)  # More aggressive thresholds
-        self.overbought_threshold = config.get("overbought_threshold", 51)
-        self.mean_reversion_strength = config.get("mean_reversion_strength", 0.3)  # Match test environment
-        self.strategy = "mean_reversion"
+        self.bb_std = config.get("bb_std", 2.0)
+        self.oversold_threshold = config.get("oversold_threshold", 30)
+        self.overbought_threshold = config.get("overbought_threshold", 70)
+        self.strategy = "mean_reversion"  # Add strategy attribute
         
         logger.info(
             f"Initialized MeanReversionPPOAgent with RSI window={self.rsi_window}, "
@@ -183,180 +182,87 @@ class MeanReversionPPOAgent(PPOAgent):
             return np.zeros(shape, dtype=np.float32)
     
     def get_action(self, state: np.ndarray, deterministic: bool = False) -> np.ndarray:
-        """Get action from policy network with mean reversion considerations."""
-        mean_reversion_features = self._calculate_reversion_features(state)
+        """
+        Get action from policy network with mean reversion considerations.
+        
+        Args:
+            state: Current state observation
+            deterministic: Whether to use deterministic action selection
+            
+        Returns:
+            Selected action as numpy array
+        """
+        reversion_features = self._calculate_reversion_features(state)
         
         if len(state.shape) == 3:  # (batch, window, features)
             batch_size = state.shape[0]
             flat_state = state.reshape(batch_size, -1)
-            augmented_state = np.concatenate([flat_state, mean_reversion_features], axis=1)
-            
-            # Calculate recent price changes
-            price_changes = np.diff(state[:, -10:, 3], axis=1)
-            noise_level = np.std(price_changes, axis=1)
-            trend_persistence = np.abs(np.sum(np.sign(price_changes), axis=1)) / price_changes.shape[1]
-            
-            # Calculate oscillation metrics
-            price_history = state[:, -10:, 3]
-            oscillation_amplitude = (np.max(price_history, axis=1) - np.min(price_history, axis=1)) / 2
-            is_oscillating = (oscillation_amplitude >= 0.08) & (oscillation_amplitude <= 0.12)
-            
-            # Calculate mean reversion signal
-            rolling_mean = np.mean(state[:, -20:, 3], axis=1)
-            current_price = state[:, -1, 3]
-            price_deviation = (current_price - rolling_mean) / rolling_mean
-            
-            # Calculate volatility
-            volatility = np.std(price_changes, axis=1) / np.mean(price_history, axis=1)
-            high_volatility = volatility >= 0.01  # Further lowered threshold
-            
-            # Calculate trend strength using multiple timeframes
-            short_ma = np.mean(state[:, -5:, 3], axis=1)
-            mid_ma = np.mean(state[:, -10:, 3], axis=1)
-            long_ma = np.mean(state[:, -20:, 3], axis=1)
-            
-            # Check if market is ranging
-            is_ranging = (
-                (np.abs(short_ma - mid_ma) < 0.01) &  # Further tightened thresholds
-                (np.abs(mid_ma - long_ma) < 0.015) &  # Further tightened thresholds
-                (np.abs(short_ma - long_ma) < 0.02)   # Further tightened thresholds
-            )
-            
-            # Calculate mean reversion strength
-            mean_reversion_strength = np.abs(price_deviation)
-            strong_reversion = mean_reversion_strength >= 0.02  # Further lowered threshold
-            
-            # Calculate dynamic threshold based on oscillation amplitude
-            threshold = np.where(
-                oscillation_amplitude >= 0.1,
-                0.03,  # Further lowered threshold for larger oscillations
-                0.01   # Further lowered threshold for smaller oscillations
-            )
-            
-            # Calculate mean reversion signal with enhanced conditions
-            rsi = mean_reversion_features[:, 0] if len(mean_reversion_features.shape) > 1 else mean_reversion_features[0]
-            bb_upper_dist = mean_reversion_features[:, 1] if len(mean_reversion_features.shape) > 1 else mean_reversion_features[1]
-            bb_lower_dist = mean_reversion_features[:, 2] if len(mean_reversion_features.shape) > 1 else mean_reversion_features[2]
-            
-            # Calculate mean reversion signal with enhanced conditions
-            mean_reversion_signal = np.where(
-                (np.abs(price_deviation) > threshold) & 
-                (((rsi < 45) & (price_deviation > 0) & (bb_lower_dist < 0.02)) |  # Strong oversold condition
-                 ((rsi > 55) & (price_deviation < 0) & (bb_upper_dist < 0.02))),  # Strong overbought condition
-                -np.sign(price_deviation),  # Take position only when all signals confirm
-                0.0  # No position otherwise
-            )
-            
-            # Calculate position scale based on market conditions
-            position_scale = np.where(
-                is_oscillating & is_ranging & (trend_persistence < 0.3) & ~high_volatility,
-                0.8,  # Large position in ideal ranging markets
-                np.where(
-                    strong_reversion & ~high_volatility & (trend_persistence < 0.4),
-                    0.5,  # Moderate position in strong mean reversion
-                    0.2   # Small position otherwise
-                )
-            )
-            
-            # Add RSI-based scaling
-            rsi_scale = np.where(
-                ((rsi < 40) & (bb_lower_dist < 0.01)) | ((rsi > 60) & (bb_upper_dist < 0.01)),  # Very strong signals
-                1.5,  # Aggressive position size
-                np.where(
-                    ((rsi < 45) & (bb_lower_dist < 0.02)) | ((rsi > 55) & (bb_upper_dist < 0.02)),  # Strong signals
-                    1.2,  # Increased position size
-                    1.0   # Normal position size
-                )
-            )
-            
-            # Scale position size based on mean reversion strength and RSI
-            position_scale = position_scale * np.clip(mean_reversion_strength, 0.1, 0.8) * rsi_scale
-            
-            # Combine mean reversion signal with position scale
-            action = mean_reversion_signal * position_scale
-            
-            # Ensure action stays within bounds
-            action = np.clip(action, -0.8, 0.8)  # Allow larger positions in ideal conditions
-        else:
+            augmented_state = np.concatenate([flat_state, reversion_features], axis=1)
+        else:  # (window, features)
             flat_state = state.reshape(1, -1)
-            augmented_state = np.concatenate([flat_state, mean_reversion_features.reshape(1, -1)], axis=1)
+            augmented_state = np.concatenate([flat_state, reversion_features.reshape(1, -1)], axis=1)
+        
+        # Get base action from policy network
+        base_action = super().get_action(augmented_state.reshape(-1), deterministic)
+        
+        # Apply mean reversion based action modification
+        if len(reversion_features.shape) > 1:
+            rsi = reversion_features[:, 0]
+            bb_upper_dist = reversion_features[:, 1]
+            bb_lower_dist = reversion_features[:, 2]
             
-            # Calculate recent price changes
-            price_changes = np.diff(state[-10:, 3])
-            noise_level = np.std(price_changes)
-            trend_persistence = abs(np.sum(np.sign(price_changes))) / len(price_changes)
+            # Calculate mean reversion signals with stronger bias
+            oversold_signal = (rsi < self.oversold_threshold) & (bb_lower_dist < 0.01)  # Stricter BB condition
+            overbought_signal = (rsi > self.overbought_threshold) & (bb_upper_dist < 0.01)  # Stricter BB condition
             
-            # Calculate oscillation metrics
-            price_history = state[-10:, 3]
-            oscillation_amplitude = (np.max(price_history) - np.min(price_history)) / 2
-            is_oscillating = (oscillation_amplitude >= 0.08) and (oscillation_amplitude <= 0.12)
+            # Calculate action bias based on signals with stronger mean reversion
+            action_bias = np.zeros_like(base_action)
+            action_bias[oversold_signal] = 1.0  # Strong buy bias
+            action_bias[overbought_signal] = -1.0  # Strong sell bias
             
-            # Calculate mean reversion signal
-            rolling_mean = np.mean(state[-20:, 3])
-            current_price = state[-1, 3]
-            price_deviation = (current_price - rolling_mean) / rolling_mean
+            # Calculate signal strength based on distance from thresholds
+            oversold_strength = np.clip((self.oversold_threshold - rsi) / self.oversold_threshold, 0, 1)
+            overbought_strength = np.clip((rsi - self.overbought_threshold) / (100 - self.overbought_threshold), 0, 1)
             
-            # Calculate volatility
-            volatility = np.std(price_changes) / np.mean(price_history)
-            high_volatility = volatility >= 0.01  # Further lowered threshold
+            # Combine signal strengths
+            signal_strength = np.where(oversold_signal, oversold_strength,
+                                     np.where(overbought_signal, overbought_strength, 0.1))
             
-            # Calculate trend strength using multiple timeframes
-            short_ma = np.mean(state[-5:, 3])
-            mid_ma = np.mean(state[-10:, 3])
-            long_ma = np.mean(state[-20:, 3])
+            # Blend base action with bias (more weight on bias when signal is strong)
+            action = signal_strength * action_bias + (1 - signal_strength) * base_action
             
-            # Check if market is ranging
-            is_ranging = (
-                (abs(short_ma - mid_ma) < 0.01) and  # Further tightened thresholds
-                (abs(mid_ma - long_ma) < 0.015) and  # Further tightened thresholds
-                (abs(short_ma - long_ma) < 0.02)     # Further tightened thresholds
-            )
-            
-            # Calculate mean reversion strength
-            mean_reversion_strength = abs(price_deviation)
-            strong_reversion = mean_reversion_strength >= 0.02  # Further lowered threshold
-            
-            # Calculate dynamic threshold based on oscillation amplitude
-            threshold = 0.03 if oscillation_amplitude >= 0.1 else 0.01  # Further lowered thresholds
-            
-            # Calculate mean reversion signal with enhanced conditions
-            rsi = mean_reversion_features[0]  # Extract RSI from features
-            bb_upper_dist = mean_reversion_features[1]
-            bb_lower_dist = mean_reversion_features[2]
-            
-            # Calculate mean reversion signal with enhanced conditions
-            mean_reversion_signal = 0.0
-            if abs(price_deviation) > threshold:
-                if ((rsi < 45 and price_deviation > 0 and bb_lower_dist < 0.02) or  # Strong oversold condition
-                    (rsi > 55 and price_deviation < 0 and bb_upper_dist < 0.02)):   # Strong overbought condition
-                    mean_reversion_signal = -np.sign(price_deviation)
-            
-            # Calculate position scale based on market conditions
-            if is_oscillating and is_ranging and trend_persistence < 0.3 and not high_volatility:
-                position_scale = 0.8  # Large position in ideal ranging markets
-            elif strong_reversion and not high_volatility and trend_persistence < 0.4:
-                position_scale = 0.5  # Moderate position in strong mean reversion
-            else:
-                position_scale = 0.2  # Small position otherwise
-            
-            # Add RSI-based scaling
-            if (rsi < 40 and bb_lower_dist < 0.01) or (rsi > 60 and bb_upper_dist < 0.01):  # Very strong signals
-                rsi_scale = 1.5  # Aggressive position size
-            elif (rsi < 45 and bb_lower_dist < 0.02) or (rsi > 55 and bb_upper_dist < 0.02):  # Strong signals
-                rsi_scale = 1.2  # Increased position size
-            else:
-                rsi_scale = 1.0  # Normal position size
-            
-            # Scale position size based on mean reversion strength and RSI
-            position_scale = position_scale * np.clip(mean_reversion_strength, 0.1, 0.8) * rsi_scale
-            
-            # Combine mean reversion signal with position scale
-            action = mean_reversion_signal * position_scale
+            # Add mean reversion scaling based on BB distances
+            bb_signal = np.maximum(bb_upper_dist, bb_lower_dist)
+            action *= (1.0 + bb_signal)  # Scale action by BB distance
             
             # Ensure action stays within bounds
-            action = np.clip(action, -0.8, 0.8)  # Allow larger positions in ideal conditions
-            action = np.array([action], dtype=np.float32)
-        
+            action = np.clip(action, -1.0, 1.0)
+        else:
+            rsi = reversion_features[0]
+            bb_upper_dist = reversion_features[1]
+            bb_lower_dist = reversion_features[2]
+            
+            # Calculate signal strength based on distance from thresholds
+            if rsi < self.oversold_threshold and bb_lower_dist < 0.01:
+                action_bias = 1.0  # Strong buy bias
+                signal_strength = np.clip((self.oversold_threshold - rsi) / self.oversold_threshold, 0.5, 0.95)
+            elif rsi > self.overbought_threshold and bb_upper_dist < 0.01:
+                action_bias = -1.0  # Strong sell bias
+                signal_strength = np.clip((rsi - self.overbought_threshold) / (100 - self.overbought_threshold), 0.5, 0.95)
+            else:
+                action_bias = 0.0
+                signal_strength = 0.1
+            
+            # Blend base action with bias (more weight on bias when signal is strong)
+            action = signal_strength * action_bias + (1 - signal_strength) * base_action[0]
+            
+            # Add mean reversion scaling based on BB distances
+            bb_signal = max(bb_upper_dist, bb_lower_dist)
+            action *= (1.0 + bb_signal)  # Scale action by BB distance
+            
+            # Ensure action stays within bounds and wrap in array
+            action = np.array([np.clip(action, -1.0, 1.0)])
+            
         return action
     
     def train_step(self, state: np.ndarray, action: np.ndarray, 

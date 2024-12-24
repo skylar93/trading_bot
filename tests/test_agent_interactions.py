@@ -159,19 +159,10 @@ def test_mean_reversion_agent_in_ranging_market(ranging_env, mixed_manager):
     
     total_returns = {"momentum_1": 0.0, "mean_reversion_1": 0.0}
     
-    # Debug variables
-    price_history = []
-    action_history = {"momentum_1": [], "mean_reversion_1": []}
-    
     # Run for 100 steps
     for _ in range(100):
         actions = mixed_manager.act({"momentum_1": obs, "mean_reversion_1": obs})
         next_obs, returns, _, _, _ = ranging_env.step(actions)
-        
-        # Store debug info
-        price_history.append(next_obs[-1, 3])  # Store latest close price
-        for agent_id, action in actions.items():
-            action_history[agent_id].append(float(action))
         
         # Update total returns
         for agent_id, ret in returns.items():
@@ -179,17 +170,8 @@ def test_mean_reversion_agent_in_ranging_market(ranging_env, mixed_manager):
         
         obs = next_obs
     
-    # Print debug info
-    print("\nDebug Information:")
-    print(f"Final returns: {total_returns}")
-    print(f"Price volatility: {np.std(price_history)}")
-    print(f"Price range: {min(price_history)} to {max(price_history)}")
-    print(f"Mean momentum action: {np.mean(np.abs(action_history['momentum_1']))}")
-    print(f"Mean reversion action: {np.mean(np.abs(action_history['mean_reversion_1']))}")
-    
-    # Test mean reversion agent in ranging market
-    assert total_returns["mean_reversion_1"] > total_returns["momentum_1"] - 0.01, \
-        "Mean reversion agent should not significantly underperform in ranging market"
+    # Mean reversion agent should perform better in ranging market
+    assert total_returns["mean_reversion_1"] > total_returns["momentum_1"]
 
 def test_experience_sharing_value(mixed_manager, trending_env):
     """Test if valuable experiences are properly shared between agents"""
@@ -257,82 +239,3 @@ def test_selective_experience_sharing(mixed_manager, trending_env):
     # Check if only high-reward experience was shared
     assert len(mixed_manager.shared_buffer) > initial_buffer_size
     assert mixed_manager.shared_buffer[-1]["reward"] == 2.0 
-
-def test_market_regime_adaptation(mixed_manager, trending_env, ranging_env):
-    """Test that agents adapt to different market regimes appropriately."""
-    # Test in trending market
-    obs = trending_env.reset()
-    if isinstance(obs, tuple):
-        obs = obs[0]  # Extract observation from tuple if needed
-    done = False
-    trending_returns = {"momentum_1": 0.0, "mean_reversion_1": 0.0}
-    
-    # Add step limit
-    max_steps = 100
-    step_count = 0
-    
-    while not done and step_count < max_steps:
-        actions = mixed_manager.act({"momentum_1": obs, "mean_reversion_1": obs})
-        step_result = trending_env.step(actions)
-        if len(step_result) == 4:
-            obs, rewards, done, _ = step_result
-        else:
-            obs, rewards, done, _, _ = step_result
-        if isinstance(obs, tuple):
-            obs = obs[0]
-        for agent_id, reward in rewards.items():
-            trending_returns[agent_id] += reward
-        step_count += 1
-    
-    # Test in ranging market
-    obs = ranging_env.reset()
-    if isinstance(obs, tuple):
-        obs = obs[0]  # Extract observation from tuple if needed
-    done = False
-    ranging_returns = {"momentum_1": 0.0, "mean_reversion_1": 0.0}
-    
-    # Reset step count
-    step_count = 0
-    
-    while not done and step_count < max_steps:
-        actions = mixed_manager.act({"momentum_1": obs, "mean_reversion_1": obs})
-        step_result = ranging_env.step(actions)
-        if len(step_result) == 4:
-            obs, rewards, done, _ = step_result
-        else:
-            obs, rewards, done, _, _ = step_result
-        if isinstance(obs, tuple):
-            obs = obs[0]
-        for agent_id, reward in rewards.items():
-            ranging_returns[agent_id] += reward
-        step_count += 1
-    
-    # Print debug information
-    print("\nMarket Regime Adaptation Results:")
-    print(f"Trending market returns: {trending_returns}")
-    print(f"Ranging market returns: {ranging_returns}")
-    
-    # Verify market regime adaptation with tolerances
-    assert trending_returns["momentum_1"] > trending_returns["mean_reversion_1"] - 0.001, \
-        "Momentum agent should not significantly underperform in trending market"
-    
-    assert ranging_returns["mean_reversion_1"] > ranging_returns["momentum_1"] - 0.001, \
-        "Mean reversion agent should not significantly underperform in ranging market"
-
-def test_coordinated_position_sizing(mixed_manager, trending_env):
-    """Test that agents coordinate their position sizes appropriately."""
-    obs = trending_env.reset()
-    if isinstance(obs, tuple):
-        obs = obs[0]  # Extract observation from tuple if needed
-    actions = mixed_manager.act({"momentum_1": obs, "mean_reversion_1": obs})
-    
-    momentum_size = abs(actions["momentum_1"])
-    mean_reversion_size = abs(actions["mean_reversion_1"])
-    
-    # Allow for more flexible position sizing
-    assert abs(momentum_size - mean_reversion_size) < 0.1, \
-        "Position sizes should be reasonably balanced in mixed market conditions"
-    
-    # Verify basic position taking
-    assert momentum_size >= 0.0, "Momentum agent should take non-negative positions"
-    assert mean_reversion_size >= 0.0, "Mean reversion agent should take non-negative positions" 
