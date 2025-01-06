@@ -17,6 +17,23 @@ def create_price_chart(data: pd.DataFrame, indicators: Optional[Dict] = None) ->
             logger.warning("No data available for chart creation")
             return None
 
+        # Get the first asset's columns
+        if any("_$" in col for col in data.columns):
+            # Multi-asset format
+            asset = next(col.split("_")[0] for col in data.columns if "_$" in col)
+            open_col = f"{asset}_$open"
+            high_col = f"{asset}_$high"
+            low_col = f"{asset}_$low"
+            close_col = f"{asset}_$close"
+            volume_col = f"{asset}_$volume"
+        else:
+            # Single asset format
+            open_col = "$open"
+            high_col = "$high"
+            low_col = "$low"
+            close_col = "$close"
+            volume_col = "$volume"
+
         fig = make_subplots(
             rows=2, cols=1,
             shared_xaxes=True,
@@ -29,10 +46,10 @@ def create_price_chart(data: pd.DataFrame, indicators: Optional[Dict] = None) ->
         fig.add_trace(
             go.Candlestick(
                 x=data.index,
-                open=data["open"],
-                high=data["high"],
-                low=data["low"],
-                close=data["close"],
+                open=data[open_col],
+                high=data[high_col],
+                low=data[low_col],
+                close=data[close_col],
                 name="OHLCV"
             ),
             row=1, col=1
@@ -52,13 +69,13 @@ def create_price_chart(data: pd.DataFrame, indicators: Optional[Dict] = None) ->
                 )
 
         # Add volume bars
-        colors = ["red" if row["open"] > row["close"] else "green" 
+        colors = ["red" if row[open_col] > row[close_col] else "green" 
                  for _, row in data.iterrows()]
         
         fig.add_trace(
             go.Bar(
                 x=data.index,
-                y=data["volume"],
+                y=data[volume_col],
                 name="Volume",
                 marker_color=colors
             ),
@@ -85,52 +102,48 @@ def create_price_chart(data: pd.DataFrame, indicators: Optional[Dict] = None) ->
         logger.error(f"Error creating price chart: {str(e)}", exc_info=True)
         return None
 
-def create_portfolio_chart(portfolio_history: List[Dict]) -> Optional[go.Figure]:
-    """Create portfolio performance chart"""
-    try:
-        if not portfolio_history:
-            logger.warning("No portfolio data available")
-            return None
-
-        # Convert to DataFrame
-        df = pd.DataFrame(portfolio_history)
-        df.set_index("timestamp", inplace=True)
-
-        fig = go.Figure()
+def create_portfolio_chart(portfolio_values: List[float]) -> Optional[go.Figure]:
+    """Create portfolio value chart
+    
+    Args:
+        portfolio_values: List of portfolio values
         
+    Returns:
+        Plotly figure or None if creation fails
+    """
+    try:
+        if not portfolio_values:
+            logger.warning("No portfolio values provided")
+            return None
+            
+        # Create DataFrame with index
+        df = pd.DataFrame({
+            'portfolio_value': portfolio_values,
+            'timestamp': pd.date_range(end=pd.Timestamp.now(), periods=len(portfolio_values), freq='1H')
+        })
+        
+        # Create figure
+        fig = go.Figure()
         fig.add_trace(
             go.Scatter(
-                x=df.index,
-                y=df["value"],
-                name="Portfolio Value",
-                line=dict(color="#00ff00", width=2)
+                x=df['timestamp'],
+                y=df['portfolio_value'],
+                mode='lines',
+                name='Portfolio Value'
             )
         )
-
-        # Add annotations for significant points
-        if len(df) > 1:
-            initial_value = df["value"].iloc[0]
-            current_value = df["value"].iloc[-1]
-            pct_change = ((current_value - initial_value) / initial_value) * 100
-
-            fig.add_annotation(
-                x=df.index[-1],
-                y=current_value,
-                text=f"Current: ${current_value:.2f}<br>Change: {pct_change:.1f}%",
-                showarrow=True,
-                arrowhead=1
-            )
-
+        
+        # Update layout
         fig.update_layout(
-            title="Portfolio Performance",
-            xaxis_title="Time",
-            yaxis_title="Value ($)",
-            height=400,
-            template="plotly_dark",
-            showlegend=True
+            title='Portfolio Performance',
+            xaxis_title='Time',
+            yaxis_title='Portfolio Value (USDT)',
+            height=400
         )
-
+        
+        logger.info("Successfully created portfolio chart")
         return fig
+        
     except Exception as e:
         logger.error(f"Error creating portfolio chart: {str(e)}", exc_info=True)
         return None

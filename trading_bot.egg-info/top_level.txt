@@ -1,3 +1,5 @@
 data
 deployment
+risk
 tests
+trading_bot

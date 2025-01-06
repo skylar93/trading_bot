@@ -13,8 +13,8 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 sys.path.insert(0, project_root)
 
 import streamlit as st
-from deployment.web_interface.pages.live_trading import render_live_trading
-from deployment.web_interface.utils.state import init_session_state
+from pages.Live_Trading import render_live_trading
+from utils.state import init_session_state
 
 # Configure logging
 logging.basicConfig(
@@ -47,7 +47,7 @@ async def main():
         # Navigation
         page = st.sidebar.selectbox(
             "Select Page",
-            ["Live Trading", "Backtest Results", "Settings"]
+            ["Backtest Results", "Live Trading", "Settings"]
         )
 
         # Content based on selected page

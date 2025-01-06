@@ -15,9 +15,9 @@ class RiskConfig:
     max_position_size: float
     stop_loss_pct: float
     max_drawdown_pct: float
-    daily_trade_limit: int
-    min_trade_size: float
-    max_leverage: float
+    daily_trade_limit: int = 1000
+    min_trade_size: float = 0.01
+    max_leverage: float = 1.0
     volatility_lookback: int = 20
     risk_free_rate: float = 0.02
     # Portfolio risk parameters
@@ -72,151 +72,100 @@ class RiskManager:
         var = self.calculate_var(returns, confidence_level)
         return abs(returns[returns <= -var].mean())
 
-    def update_correlation_matrix(self, asset_prices: Dict[str, pd.Series]) -> None:
-        """Update correlation matrix for portfolio assets
+    def update_correlation_matrix(self, price_data: Dict[str, pd.Series]) -> None:
+        """Update correlation matrix for multi-asset portfolio
         
         Args:
-            asset_prices: Dictionary of asset price series
+            price_data: Dictionary of price series by asset
         """
-        # Skip if no prices or single asset
-        if not asset_prices or len(asset_prices) < 2:
-            self._correlation_matrix = None
-            return
+        # Calculate returns if not already stored
+        for asset, prices in price_data.items():
+            if asset not in self._asset_returns:
+                self._asset_returns[asset] = prices.pct_change().dropna()
             
-        # Calculate returns
-        returns = {}
-        for asset, prices in asset_prices.items():
-            if len(prices) > 1:  # Need at least 2 points for returns
-                returns[asset] = prices.pct_change().fillna(0)
+        # Create correlation matrix
+        returns_df = pd.DataFrame({
+            asset: returns.tail(self.config.correlation_window)
+            for asset, returns in self._asset_returns.items()
+        })
         
-        if not returns:
-            self._correlation_matrix = None
-            return
-            
-        # Calculate correlation matrix
-        return_df = pd.DataFrame(returns)
-        self._correlation_matrix = return_df.corr()
+        self._correlation_matrix = returns_df.corr()
         self._last_correlation_update = pd.Timestamp.now()
 
-    def get_portfolio_var(self, positions: Dict[str, float], portfolio_value: float) -> float:
-        """Calculate portfolio VaR
-        
-        Args:
-            positions: Dictionary of asset positions (amount in base currency)
-            portfolio_value: Total portfolio value
-        
-        Returns:
-            Portfolio VaR as fraction of portfolio value
-        """
-        # Skip if no correlation matrix or positions
-        if self._correlation_matrix is None or not positions:
-            return 0.0
-        
-        # Get position weights
-        weights = {}
-        for asset, pos in positions.items():
-            if portfolio_value > 0:
-                weights[asset] = pos / portfolio_value
-            else:
-                weights[asset] = 0
-        
-        # Calculate portfolio variance using correlation matrix
-        portfolio_var = 0.0
-        assets = list(weights.keys())
-        
-        if not assets:
-            return 0.0
-        
-        # Use simple historical VaR if correlation data is missing
-        if self._correlation_matrix is None:
-            return 0.02  # Default to 2% VaR
-        
-        try:
-            # Calculate portfolio variance
-            for i, asset_i in enumerate(assets):
-                for j, asset_j in enumerate(assets):
-                    if asset_i in self._correlation_matrix.index and asset_j in self._correlation_matrix.columns:
-                        portfolio_var += (
-                            weights[asset_i]
-                            * weights[asset_j]
-                            * self._correlation_matrix.loc[asset_i, asset_j]
-                        )
-        except Exception as e:
-            self.logger.warning(f"Error calculating portfolio VaR: {str(e)}")
-            return 0.02  # Default to 2% VaR
-        
-        return min(max(np.sqrt(portfolio_var), 0), 1)  # Bound between 0 and 1
-
     def check_correlation_limits(self, asset1: str, asset2: str) -> bool:
-        """Check if correlation between assets exceeds limits
-
+        """Check if correlation between assets is within limits
+        
         Args:
             asset1: First asset name
             asset2: Second asset name
-
+            
         Returns:
             Whether correlation is within limits
         """
         if self._correlation_matrix is None:
-            return True
+            return bool(False)
             
         if asset1 not in self._correlation_matrix.index or asset2 not in self._correlation_matrix.columns:
-            return True
+            return bool(False)
             
         correlation = abs(self._correlation_matrix.loc[asset1, asset2])
         return bool(correlation <= self.config.max_correlation)
 
-    def calculate_position_size(
-        self,
-        portfolio_value: float,
-        price: float,
-        volatility: Optional[float] = None,
-        asset_name: Optional[str] = None,
-        current_positions: Optional[Dict[str, float]] = None
-    ) -> float:
-        """Calculate position size based on risk parameters
+    def get_portfolio_var(self, positions: Dict[str, float], portfolio_value: float) -> float:
+        """Calculate portfolio Value at Risk
 
         Args:
-            portfolio_value: Current portfolio value
-            price: Current asset price
-            volatility: Optional volatility estimate
-            asset_name: Optional asset name for correlation checks
-            current_positions: Optional dictionary of current positions
+            positions: Dictionary of positions {asset: size}
+            portfolio_value: Total portfolio value
 
         Returns:
-            Position size in base currency
+            Portfolio VaR
         """
-        # Base position size
-        max_size = portfolio_value * self.config.max_position_size
-
-        # Apply volatility scaling if provided
-        if volatility is not None:
-            # Scale down position size as volatility increases
-            vol_scale = 1.0 / (1.0 + volatility)
-            max_size *= vol_scale
-
-        # Check correlation limits if we have portfolio information
-        if asset_name and current_positions:
-            for existing_asset in current_positions:
-                if not self.check_correlation_limits(asset_name, existing_asset):
-                    self.logger.warning(f"Correlation limit exceeded between {asset_name} and {existing_asset}")
-                    max_size *= 0.5  # Reduce position size for highly correlated assets
-
-        # Check portfolio VaR if we have positions
-        if current_positions:
-            test_positions = current_positions.copy()
-            test_positions[asset_name] = max_size
-            portfolio_var = self.get_portfolio_var(test_positions, portfolio_value)
-            
-            if portfolio_var > self.config.portfolio_var_limit:
-                var_scale = self.config.portfolio_var_limit / portfolio_var
-                max_size *= var_scale
-
-        # Ensure minimum trade size
-        if max_size < portfolio_value * self.config.min_trade_size:
+        if not positions or portfolio_value <= 0:
             return 0.0
 
-        return max_size
+        # Calculate position weights as fraction of portfolio value
+        weights = {}
+        for asset, size in positions.items():
+            if asset in self._asset_returns:
+                # Use latest price from returns data
+                latest_price = (1 + self._asset_returns[asset].iloc[-1]) * (1 / (1 + self._asset_returns[asset].iloc[-2]))
+                position_value = size * latest_price
+                weights[asset] = position_value / portfolio_value
+            else:
+                weights[asset] = 0.0
+
+        # Calculate individual VaRs
+        asset_vars = []
+        assets = []  # Keep track of assets in the same order
+        for asset, weight in weights.items():
+            if asset in self._asset_returns and weight != 0:
+                var = self.calculate_var(
+                    self._asset_returns[asset],
+                    self.config.var_confidence_level
+                )
+                asset_vars.append(var)
+                assets.append(asset)
+
+        if not asset_vars:  # No valid assets with VaR
+            return 0.0
+
+        # Create variance-covariance matrix
+        var_matrix = np.diag(asset_vars)
+        weights_array = np.array([weights[asset] for asset in assets])
+        
+        # Calculate portfolio VaR
+        if self._correlation_matrix is None or len(assets) == 1:
+            # If no correlation matrix or single asset, use simple sum of weighted VaRs
+            portfolio_var = np.sqrt(weights_array.dot(var_matrix).dot(weights_array.T))
+        else:
+            # Use full variance-covariance matrix with matching assets
+            correlation_subset = self._correlation_matrix.loc[assets, assets].values
+            portfolio_var = np.sqrt(
+                weights_array.dot(var_matrix).dot(correlation_subset).dot(weights_array.T)
+            )
+            
+        return min(portfolio_var, 1.0)  # Cap at 100% to avoid unrealistic values
 
     def check_trade_limits(self, timestamp: pd.Timestamp) -> bool:
         """Check if trade is allowed based on daily limits"""
@@ -292,6 +241,36 @@ class RiskManager:
         leverage = position_value / portfolio_value
         return leverage <= self.config.max_leverage
 
+    def calculate_position_size(
+        self,
+        portfolio_value: float,
+        price: float,
+        volatility: Optional[float] = None,
+        current_positions: Optional[Dict[str, float]] = None,
+        asset_name: Optional[str] = None
+    ) -> float:
+        """Calculate position size considering all risk factors"""
+        # Basic position size limit based on config
+        position_size = portfolio_value * self.config.max_position_size
+
+        # Adjust for volatility if provided
+        if volatility is not None and volatility > 0:
+            vol_scalar = 1.0 / (1.0 + volatility)
+            position_size *= vol_scalar
+
+        # Adjust for correlation if relevant
+        if current_positions and asset_name and self._correlation_matrix is not None:
+            # Reduce position size based on correlation with existing positions
+            for pos_asset, pos_value in current_positions.items():
+                if not self.check_correlation_limits(asset_name, pos_asset):
+                    position_size *= 0.5  # Reduce size for highly correlated assets
+
+        # Ensure minimum size
+        if position_size < portfolio_value * self.config.min_trade_size:
+            return 0.0
+
+        return min(position_size, portfolio_value * self.config.max_position_size)
+
     def process_trade_signal(
         self,
         signal: Union[Dict[str, Any], pd.Timestamp],
@@ -302,23 +281,19 @@ class RiskManager:
         current_positions: Optional[Dict[str, float]] = None,
         timestamp: Optional[pd.Timestamp] = None
     ) -> Union[bool, Dict[str, Any]]:
-        """Process trade signal with risk management
-        
-        This method supports both old and new interfaces:
-        Old: process_trade_signal(signal_dict) -> bool
-        New: process_trade_signal(timestamp, portfolio_value, price, volatility, current_leverage) -> Dict
-        
+        """Process trade signal and check all risk limits
+
         Args:
-            signal: Either a trade signal dictionary or timestamp
-            portfolio_value: Current portfolio value (new interface)
-            price: Current price (new interface)
-            volatility: Current volatility (new interface)
-            current_leverage: Current leverage (new interface)
-            current_positions: Current positions by asset (new interface)
-            timestamp: Optional timestamp (for backward compatibility)
-        
+            signal: Trade signal or timestamp
+            portfolio_value: Optional portfolio value
+            price: Optional current price
+            volatility: Optional volatility measure
+            current_leverage: Optional current leverage
+            current_positions: Optional current positions
+            timestamp: Optional timestamp
+
         Returns:
-            Either boolean (old interface) or risk assessment dictionary (new interface)
+            Trade permission and risk assessment
         """
         # Detect which interface is being used
         if isinstance(signal, dict):

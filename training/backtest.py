@@ -164,10 +164,15 @@ class Backtester:
             Dictionary with trade results
         """
         try:
+            # Log trade attempt
+            self.logger.info("Attempting trade execution - Timestamp: %s, Action: %.4f", timestamp, action)
+            self.logger.debug("Price data: %s", price_data)
+            
             # Validate price data
             required_columns = {"$open", "$high", "$low", "$close", "$volume"}
             missing_cols = required_columns - set(price_data.keys())
             if missing_cols:
+                self.logger.warning("Missing required columns: %s", missing_cols)
                 self.position = 0
                 return {
                     "timestamp": timestamp,
@@ -177,12 +182,9 @@ class Backtester:
                     "reason": f"Missing required columns: {missing_cols}",
                 }
 
-            # Bound action between -1 and 1
-            action = max(min(action, 1.0), -1.0)
-
-            # Skip very small actions (increased threshold)
-            if abs(action) < 1e-4:  # Increased threshold for small actions
-                self.position = 0  # Reset position for very small actions
+            # Skip very small actions
+            if abs(action) < 1e-4:  # Strict threshold for small actions
+                self.logger.debug("Skipping trade - action too small: %.6f", action)
                 return {
                     "timestamp": timestamp,
                     "position": self.position,
@@ -191,15 +193,19 @@ class Backtester:
                     "reason": "action too small",
                 }
 
+            # Bound action between -1 and 1
+            action = max(min(action, 1.0), -1.0)
+            self.logger.debug("Bounded action: %.4f", action)
+
             current_price = price_data["$close"]
+            self.logger.info("Current price: %.2f, Current balance: %.2f", current_price, self.balance)
 
             # Calculate trade size
             if action > 0:  # Buy
                 # Check if balance is too low for any meaningful trade
                 if self.balance < 10:  # Minimum balance requirement
-                    self.position = (
-                        0  # Reset position for insufficient balance
-                    )
+                    self.logger.warning("Insufficient balance for minimum trade: %.2f", self.balance)
+                    self.position = 0  # Reset position for insufficient balance
                     return {
                         "timestamp": timestamp,
                         "position": self.position,
@@ -208,13 +214,14 @@ class Backtester:
                         "reason": "insufficient balance for minimum trade",
                     }
 
-                max_shares = self.balance / (
-                    current_price * (1 + self.trading_fee)
-                )
+                max_shares = self.balance / (current_price * (1 + self.trading_fee))
                 trade_shares = max_shares * abs(action)
+                self.logger.debug("Buy calculation - Max shares: %.4f, Trade shares: %.4f", 
+                               max_shares, trade_shares)
 
                 # Skip if trade size is too small
-                if trade_shares < 1e-4:
+                if trade_shares < 1e-6:
+                    self.logger.warning("Trade size too small: %.6f", trade_shares)
                     self.position = 0  # Reset position for very small trades
                     return {
                         "timestamp": timestamp,
@@ -225,12 +232,12 @@ class Backtester:
                     }
 
                 cost = trade_shares * current_price * (1 + self.trading_fee)
+                self.logger.info("Buy trade - Shares: %.4f, Cost: %.2f", trade_shares, cost)
 
                 if cost > self.balance:  # Added balance check
-                    self.logger.warning("Insufficient balance for trade")
-                    self.position = (
-                        0  # Reset position for insufficient balance
-                    )
+                    self.logger.warning("Insufficient balance for trade - Cost: %.2f, Balance: %.2f",
+                                     cost, self.balance)
+                    self.position = 0  # Reset position for insufficient balance
                     return {
                         "timestamp": timestamp,
                         "position": self.position,
@@ -244,6 +251,7 @@ class Backtester:
 
                 # Clean up dust after buy
                 if self.position < 1e-4:
+                    self.logger.debug("Cleaning up dust position: %.6f", self.position)
                     self.position = 0
 
                 trade = {
@@ -262,6 +270,7 @@ class Backtester:
             else:  # Sell
                 # Skip if no position to sell
                 if self.position < 1e-4:
+                    self.logger.debug("No position to sell: %.6f", self.position)
                     self.position = 0  # Clean up any dust
                     return {
                         "timestamp": timestamp,
@@ -272,9 +281,12 @@ class Backtester:
                     }
 
                 trade_shares = self.position * abs(action)
+                self.logger.debug("Sell calculation - Position: %.4f, Trade shares: %.4f",
+                               self.position, trade_shares)
 
                 # Skip if trade size is too small
-                if trade_shares < 1e-4:
+                if trade_shares < 1e-6:
+                    self.logger.warning("Trade size too small: %.6f", trade_shares)
                     self.position = 0  # Reset position for very small trades
                     return {
                         "timestamp": timestamp,
@@ -284,15 +296,15 @@ class Backtester:
                         "reason": "trade size too small",
                     }
 
-                proceeds = (
-                    trade_shares * current_price * (1 - self.trading_fee)
-                )
+                proceeds = trade_shares * current_price * (1 - self.trading_fee)
+                self.logger.info("Sell trade - Shares: %.4f, Proceeds: %.2f", trade_shares, proceeds)
 
                 self.balance += proceeds
                 self.position -= trade_shares
 
                 # Clean up any dust (very small remaining position)
                 if self.position < 1e-4:
+                    self.logger.debug("Cleaning up dust position: %.6f", self.position)
                     self.position = 0
 
                 trade = {
@@ -309,17 +321,20 @@ class Backtester:
                 }
 
             self.trades.append(trade)
+            self.logger.info("Trade executed successfully: %s", trade)
 
             # Update portfolio value
             portfolio_value = self._calculate_portfolio_value(current_price)
             self.portfolio_values.append(portfolio_value)
             self.peak_value = max(self.peak_value, portfolio_value)
+            self.logger.info("Updated portfolio value: %.2f (Peak: %.2f)", 
+                          portfolio_value, self.peak_value)
 
             trade["portfolio_value"] = portfolio_value
             return trade
 
         except Exception as e:
-            self.logger.error(f"Error executing trade: {str(e)}")
+            self.logger.error(f"Error executing trade: {str(e)}", exc_info=True)
             self.position = 0  # Reset position on error
             return {
                 "timestamp": timestamp,

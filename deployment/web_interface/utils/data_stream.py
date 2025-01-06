@@ -96,11 +96,11 @@ class DataStream:
         
         return {
             "timestamp": self.test_timestamp,
-            "open": open_price,
-            "high": high_price,
-            "low": low_price,
-            "close": close_price,
-            "volume": volume
+            "$open": open_price,
+            "$high": high_price,
+            "$low": low_price,
+            "$close": close_price,
+            "$volume": volume
         }
     
     async def start(self):
@@ -175,7 +175,7 @@ class DataStream:
         try:
             if not self.data_buffer:
                 return None
-            return self.data_buffer[-1]["close"]
+            return self.data_buffer[-1]["$close"]
         except Exception as e:
             logger.error(f"Error getting latest price: {str(e)}", exc_info=True)
             return None
@@ -186,23 +186,23 @@ class DataStream:
             indicators = {}
             
             # Simple Moving Averages
-            indicators["SMA20"] = data["close"].rolling(window=20).mean()
-            indicators["SMA50"] = data["close"].rolling(window=50).mean()
+            indicators["SMA20"] = data["$close"].rolling(window=20).mean()
+            indicators["SMA50"] = data["$close"].rolling(window=50).mean()
             
             # Exponential Moving Averages
-            indicators["EMA20"] = data["close"].ewm(span=20, adjust=False).mean()
-            indicators["EMA50"] = data["close"].ewm(span=50, adjust=False).mean()
+            indicators["EMA20"] = data["$close"].ewm(span=20, adjust=False).mean()
+            indicators["EMA50"] = data["$close"].ewm(span=50, adjust=False).mean()
             
             # RSI
-            delta = data["close"].diff()
+            delta = data["$close"].diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
             rs = gain / loss
             indicators["RSI"] = 100 - (100 / (1 + rs))
             
             # Bollinger Bands
-            sma20 = data["close"].rolling(window=20).mean()
-            std20 = data["close"].rolling(window=20).std()
+            sma20 = data["$close"].rolling(window=20).mean()
+            std20 = data["$close"].rolling(window=20).std()
             indicators["BB_upper"] = sma20 + (std20 * 2)
             indicators["BB_lower"] = sma20 - (std20 * 2)
             

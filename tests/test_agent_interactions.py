@@ -232,10 +232,10 @@ def test_selective_experience_sharing(mixed_manager, trending_env):
     mixed_manager.train_step(experiences)
     initial_buffer_size = len(mixed_manager.shared_buffer)
     
-    # Update with large reward
-    experiences["momentum_1"]["reward"] = 2.0
+    # Update with large reward that exceeds min_share_reward threshold
+    experiences["momentum_1"]["reward"] = 0.6  # Exceeds 0.5 threshold
     mixed_manager.train_step(experiences)
     
     # Check if only high-reward experience was shared
     assert len(mixed_manager.shared_buffer) > initial_buffer_size
-    assert mixed_manager.shared_buffer[-1]["reward"] == 2.0 
+    assert mixed_manager.shared_buffer[-1]["reward"] == 0.6 

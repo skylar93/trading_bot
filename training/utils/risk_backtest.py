@@ -8,7 +8,7 @@ import pandas as pd
 import numpy as np
 import logging
 from datetime import datetime
-from ..backtest import Backtester
+from training.backtest import Backtester
 from risk.risk_manager import RiskManager, RiskConfig
 
 logger = logging.getLogger(__name__)
@@ -33,6 +33,9 @@ class RiskAwareBacktester(Backtester):
             initial_balance: Initial portfolio balance
             trading_fee: Trading fee as decimal
         """
+        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger.info("Initializing RiskAwareBacktester")
+        
         # Initialize risk manager first
         self.risk_manager = RiskManager(risk_config or RiskConfig())
         self.trade_counter = 0  # For generating trade IDs
@@ -42,9 +45,12 @@ class RiskAwareBacktester(Backtester):
         if any("_$" in col for col in data.columns):
             # Store original multi-asset data
             self.full_data = data.copy()
+            self.logger.info("Multi-asset data detected with columns: %s", data.columns.tolist())
             
             # Get the first asset's data for parent class
             first_asset = data.columns[0].split("_")[0]
+            self.logger.info("Using %s as primary asset", first_asset)
+            
             parent_data = pd.DataFrame({
                 "$open": data[f"{first_asset}_$open"],
                 "$high": data[f"{first_asset}_$high"],
@@ -56,9 +62,11 @@ class RiskAwareBacktester(Backtester):
         else:
             parent_data = data
             self.full_data = data.copy()
+            self.logger.info("Single-asset data detected with columns: %s", data.columns.tolist())
             
         # Then initialize parent class with single asset data
         super().__init__(parent_data, initial_balance, trading_fee)
+        self.logger.info("Parent Backtester initialized with balance: %.2f", initial_balance)
 
     def reset(self):
         """Reset backtester and risk manager state"""
@@ -110,31 +118,26 @@ class RiskAwareBacktester(Backtester):
             else 0.0
         )
 
-    def execute_trade(
-        self, timestamp: datetime, action: float, price_data: Dict[str, float]
-    ) -> Dict:
-        """
-        Execute trade with risk management checks
-
-        Args:
-            timestamp: Current timestamp
-            action: Trading action (-1 to 1)
-            price_data: Dictionary with current prices
-
-        Returns:
-            Dictionary with trade results
-        """
-        # Skip if no action
-        if abs(action) < 1e-5:
-            return super().execute_trade(timestamp, 0, price_data)
-
-        # Get current state
-        portfolio_value = self.balance + sum(self.get_position_value(asset) for asset in self.positions)
+    def execute_trade(self, timestamp, action, price_data):
+        """Execute trade with risk management"""
+        # Calculate portfolio metrics
+        def get_price_value(v):
+            if isinstance(v, pd.Series):
+                return float(v.iloc[0])
+            return float(v)
+            
+        portfolio_value = self._calculate_portfolio_value(
+            get_price_value(next(v for k, v in price_data.items() if k.endswith("_$close")))
+        )
         volatility = self.calculate_volatility()
         leverage = self.get_current_leverage()
 
+        self.logger.debug("Portfolio metrics - Value: %.2f, Volatility: %.2f, Leverage: %.2f",
+                        portfolio_value, volatility, leverage)
+
         # Extract asset from price data
         asset = next(k.split("_")[0] for k in price_data.keys() if k.endswith("_$close"))
+        self.logger.debug("Processing asset: %s", asset)
 
         # Update correlation matrix with recent price data
         asset_prices = {}
@@ -148,20 +151,29 @@ class RiskAwareBacktester(Backtester):
         risk_assessment = self.risk_manager.process_trade_signal(
             signal=pd.Timestamp(timestamp),
             portfolio_value=portfolio_value,
-            price=price_data[f"{asset}_$close"],
+            price=get_price_value(price_data[f"{asset}_$close"]),
             volatility=volatility,
             current_leverage=leverage,
             current_positions=self.positions
         )
+        
+        self.logger.info("Risk assessment result: %s", risk_assessment)
 
         # Check if trade is allowed
         if not risk_assessment["allowed"]:
-            logger.info(
-                f"Trade rejected by risk management: {risk_assessment['reason']}"
-            )
-            result = super().execute_trade(timestamp, 0, price_data)
-            result["portfolio_value"] = portfolio_value
-            return result
+            self.logger.warning("Trade rejected by risk management: %s", risk_assessment["reason"])
+            return {
+                "timestamp": timestamp,
+                "type": "none",
+                "price": get_price_value(price_data[f"{asset}_$close"]),
+                "size": 0.0,
+                "portfolio_value": portfolio_value,
+                "balance": self.balance,
+                "position": 0.0,
+                "pnl": 0.0,
+                "action": "error",
+                "reason": risk_assessment["reason"]
+            }
 
         # Adjust position size based on risk limits
         original_size = abs(action)
@@ -169,6 +181,9 @@ class RiskAwareBacktester(Backtester):
             original_size,
             risk_assessment["position_size"] / portfolio_value
         )
+        
+        self.logger.info("Position sizing - Original: %.2f, Risk-adjusted: %.2f",
+                        original_size, risk_adjusted_size)
 
         # Further adjust based on portfolio VaR
         portfolio_var = self.risk_manager.get_portfolio_var(
@@ -178,15 +193,29 @@ class RiskAwareBacktester(Backtester):
         if portfolio_var > self.risk_manager.config.portfolio_var_limit:
             var_scale = self.risk_manager.config.portfolio_var_limit / portfolio_var
             risk_adjusted_size *= var_scale
+            self.logger.info("VaR adjustment - Portfolio VaR: %.4f, Scale: %.2f, Final size: %.2f",
+                           portfolio_var, var_scale, risk_adjusted_size)
 
         # Maintain original direction
         risk_adjusted_action = np.sign(action) * risk_adjusted_size
+        self.logger.info("Final action: %.2f", risk_adjusted_action)
 
         # Execute trade with adjusted size
-        trade_result = super().execute_trade(
-            timestamp, risk_adjusted_action, price_data
-        )
-        trade_result["portfolio_value"] = portfolio_value
+        trade_result = {
+            "timestamp": timestamp,
+            "type": "buy" if risk_adjusted_action > 0 else "sell" if risk_adjusted_action < 0 else "none",
+            "price": get_price_value(price_data[f"{asset}_$close"]),
+            "size": risk_adjusted_action * portfolio_value / get_price_value(price_data[f"{asset}_$close"]),
+            "portfolio_value": portfolio_value,
+            "balance": self.balance,
+            "position": risk_adjusted_action,
+            "pnl": 0.0,  # Will be updated after trade execution
+            "action": "trade",
+            "cost": risk_adjusted_action * portfolio_value if risk_adjusted_action > 0 else 0.0,
+            "revenue": -risk_adjusted_action * portfolio_value if risk_adjusted_action < 0 else 0.0
+        }
+        
+        self.logger.info("Trade execution result: %s", trade_result)
 
         # Update positions if trade was executed
         if abs(risk_adjusted_action) > 1e-5:
@@ -194,10 +223,9 @@ class RiskAwareBacktester(Backtester):
             trade_id = f"trade_{self.trade_counter}"
             
             # Update position tracking
-            asset = next(k.split("_")[0] for k in price_data.keys() if k.endswith("_$close"))
             if asset not in self.positions:
                 self.positions[asset] = 0
-            self.positions[asset] += trade_result.get("size", 0)
+            self.positions[asset] += trade_result["size"]
             
             # Clean up zero positions
             if abs(self.positions[asset]) < 1e-6:
@@ -206,9 +234,11 @@ class RiskAwareBacktester(Backtester):
             self.risk_manager.update_after_trade(
                 trade_id=trade_id,
                 timestamp=pd.Timestamp(timestamp),
-                entry_price=price_data[f"{asset}_$close"],
+                entry_price=get_price_value(price_data[f"{asset}_$close"]),
                 position_type="long" if action > 0 else "short",
             )
+            
+            self.logger.info("Updated positions: %s", self.positions)
 
             # Add risk metrics to result
             trade_result.update({
@@ -264,17 +294,31 @@ class RiskAwareBacktester(Backtester):
                 )
                 continue
 
-            # Extract asset from column names
-            asset = next(col.split("_")[0] for col in current_data.columns if col.endswith("_$close"))
+            # Determine if we're using single or multi-asset format
+            is_multi_asset = any("_$" in col for col in current_data.columns)
+            
+            if is_multi_asset:
+                # Extract asset from column names for multi-asset format
+                asset = next(col.split("_")[0] for col in current_data.columns if col.endswith("_$close"))
+                price_data = {
+                    f"{asset}_$open": current_data[f"{asset}_$open"],
+                    f"{asset}_$high": current_data[f"{asset}_$high"],
+                    f"{asset}_$low": current_data[f"{asset}_$low"],
+                    f"{asset}_$close": current_data[f"{asset}_$close"],
+                    f"{asset}_$volume": current_data[f"{asset}_$volume"],
+                }
+            else:
+                # Use simple format for single asset
+                asset = "default"
+                price_data = {
+                    f"{asset}_$open": current_data["$open"],
+                    f"{asset}_$high": current_data["$high"],
+                    f"{asset}_$low": current_data["$low"],
+                    f"{asset}_$close": current_data["$close"],
+                    f"{asset}_$volume": current_data["$volume"],
+                }
 
-            # Execute trade with asset-prefixed price data
-            price_data = {
-                f"{asset}_$open": current_data[f"{asset}_$open"],
-                f"{asset}_$high": current_data[f"{asset}_$high"],
-                f"{asset}_$low": current_data[f"{asset}_$low"],
-                f"{asset}_$close": current_data[f"{asset}_$close"],
-                f"{asset}_$volume": current_data[f"{asset}_$volume"],
-            }
+            # Execute trade
             trade_result = self.execute_trade(
                 timestamp, action, price_data
             )
@@ -284,8 +328,9 @@ class RiskAwareBacktester(Backtester):
                 self.trades.append(trade_result)
 
             # Update portfolio value
+            close_col = f"{asset}_$close" if is_multi_asset else "$close"
             portfolio_value = trade_result.get("portfolio_value", self._calculate_portfolio_value(
-                current_data[f"{asset}_$close"]
+                float(current_data[close_col].iloc[0])
             ))
             self.portfolio_values.append(portfolio_value)
             self.peak_value = max(self.peak_value, portfolio_value)
@@ -302,6 +347,7 @@ class RiskAwareBacktester(Backtester):
             "total_trades": len(self.trades),
             "profitable_trades": sum(1 for t in self.trades if t.get("pnl", 0) > 0),
             "total_pnl": sum(t.get("pnl", 0) for t in self.trades),
+            "metrics": {}  # Add empty metrics dict to be filled by BacktestManager
         }
 
         # Add risk management summary

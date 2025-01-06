@@ -6,28 +6,13 @@ import streamlit as st
 import asyncio
 import logging
 from typing import Optional
-
-from deployment.web_interface.components import (
-    create_price_chart,
-    create_portfolio_chart,
-    display_portfolio_metrics,
-    display_trading_metrics,
-    display_recent_trades,
-    trading_controls,
-    debug_controls,
-    indicator_controls
-)
+from components.charts import create_price_chart, create_portfolio_chart
+from components.metrics import display_trading_metrics, display_portfolio_metrics, display_recent_trades
+from components.controls import trading_controls, debug_controls, indicator_controls
 from deployment.web_interface.utils.data_stream import DataStream
 from deployment.web_interface.utils.state import init_session_state, update_portfolio_history
 
 logger = logging.getLogger(__name__)
-
-st.set_page_config(
-    page_title="Live Trading - Trading Bot",
-    page_icon="🚀",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
 
 async def render_live_trading():
     """Render live trading page"""
