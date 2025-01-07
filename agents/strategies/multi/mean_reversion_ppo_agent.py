@@ -212,28 +212,28 @@ class MeanReversionPPOAgent(PPOAgent):
             bb_lower_dist = reversion_features[:, 2]
             
             # Calculate mean reversion signals with stronger conditions
-            oversold_signal = (rsi < self.oversold_threshold) & (bb_lower_dist < 0.05)  # Tighter BB condition
-            overbought_signal = (rsi > self.overbought_threshold) & (bb_upper_dist < 0.05)  # Tighter BB condition
+            oversold_signal = (rsi < self.oversold_threshold) & (bb_lower_dist < 0.02)  # Tighter BB condition
+            overbought_signal = (rsi > self.overbought_threshold) & (bb_upper_dist < 0.02)  # Tighter BB condition
             
             # Calculate action bias based on signals with stronger mean reversion
             action_bias = np.zeros_like(base_action)
-            action_bias[oversold_signal] = 1.5  # Stronger buy bias
-            action_bias[overbought_signal] = -1.5  # Stronger sell bias
+            action_bias[oversold_signal] = 2.0  # Stronger buy bias
+            action_bias[overbought_signal] = -2.0  # Stronger sell bias
             
             # Calculate signal strength based on distance from thresholds with higher minimum
-            oversold_strength = np.clip((self.oversold_threshold - rsi) / self.oversold_threshold, 0.5, 1.0)
-            overbought_strength = np.clip((rsi - self.overbought_threshold) / (100 - self.overbought_threshold), 0.5, 1.0)
+            oversold_strength = np.clip((self.oversold_threshold - rsi) / self.oversold_threshold, 0.6, 1.0)
+            overbought_strength = np.clip((rsi - self.overbought_threshold) / (100 - self.overbought_threshold), 0.6, 1.0)
             
             # Combine signal strengths with higher base weight
             signal_strength = np.where(oversold_signal, oversold_strength,
-                                     np.where(overbought_signal, overbought_strength, 0.5))
+                                    np.where(overbought_signal, overbought_strength, 0.6))
             
             # Blend base action with bias (more weight on bias)
-            action = 0.8 * action_bias + 0.2 * base_action
+            action = 0.9 * action_bias + 0.1 * base_action
             
             # Add mean reversion scaling based on BB distances with stronger multiplier
             bb_signal = np.maximum(bb_upper_dist, bb_lower_dist)
-            action *= (1.5 + bb_signal)  # Stronger scaling by BB distance
+            action *= (2.0 + bb_signal)  # Stronger scaling by BB distance
             
             # Ensure action stays within bounds
             action = np.clip(action, -1.0, 1.0)
@@ -243,22 +243,22 @@ class MeanReversionPPOAgent(PPOAgent):
             bb_lower_dist = reversion_features[2]
             
             # Calculate signal strength based on distance from thresholds with stronger scaling
-            if rsi < self.oversold_threshold and bb_lower_dist < 0.05:  # Tighter BB condition
-                action_bias = 1.5  # Stronger buy bias
-                signal_strength = np.clip((self.oversold_threshold - rsi) / self.oversold_threshold, 0.5, 1.0)
-            elif rsi > self.overbought_threshold and bb_upper_dist < 0.05:  # Tighter BB condition
-                action_bias = -1.5  # Stronger sell bias
-                signal_strength = np.clip((rsi - self.overbought_threshold) / (100 - self.overbought_threshold), 0.5, 1.0)
+            if rsi < self.oversold_threshold and bb_lower_dist < 0.02:  # Tighter BB condition
+                action_bias = 2.0  # Stronger buy bias
+                signal_strength = np.clip((self.oversold_threshold - rsi) / self.oversold_threshold, 0.6, 1.0)
+            elif rsi > self.overbought_threshold and bb_upper_dist < 0.02:  # Tighter BB condition
+                action_bias = -2.0  # Stronger sell bias
+                signal_strength = np.clip((rsi - self.overbought_threshold) / (100 - self.overbought_threshold), 0.6, 1.0)
             else:
                 action_bias = 0.0
-                signal_strength = 0.5
+                signal_strength = 0.6
             
             # Blend base action with bias (more weight on bias)
-            action = 0.8 * action_bias + 0.2 * base_action
+            action = 0.9 * action_bias + 0.1 * base_action
             
             # Add mean reversion scaling based on BB distances with stronger multiplier
             bb_signal = max(bb_upper_dist, bb_lower_dist)
-            action *= (1.5 + bb_signal)  # Stronger scaling by BB distance
+            action *= (2.0 + bb_signal)  # Stronger scaling by BB distance
             
             # Ensure action stays within bounds
             action = np.clip(action, -1.0, 1.0)
@@ -312,23 +312,23 @@ class MeanReversionPPOAgent(PPOAgent):
             oversold_signal = (rsi < self.oversold_threshold) & (bb_lower_dist < 0.02)
             overbought_signal = (rsi > self.overbought_threshold) & (bb_upper_dist < 0.02)
             
-            # Calculate rewards for different scenarios
+            # Calculate rewards for different scenarios with higher rewards
             buy_reward = np.where(
                 oversold_signal & (action > 0.2) & (price_changes > 0),
-                0.5 * np.abs(price_changes) + 0.2,  # Strong reward for profitable buy
+                1.0 * np.abs(price_changes) + 0.3,  # Stronger reward for profitable buy
                 np.where(
                     oversold_signal & (action > 0),
-                    0.1,  # Small reward for correct direction
+                    0.2,  # Higher reward for correct direction
                     0.0
                 )
             )
             
             sell_reward = np.where(
                 overbought_signal & (action < -0.2) & (price_changes < 0),
-                0.5 * np.abs(price_changes) + 0.2,  # Strong reward for profitable sell
+                1.0 * np.abs(price_changes) + 0.3,  # Stronger reward for profitable sell
                 np.where(
                     overbought_signal & (action < 0),
-                    0.1,  # Small reward for correct direction
+                    0.2,  # Higher reward for correct direction
                     0.0
                 )
             )
@@ -345,17 +345,17 @@ class MeanReversionPPOAgent(PPOAgent):
             next_price = next_state[..., 3][-1]
             price_change = (next_price - current_price) / current_price
             
-            # Calculate rewards for mean reversion trades
-            if rsi < self.oversold_threshold:  # Oversold condition
+            # Calculate rewards for mean reversion trades with higher rewards
+            if rsi < self.oversold_threshold and bb_lower_dist < 0.02:  # Oversold condition
                 if action[0] > 0.2 and price_change > 0:  # Strong buy and price went up
-                    reversion_reward = 0.5 * abs(price_change) + 0.2  # Strong reward for profitable buy
+                    reversion_reward = 1.0 * abs(price_change) + 0.3  # Stronger reward for profitable buy
                 elif action[0] > 0:  # Any buy action
-                    reversion_reward = 0.1  # Small reward for correct direction
-            elif rsi > self.overbought_threshold:  # Overbought condition
+                    reversion_reward = 0.2  # Higher reward for correct direction
+            elif rsi > self.overbought_threshold and bb_upper_dist < 0.02:  # Overbought condition
                 if action[0] < -0.2 and price_change < 0:  # Strong sell and price went down
-                    reversion_reward = 0.5 * abs(price_change) + 0.2  # Strong reward for profitable sell
+                    reversion_reward = 1.0 * abs(price_change) + 0.3  # Stronger reward for profitable sell
                 elif action[0] < 0:  # Any sell action
-                    reversion_reward = 0.1  # Small reward for correct direction
+                    reversion_reward = 0.2  # Higher reward for correct direction
             
         modified_reward = reward + reversion_reward
         

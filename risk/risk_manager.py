@@ -269,7 +269,9 @@ class RiskManager:
         if position_size < portfolio_value * self.config.min_trade_size:
             return 0.0
 
-        return min(position_size, portfolio_value * self.config.max_position_size)
+        # Apply strict position size limit
+        max_allowed = portfolio_value * self.config.max_position_size
+        return min(position_size, max_allowed)
 
     def process_trade_signal(
         self,

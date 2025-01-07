@@ -40,6 +40,7 @@ class RiskAwareBacktester(Backtester):
         self.risk_manager = RiskManager(risk_config or RiskConfig())
         self.trade_counter = 0  # For generating trade IDs
         self.positions = {}  # Dictionary to track positions by asset
+        self.entry_prices = {}  # Dictionary to track entry prices by asset
         
         # Convert multi-asset data to single asset format for parent class
         if any("_$" in col for col in data.columns):
@@ -74,6 +75,7 @@ class RiskAwareBacktester(Backtester):
         self.risk_manager.reset()
         self.trade_counter = 0
         self.positions = {}
+        self.entry_prices = {}
 
     def get_position_value(self, asset: str) -> float:
         """Get current position value for an asset"""
@@ -106,17 +108,12 @@ class RiskAwareBacktester(Backtester):
 
     def get_current_leverage(self) -> float:
         """Calculate current leverage ratio"""
-        if self.position == 0:
-            return 0.0
+        total_position_value = 0.0
+        for asset in self.positions:
+            total_position_value += self.get_position_value(asset)
 
-        total_position_value = self.position * self.data["$close"].iloc[-1]
         portfolio_value = self.balance + total_position_value
-
-        return (
-            abs(total_position_value / portfolio_value)
-            if portfolio_value > 0
-            else 0.0
-        )
+        return abs(total_position_value / portfolio_value) if portfolio_value > 0 else 0.0
 
     def execute_trade(self, timestamp, action, price_data):
         """Execute trade with risk management"""
@@ -126,9 +123,8 @@ class RiskAwareBacktester(Backtester):
                 return float(v.iloc[0])
             return float(v)
             
-        portfolio_value = self._calculate_portfolio_value(
-            get_price_value(next(v for k, v in price_data.items() if k.endswith("_$close")))
-        )
+        current_price = get_price_value(next(v for k, v in price_data.items() if k.endswith("_$close")))
+        portfolio_value = self._calculate_portfolio_value(current_price)
         volatility = self.calculate_volatility()
         leverage = self.get_current_leverage()
 
@@ -151,28 +147,28 @@ class RiskAwareBacktester(Backtester):
         risk_assessment = self.risk_manager.process_trade_signal(
             signal=pd.Timestamp(timestamp),
             portfolio_value=portfolio_value,
-            price=get_price_value(price_data[f"{asset}_$close"]),
+            price=current_price,
             volatility=volatility,
             current_leverage=leverage,
             current_positions=self.positions
         )
-        
+
         self.logger.info("Risk assessment result: %s", risk_assessment)
 
         # Check if trade is allowed
         if not risk_assessment["allowed"]:
-            self.logger.warning("Trade rejected by risk management: %s", risk_assessment["reason"])
+            self.logger.warning("Trade rejected by risk management: %s", risk_assessment.get("reason", "Unknown"))
             return {
                 "timestamp": timestamp,
                 "type": "none",
-                "price": get_price_value(price_data[f"{asset}_$close"]),
+                "price": current_price,
                 "size": 0.0,
                 "portfolio_value": portfolio_value,
                 "balance": self.balance,
                 "position": 0.0,
                 "pnl": 0.0,
                 "action": "error",
-                "reason": risk_assessment["reason"]
+                "reason": risk_assessment.get("reason", "Unknown")
             }
 
         # Adjust position size based on risk limits
@@ -180,7 +176,11 @@ class RiskAwareBacktester(Backtester):
         risk_adjusted_size = min(
             original_size,
             risk_assessment["position_size"] / portfolio_value
-        )
+        ) if portfolio_value > 0 else 0.0
+        
+        # Ensure position size does not exceed max limit
+        max_position_size = self.risk_manager.config.max_position_size
+        risk_adjusted_size = min(risk_adjusted_size, max_position_size)
         
         self.logger.info("Position sizing - Original: %.2f, Risk-adjusted: %.2f",
                         original_size, risk_adjusted_size)
@@ -200,58 +200,142 @@ class RiskAwareBacktester(Backtester):
         risk_adjusted_action = np.sign(action) * risk_adjusted_size
         self.logger.info("Final action: %.2f", risk_adjusted_action)
 
-        # Execute trade with adjusted size
-        trade_result = {
-            "timestamp": timestamp,
-            "type": "buy" if risk_adjusted_action > 0 else "sell" if risk_adjusted_action < 0 else "none",
-            "price": get_price_value(price_data[f"{asset}_$close"]),
-            "size": risk_adjusted_action * portfolio_value / get_price_value(price_data[f"{asset}_$close"]),
-            "portfolio_value": portfolio_value,
-            "balance": self.balance,
-            "position": risk_adjusted_action,
-            "pnl": 0.0,  # Will be updated after trade execution
-            "action": "trade",
-            "cost": risk_adjusted_action * portfolio_value if risk_adjusted_action > 0 else 0.0,
-            "revenue": -risk_adjusted_action * portfolio_value if risk_adjusted_action < 0 else 0.0
-        }
+        # Calculate trade size and costs
+        trade_size = risk_adjusted_action * portfolio_value / current_price if current_price > 0 else 0.0
         
-        self.logger.info("Trade execution result: %s", trade_result)
+        # Ensure trade size does not exceed position limits
+        max_trade_size = self.risk_manager.config.max_position_size * portfolio_value / current_price
+        if abs(trade_size) > abs(max_trade_size):
+            trade_size = np.sign(trade_size) * abs(max_trade_size)
+            self.logger.info("Trade size adjusted to respect position limits: %.4f", trade_size)
+        
+        trading_cost = abs(trade_size * current_price * self.trading_fee)
+        
+        # Calculate PnL for existing position
+        position_pnl = 0.0
+        if asset in self.positions and abs(self.positions[asset]) > 1e-6:
+            last_position = self.positions[asset]
+            entry_price = self.entry_prices.get(asset, current_price)
+            if risk_adjusted_action < 0:  # Sell
+                # Calculate PnL only for the portion being sold
+                sell_size = min(abs(trade_size), abs(last_position))
+                position_pnl = sell_size * (current_price - entry_price) - \
+                             sell_size * current_price * self.trading_fee
+            else:
+                position_pnl = last_position * (current_price - entry_price)
+        
+        # Calculate trade value
+        trade_value = abs(trade_size * current_price)
 
-        # Update positions if trade was executed
+        # Update portfolio value and balance based on trade type
+        if risk_adjusted_action > 0:  # Buy
+            trading_cost = trade_value * self.trading_fee
+            new_balance = self.balance - trade_value - trading_cost
+            trade_type = "buy"
+            trade_cost = trade_value + trading_cost
+            trade_revenue = None
+            
+            # Update position and entry price
+            if asset not in self.positions:
+                self.positions[asset] = 0
+                self.entry_prices[asset] = current_price
+            else:
+                # Calculate weighted average entry price
+                total_position = self.positions[asset] + trade_size
+                if total_position > 0:
+                    self.entry_prices[asset] = (
+                        self.positions[asset] * self.entry_prices[asset] + trade_size * current_price
+                    ) / total_position
+            self.positions[asset] += trade_size
+            
+        elif risk_adjusted_action < 0:  # Sell
+            trading_cost = trade_value * self.trading_fee
+            trade_revenue = trade_value - trading_cost
+            new_balance = self.balance + trade_revenue
+            trade_type = "sell"
+            trade_cost = None
+            
+            # Update position and entry price
+            if asset not in self.positions:
+                self.positions[asset] = 0
+                self.entry_prices[asset] = current_price
+            else:
+                # Calculate weighted average entry price for remaining position
+                total_position = self.positions[asset] + trade_size
+                if total_position < 0:
+                    self.entry_prices[asset] = (
+                        self.positions[asset] * self.entry_prices[asset] + trade_size * current_price
+                    ) / total_position
+                self.positions[asset] += trade_size
+            
+        else:  # No trade
+            trading_cost = 0
+            new_balance = self.balance
+            trade_type = "none"
+            trade_cost = None
+            trade_revenue = None
+
+        # Clean up zero positions
+        if asset in self.positions and abs(self.positions[asset]) < 1e-6:
+            del self.positions[asset]
+            del self.entry_prices[asset]
+
+        # Execute trade with adjusted size
         if abs(risk_adjusted_action) > 1e-5:
             self.trade_counter += 1
             trade_id = f"trade_{self.trade_counter}"
-            
-            # Update position tracking
-            if asset not in self.positions:
-                self.positions[asset] = 0
-            self.positions[asset] += trade_result["size"]
-            
-            # Clean up zero positions
-            if abs(self.positions[asset]) < 1e-6:
-                del self.positions[asset]
 
             self.risk_manager.update_after_trade(
                 trade_id=trade_id,
-                timestamp=pd.Timestamp(timestamp),
-                entry_price=get_price_value(price_data[f"{asset}_$close"]),
+                timestamp=timestamp,
+                entry_price=current_price,
                 position_type="long" if action > 0 else "short",
             )
             
             self.logger.info("Updated positions: %s", self.positions)
 
-            # Add risk metrics to result
-            trade_result.update({
-                "risk_metrics": {
-                    "volatility": volatility,
-                    "leverage": leverage,
-                    "drawdown": risk_assessment["current_drawdown"],
-                    "adjusted_size": risk_adjusted_size,
-                    "original_size": original_size,
-                    "portfolio_var": portfolio_var
-                }
-            })
+        # Update portfolio value after trade
+        new_portfolio_value = self._calculate_portfolio_value(current_price)
+        self.portfolio_values.append(new_portfolio_value)
+        self.peak_value = max(self.peak_value, new_portfolio_value)
+        
+        # Update instance variables
+        self.balance = new_balance
 
+        # Create trade result
+        trade_result = {
+            "timestamp": timestamp,
+            "type": trade_type,
+            "price": current_price,
+            "size": abs(trade_size),  # Use absolute size for consistency
+            "portfolio_value": new_portfolio_value,
+            "balance": new_balance,
+            "position": risk_adjusted_action,
+            "pnl": position_pnl - trading_cost,
+            "action": "trade"
+        }
+
+        # Add cost or revenue
+        if trade_cost is not None:
+            trade_result["cost"] = trade_cost
+        if trade_revenue is not None:
+            trade_result["revenue"] = trade_revenue
+
+        # Add risk metrics
+        trade_result["risk_metrics"] = {
+            "volatility": volatility,
+            "leverage": leverage,
+            "drawdown": risk_assessment["current_drawdown"],
+            "adjusted_size": risk_adjusted_size,
+            "original_size": original_size,
+            "trading_cost": trading_cost,
+            "position_pnl": position_pnl
+        }
+
+        # Add to trades list
+        self.trades.append(trade_result)
+
+        self.logger.info("Trade execution result: %s", trade_result)
         return trade_result
 
     def run(
@@ -382,3 +466,40 @@ class RiskAwareBacktester(Backtester):
         results["risk_summary"] = risk_summary
 
         return results
+
+    def _calculate_portfolio_value(self, current_price: float) -> float:
+        """Calculate total portfolio value including cash and positions.
+        
+        Args:
+            current_price: Current price of the asset
+            
+        Returns:
+            Total portfolio value
+        """
+        # Start with cash balance
+        total_value = self.balance
+        
+        # Add value of all positions
+        for asset, position in self.positions.items():
+            # Get current price for this asset
+            if isinstance(current_price, dict):
+                asset_price = current_price.get(asset, 0.0)
+            else:
+                # If single price provided, use it for the current asset
+                asset_price = current_price
+            
+            position_value = position * asset_price
+            total_value += position_value
+            
+            self.logger.debug(
+                "Portfolio calculation - Asset: %s, Position: %.4f, Price: %.2f, Value: %.2f",
+                asset, position, asset_price, position_value
+            )
+        
+        self.logger.info(
+            "Total portfolio value: %.2f (Cash: %.2f, Positions: %s)",
+            total_value, self.balance,
+            {k: f"{v:.4f}" for k, v in self.positions.items()}
+        )
+        
+        return total_value

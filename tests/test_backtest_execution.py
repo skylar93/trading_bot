@@ -88,12 +88,15 @@ def test_risk_management_integration():
     
     # Check position sizes in trades
     for trade in results["trades"]:
+        if trade["type"] == "none":
+            continue
+            
         position_value = trade["size"] * trade["price"]
         portfolio_value = trade.get("portfolio_value", settings["initial_balance"])
         position_size_pct = (position_value / portfolio_value) * 100
         
-        # Position size should not exceed limit
-        assert position_size_pct <= settings["max_position_size"], \
+        # Position size should not exceed limit (with small tolerance for floating point errors)
+        assert position_size_pct <= settings["max_position_size"] * 1.001, \
             f"Position size {position_size_pct}% exceeds limit {settings['max_position_size']}%"
 
 def test_trade_execution_logging():
@@ -105,6 +108,10 @@ def test_trade_execution_logging():
     # Run backtest
     results = manager.run_backtest(data)
     
+    # Track previous trades to verify PnL calculations
+    position_size = 0
+    entry_price = 0
+    
     # Verify trade details
     for trade in results["trades"]:
         assert all(key in trade for key in ["timestamp", "type", "price", "size"]), \
@@ -112,11 +119,35 @@ def test_trade_execution_logging():
         
         if trade["type"] == "buy":
             assert "cost" in trade, "Buy trade should have cost"
-        else:
+            # Update position tracking
+            position_size = trade["size"]
+            entry_price = trade["price"]
+            # Verify cost calculation
+            expected_cost = trade["size"] * trade["price"] * (1 + settings["trading_fee"])
+            assert abs(trade["cost"] - expected_cost) < 0.01, \
+                f"Cost calculation error: {trade['cost']} != {expected_cost}"
+            
+        elif trade["type"] == "sell":
             assert "revenue" in trade, "Sell trade should have revenue"
+            # Verify revenue calculation
+            expected_revenue = trade["size"] * trade["price"] * (1 - settings["trading_fee"])
+            assert abs(trade["revenue"] - expected_revenue) < 0.01, \
+                f"Revenue calculation error: {trade['revenue']} != {expected_revenue}"
+            # Verify PnL calculation if we had a previous position
+            if position_size > 0:
+                expected_pnl = trade["size"] * (trade["price"] - entry_price) - \
+                             trade["size"] * trade["price"] * settings["trading_fee"]
+                assert abs(trade["pnl"] - expected_pnl) < 0.01, \
+                    f"PnL calculation error: {trade['pnl']} != {expected_pnl}"
             
         # Verify portfolio value is tracked
         assert "portfolio_value" in trade, "Trade should track portfolio value"
+        assert trade["portfolio_value"] > 0, "Portfolio value should be positive"
+        
+        # Verify risk metrics
+        assert "risk_metrics" in trade, "Trade should have risk metrics"
+        assert all(key in trade["risk_metrics"] for key in ["volatility", "leverage", "position_pnl"]), \
+            "Risk metrics should have required fields"
 
 def test_metrics_calculation():
     """Test that performance metrics are calculated correctly"""
