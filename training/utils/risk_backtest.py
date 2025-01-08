@@ -1,6 +1,24 @@
 """
 Risk-aware backtesting system that integrates risk management with trading strategy.
 Extends the base backtester with risk management capabilities.
+
+File Structure:
+    - RiskAwareBacktester: Main backtesting class with risk management
+        - __init__: Initializes backtester with risk config
+        - reset: Resets backtester state
+        - get_position_value: Calculates position value
+        - calculate_volatility: Computes rolling volatility
+        - get_current_leverage: Calculates leverage ratio
+        - execute_trade: Core trade execution with risk checks
+        - run: Main backtesting loop
+
+Dependencies:
+    - training.backtest.Backtester
+    - risk.risk_manager.RiskManager
+    - risk.risk_manager.RiskConfig
+    - pandas
+    - numpy
+    - logging
 """
 
 from typing import Dict, Optional, Any
@@ -29,6 +47,22 @@ class RiskAwareBacktester(Backtester):
     - PnL Formula: size * (price - entry_price) - size * price * fee
     - Entry prices tracked per asset for accurate PnL
     - Zero positions automatically cleaned up
+    
+    Key Components:
+    1. Data Handling:
+        - Supports both single and multi-asset data
+        - Converts multi-asset data for parent class
+        - Maintains original data in full_data
+    
+    2. Position Management:
+        - Enforces max_position_size limit (e.g., 10%)
+        - Tracks positions and entry prices per asset
+        - Adjusts sizes based on risk signals
+    
+    3. Risk Integration:
+        - Uses RiskManager for signal processing
+        - Updates correlation matrix
+        - Monitors portfolio VaR
     
     Example:
         >>> risk_config = RiskConfig(max_position_size=0.1)  # 10% limit

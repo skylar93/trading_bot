@@ -1,3 +1,66 @@
+"""
+Backtesting System Core Implementation
+====================================
+
+This module implements the core backtesting functionality for single-asset trading strategies.
+
+File Structure:
+--------------
+- Class: Backtester
+  - Core backtesting engine for single-asset trading
+  - Handles trade execution, PnL calculation, and performance metrics
+  
+Key Components:
+--------------
+1. Trade Execution
+   - execute_trade(): Processes buy/sell actions with transaction costs
+   - Position tracking and balance management
+   
+2. Performance Tracking
+   - Portfolio value calculation
+   - Trade history logging
+   - Performance metrics (Sharpe, Sortino, Max DD)
+
+Dependencies:
+------------
+- numpy: Numerical computations and metrics
+- pandas: Data handling and time series operations
+- logging: Debug and transaction logging
+
+Usage Example:
+-------------
+```python
+data = pd.DataFrame(...)  # OHLCV data with required columns
+backtester = Backtester(data, initial_balance=10000, trading_fee=0.001)
+results = backtester.run(strategy, window_size=20)
+```
+
+Implementation Notes:
+-------------------
+1. Position Management
+   - Single asset position tracking
+   - Balance updates include transaction fees
+   
+2. Risk Considerations
+   - Basic position size limits
+   - Peak value tracking for drawdown
+   
+3. Performance Metrics
+   - Daily returns calculation
+   - Risk-adjusted metrics computation
+
+Recent Changes:
+--------------
+- Added detailed logging for trade execution
+- Improved PnL calculation accuracy
+- Enhanced metrics calculation
+
+See Also:
+---------
+- RiskAwareBacktester: Extended version with risk management
+- BacktestEngine: Multi-asset version
+"""
+
 import logging
 import numpy as np
 import pandas as pd
@@ -9,7 +72,34 @@ logger = logging.getLogger(__name__)
 
 
 class Backtester:
-    """Backtesting system for trading strategies"""
+    """
+    Single-asset backtesting engine for evaluating trading strategies.
+
+    This class implements a basic backtesting system for single-asset trading strategies.
+    It handles trade execution, position tracking, and performance measurement.
+
+    Features:
+    ---------
+    - Single asset position tracking
+    - Transaction fee consideration
+    - Basic risk management (position limits)
+    - Performance metrics calculation (Sharpe, Sortino, Max DD)
+    - Detailed trade logging
+
+    Implementation Notes:
+    -------------------
+    - Uses a position variable to track current holdings
+    - Maintains trade history and portfolio value history
+    - Implements peak value tracking for drawdown calculation
+    - Handles transaction fees for accurate PnL calculation
+
+    Example:
+    --------
+    >>> data = pd.DataFrame(...)  # OHLCV data
+    >>> backtester = Backtester(data, initial_balance=10000, trading_fee=0.001)
+    >>> results = backtester.run(strategy, window_size=20)
+    >>> print(f"Final portfolio value: {results['portfolio_values'][-1]}")
+    """
 
     REQUIRED_COLUMNS = {"$open", "$high", "$low", "$close", "$volume"}
 
@@ -19,12 +109,23 @@ class Backtester:
         initial_balance: float = 10000.0,
         trading_fee: float = 0.001,
     ):
-        """Initialize backtester
+        """
+        Initialize the backtester with data and parameters.
 
-        Args:
-            data: DataFrame with OHLCV data (must have $ prefixed columns)
-            initial_balance: Initial portfolio balance
-            trading_fee: Trading fee as decimal
+        Parameters:
+        -----------
+        data : pd.DataFrame
+            OHLCV data with columns: $open, $high, $low, $close, $volume
+        initial_balance : float, optional
+            Starting balance for the portfolio (default: 10000.0)
+        trading_fee : float, optional
+            Transaction fee as a decimal (default: 0.001 = 0.1%)
+
+        Notes:
+        ------
+        - Data columns must be prefixed with '$' (e.g., '$close')
+        - Initializes internal state (position, balance, trades list)
+        - Sets up logging for trade execution tracking
         """
         # Validate required columns
         missing_columns = self.REQUIRED_COLUMNS - set(data.columns)
@@ -41,7 +142,16 @@ class Backtester:
         self.reset()
 
     def reset(self):
-        """Reset backtester state"""
+        """
+        Reset the backtester to initial state.
+
+        This method resets all tracking variables to their initial values:
+        - Portfolio values list (starts with initial_balance)
+        - Trades list (empty)
+        - Current position (0)
+        - Current balance (initial_balance)
+        - Peak portfolio value (initial_balance)
+        """
         self.portfolio_values = [
             self.initial_balance
         ]  # Initialize with starting balance
@@ -56,15 +166,32 @@ class Backtester:
         window_size: int = 20,
         verbose: bool = False,
     ) -> Dict[str, Any]:
-        """Run backtest with given strategy
+        """
+        Run backtest with given strategy.
 
-        Args:
-            strategy: Trading strategy object with get_action method
-            window_size: Size of observation window
-            verbose: Whether to print progress
+        Parameters:
+        -----------
+        strategy : object
+            Trading strategy object with get_action method
+            Method should return float in [-1, 1] range
+        window_size : int, optional
+            Size of observation window for strategy (default: 20)
+        verbose : bool, optional
+            Whether to print progress (default: False)
 
         Returns:
-            Dictionary with backtest results
+        --------
+        Dict[str, Any]
+            Dictionary containing:
+            - metrics: Performance metrics (Sharpe, Sortino, etc.)
+            - trades: List of all executed trades
+            - portfolio_values: Historical portfolio values
+            - timestamps: Corresponding timestamps
+
+        Raises:
+        -------
+        ValueError
+            If data length is less than window_size
         """
         self.reset()
 
@@ -153,15 +280,41 @@ class Backtester:
         action: float,
         price_data: Dict[str, float],
     ) -> Dict[str, Any]:
-        """Execute trade based on action
+        """
+        Execute trade based on strategy action.
 
-        Args:
-            timestamp: Current timestamp
-            action: Action from strategy (-1 to 1)
-            price_data: Dictionary with current price data
+        Parameters:
+        -----------
+        timestamp : pd.Timestamp
+            Current timestamp for the trade
+        action : float
+            Strategy action in [-1, 1] range
+            - Positive: Buy signal (size proportional to value)
+            - Negative: Sell signal (size proportional to value)
+        price_data : Dict[str, float]
+            Current price data with keys:
+            - $open, $high, $low, $close, $volume
 
         Returns:
-            Dictionary with trade results
+        --------
+        Dict[str, Any]
+            Trade result containing:
+            - timestamp: Trade timestamp
+            - type: 'buy'/'sell'/'skip'
+            - size: Trade size
+            - price: Execution price
+            - cost/revenue: Trade cost or revenue
+            - balance: Updated balance
+            - position: Updated position
+            - action: Trade action
+            - reason: Execution status reason
+
+        Notes:
+        ------
+        - Implements basic position sizing
+        - Handles transaction fees
+        - Logs trade execution details
+        - Cleans up dust positions
         """
         try:
             # Log trade attempt
@@ -346,21 +499,45 @@ class Backtester:
             }
 
     def _calculate_portfolio_value(self, current_price: float) -> float:
-        """Calculate current portfolio value
+        """
+        Calculate total portfolio value.
 
-        Args:
-            current_price: Current asset price
+        Parameters:
+        -----------
+        current_price : float
+            Current asset price
 
         Returns:
-            Total portfolio value
+        --------
+        float
+            Total portfolio value (balance + position_value)
+
+        Notes:
+        ------
+        - Position value = position_size * current_price
+        - Does not include unrealized fees
         """
         return self.balance + (self.position * current_price)
 
     def _calculate_metrics(self) -> Dict[str, float]:
-        """Calculate trading metrics
+        """
+        Calculate trading performance metrics.
 
         Returns:
-            Dictionary with trading metrics
+        --------
+        Dict[str, float]
+            Dictionary containing:
+            - total_return: Total portfolio return
+            - sharpe_ratio: Sharpe ratio (annualized)
+            - sortino_ratio: Sortino ratio (annualized)
+            - max_drawdown: Maximum drawdown percentage
+            - win_rate: Percentage of profitable trades
+
+        Notes:
+        ------
+        - Assumes 252 trading days per year
+        - Uses 0 as risk-free rate
+        - Calculates ratios using daily returns
         """
         try:
             # Calculate returns
