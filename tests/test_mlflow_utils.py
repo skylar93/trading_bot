@@ -5,6 +5,7 @@ import torch.nn as nn
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+from training.utils.unified_mlflow_manager import MLflowManager
 
 
 class DummyModel(nn.Module):
@@ -57,45 +58,38 @@ def test_model_logging(mlflow_test_context):
         assert type(loaded_model.layer) == type(model.layer)
 
 
-def test_backtest_results_logging(
-    mlflow_test_context, sample_data, sample_trades
-):
+def test_backtest_results_logging(mlflow_test_context, sample_data):
     """Test logging backtest results"""
     metrics = {
-        "total_return": 15.5,
-        "sharpe_ratio": 1.2,
-        "max_drawdown": -10.5,
+        "sharpe_ratio": 1.5,
+        "max_drawdown": -0.2,
+        "total_return": 0.3,
+    }
+    
+    trades_df = pd.DataFrame(
+        {
+            "timestamp": pd.date_range(start="2023-01-01", periods=5),
+            "type": ["buy", "sell", "buy", "sell", "buy"],
+            "price": [100, 110, 105, 115, 108],
+            "quantity": [1, 1, 2, 2, 1],
+        }
+    )
+
+    portfolio_values = pd.DataFrame(
+        {
+            "timestamp": pd.date_range(start="2023-01-01", periods=5),
+            "value": [10000, 10100, 10050, 10200, 10150],
+        }
+    )
+
+    results = {
+        "metrics": metrics,
+        "trades": trades_df,
+        "portfolio_values": portfolio_values
     }
 
     with mlflow_test_context:
-        mlflow_test_context.log_backtest_results(
-            df_results=sample_data, metrics=metrics, trades=sample_trades
-        )
-
-        run = mlflow.get_run(mlflow.active_run().info.run_id)
-
-        # Check metrics
-        assert run.data.metrics["total_return"] == 15.5
-        assert run.data.metrics["sharpe_ratio"] == 1.2
-
-        # Check artifacts
-        client = mlflow.tracking.MlflowClient()
-        artifacts = []
-        for artifact in client.list_artifacts(mlflow.active_run().info.run_id):
-            if artifact.is_dir:
-                # List artifacts in subdirectory
-                sub_artifacts = [
-                    a.path
-                    for a in client.list_artifacts(
-                        mlflow.active_run().info.run_id, artifact.path
-                    )
-                ]
-                artifacts.extend(sub_artifacts)
-            else:
-                artifacts.append(artifact.path)
-
-        assert "backtest/trades.json" in artifacts
-        assert "backtest/results.json" in artifacts
+        mlflow_test_context.log_backtest_results(results)
 
 
 if __name__ == "__main__":

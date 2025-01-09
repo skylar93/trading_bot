@@ -260,7 +260,20 @@ class MLflowManager:
             mlflow.log_artifact(f.name, os.path.join(artifact_path, filename))
             os.remove(f.name)
 
-    def log_backtest_results(self, results: Dict[str, Any]):
+    def get_artifact_uri(self, artifact_path: str) -> str:
+        """Get the URI for an artifact.
+        
+        Args:
+            artifact_path: Path to the artifact relative to the artifact root
+            
+        Returns:
+            Full URI for the artifact
+        """
+        if not mlflow.active_run():
+            raise mlflow.exceptions.MlflowException("No active run")
+        return mlflow.get_artifact_uri(artifact_path)
+
+    def log_backtest_results(self, results: Dict[str, Any], df_results: Optional[pd.DataFrame] = None):
         """Log backtest results including metrics, trades, portfolio values, and plots.
         
         Args:
@@ -269,6 +282,7 @@ class MLflowManager:
                 - trades: DataFrame of trades
                 - portfolio_values: DataFrame of portfolio values
                 - figures: Optional dict of matplotlib/plotly figures
+            df_results: Optional DataFrame with additional results to log
         """
         if not mlflow.active_run():
             raise mlflow.exceptions.MlflowException("No active run")
@@ -292,6 +306,10 @@ class MLflowManager:
                 "backtest",
                 "portfolio_values.parquet"
             )
+
+        # Log additional results DataFrame if provided
+        if df_results is not None:
+            self.log_dataframe(df_results, "backtest/data", "results.parquet")
 
         # Log figures
         if "figures" in results and isinstance(results["figures"], dict):

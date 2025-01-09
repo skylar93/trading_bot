@@ -15,7 +15,7 @@ from datetime import datetime
 from hyperopt import hp
 
 from training.hyperopt.hyperopt_tuner import MinimalTuner
-from training.utils.mlflow_manager import MLflowManager
+from training.utils.unified_mlflow_manager import MLflowManager
 from envs.trading_env import TradingEnvironment
 from agents.strategies.single.ppo_agent import PPOAgent
 

@@ -17,7 +17,7 @@ import time
 from envs.trading_env import TradingEnvironment
 from agents.strategies.single.ppo_agent import PPOAgent
 from training.train import train_agent
-from training.utils.mlflow_manager import MLflowManager
+from training.utils.unified_mlflow_manager import MLflowManager
 
 logger = logging.getLogger(__name__)
 

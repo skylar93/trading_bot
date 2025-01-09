@@ -10,7 +10,7 @@ from training.utils.visualization import TradingVisualizer
 from training.evaluation import TradingMetrics
 from envs.trading_env import TradingEnvironment
 from envs.wrap_env import make_env
-from training.utils.mlflow_manager import MLflowManager
+from training.utils.unified_mlflow_manager import MLflowManager
 from typing import Union, Dict, Any, Tuple, Optional
 from datetime import datetime, timedelta
 import ccxt
