@@ -194,6 +194,16 @@ class BacktestManager:
             profitable_trades = sum(1 for pnl in pnls if pnl > 0)
             total_trades = len(trades)
             
+            # Calculate profit factor
+            winning_pnls = [pnl for pnl in pnls if pnl > 0]
+            losing_pnls = [abs(pnl) for pnl in pnls if pnl < 0]
+            total_profits = sum(winning_pnls) if winning_pnls else 0
+            total_losses = sum(losing_pnls) if losing_pnls else 0
+            profit_factor = total_profits / total_losses if total_losses > 0 else float('inf') if total_profits > 0 else 0.0
+            
+            # Calculate average trade
+            avg_trade = total_pnl / total_trades if total_trades > 0 else 0.0
+            
             metrics.update({
                 "total_return": total_pnl / self.settings.get("initial_balance", 10000.0),
                 "sharpe_ratio": self._calculate_sharpe_ratio(pnls) if pnls else 0.0,
@@ -201,7 +211,9 @@ class BacktestManager:
                 "win_rate": (profitable_trades / total_trades * 100) if total_trades > 0 else 0.0,
                 "total_trades": total_trades,
                 "profitable_trades": profitable_trades,
-                "total_pnl": total_pnl
+                "total_pnl": total_pnl,
+                "profit_factor": profit_factor,
+                "avg_trade": avg_trade
             })
         
         return metrics

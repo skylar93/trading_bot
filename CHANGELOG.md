@@ -1,43 +1,49 @@
 # Changelog
 
-## [1.1.0] - 2024-01-XX
+All notable changes to this project will be documented in this file.
 
-### Fixed
-- Position size management in RiskAwareBacktester now strictly respects limits
-  * Added 0.999 buffer for float precision
-  * Implemented exact position size calculation
-  * Double verification of final position size
-- PnL calculation now matches test requirements
-  * Formula: size * (price - entry_price) - size * price * fee
-  * Simplified entry price tracking
-  * Separate handling for buy/sell trades
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-### Technical Details
-- Position Size Control:
-  * Initial conservative sizing at 90% of limit
-  * Exact limit calculation when needed
-  * Final position verification with buffer
-- Risk Management:
-  * Integration with RiskManager for signal processing
-  * Portfolio VaR monitoring and position adjustment
-  * Multi-asset correlation tracking
-- Trade Execution:
-  * Improved logging for debugging
-  * Cleaner position tracking
-  * Automatic cleanup of zero positions
-
-### Test Coverage
-- Added comprehensive tests for:
-  * Position size limits (10% with 0.1% tolerance)
-  * PnL calculation accuracy (0.01 tolerance)
-  * Risk management integration
-  * Trade execution logging
-
-## [1.0.0] - 2024-01-XX
+## [Unreleased]
 
 ### Added
-- Initial implementation of RiskAwareBacktester
-- Basic position management and risk assessment
-- Integration with RiskManager
-- Multi-asset support with correlation tracking
-- Portfolio value and PnL calculation 
+- Comprehensive documentation system using Sphinx
+- Detailed architecture documentation for backtesting systems
+- Position history tracking in BacktestEngine
+- Detailed trade logging across all backtester implementations
+
+### Changed
+- Improved transaction cost handling in BacktestEngine
+- Enhanced portfolio value calculation accuracy
+- Standardized logging format across all components
+- Updated docstrings to support automatic documentation generation
+
+### Fixed
+- Position size validation in Backtester
+- Dust position handling in multi-asset systems
+- PnL calculation accuracy in trade execution
+- Transaction cost consideration in position sizing
+
+## [0.1.0] - 2024-01-08
+
+### Added
+- Initial implementation of Backtester for single-asset trading
+- BacktestEngine implementation for multi-asset trading
+- RiskAwareBacktester with advanced risk management
+- Basic logging system for debugging and monitoring
+- Performance metrics calculation (Sharpe, Sortino, Max DD)
+- Trade execution with transaction cost consideration
+- Position management with size limits
+- Portfolio value tracking and history
+
+### Changed
+- Standardized OHLCV column naming with '$' prefix
+- Improved position sizing logic
+- Enhanced trade execution validation
+
+### Fixed
+- Initial bugs in PnL calculation
+- Position tracking accuracy
+- Transaction cost handling
+- Trade history logging 

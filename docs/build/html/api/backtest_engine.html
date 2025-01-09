@@ -1,0 +1,245 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Backtest Engine API &mdash; trading_bot  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=80d5e7a1" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=e59714d7" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="../_static/doctools.js?v=9bcbadda"></script>
+      <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Risk Manager API" href="risk_manager.html" />
+    <link rel="prev" title="Backtester API" href="backtester.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            trading_bot
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">API Reference</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="backtester.html">Backtester API</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Backtest Engine API</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#class-structure">Class Structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#key-methods">Key Methods</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#implementation-details">Implementation Details</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#portfolio-management">Portfolio Management</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#trade-processing">Trade Processing</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#usage-example">Usage Example</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#recent-changes">Recent Changes</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="risk_manager.html">Risk Manager API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="base_env.html">Trading Environment Base</a></li>
+<li class="toctree-l1"><a class="reference internal" href="experimental_backtester.html">ExperimentalBacktester</a></li>
+<li class="toctree-l1"><a class="reference internal" href="live_trading_env.html">Live Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="multi_agent_env.html">Multi-Agent Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="paper_trading_env.html">Paper Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="trading_env.html">Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="wrap_env.html">Environment Wrappers</a></li>
+<li class="toctree-l1"><a class="reference internal" href="ppo_agent.html">PPO Agent API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="mlflow_management.html">MLflow Management Components</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Agents &amp; Training</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="base_policy.html">Base Policy API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="mlflow_manager.html">MLflow Manager API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="batch_strategy.html">Batch Strategy API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="hyperopt.html">Hyperopt API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="mlflow_logger.html">MLflow Logger API</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Hyperparameter Optimization</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="hyperopt_agent.html">Hyperopt Agent API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="hyperopt_env.html">Hyperopt Environment API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="hyperopt_tuner.html">Hyperopt Tuner API</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Monitoring &amp; Utilities</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="training_optimizer.html">Training Optimizer API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="advanced_scenario.html">Advanced Scenario API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="performance_metrics.html">Performance Metrics API</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Architecture</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../architecture/backtesting/single_asset.html">Single-Asset Backtesting System</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../architecture/backtesting/multi_asset.html">Multi-Asset Backtesting System</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../architecture/risk_management/overview.html">Risk Management Overview</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Examples</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../examples/index.html">Usage Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/single_asset_example.html">Single Asset Trading Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/multi_asset_example.html">Multi-Asset Trading Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/reinforcement_learning.html">Reinforcement Learning Example</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Project Info</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../changelog.html">Changelog</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">trading_bot</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Backtest Engine API</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/api/backtest_engine.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="backtest-engine-api">
+<h1>Backtest Engine API<a class="headerlink" href="#backtest-engine-api" title="Link to this heading"></a></h1>
+<section id="overview">
+<h2>Overview<a class="headerlink" href="#overview" title="Link to this heading"></a></h2>
+<p>The <code class="docutils literal notranslate"><span class="pre">BacktestEngine</span></code> class provides a robust engine for backtesting trading strategies across multiple assets.</p>
+</section>
+<section id="class-structure">
+<h2>Class Structure<a class="headerlink" href="#class-structure" title="Link to this heading"></a></h2>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">BacktestEngine</span><span class="p">:</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">initial_capital</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">100000.0</span><span class="p">,</span> <span class="n">transaction_cost</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.001</span><span class="p">,</span> <span class="n">max_position</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialize the backtest engine.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            initial_capital (float): Starting capital</span>
+<span class="sd">            transaction_cost (float): Transaction cost as decimal</span>
+<span class="sd">            max_position (float): Maximum position size as fraction of capital</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+</pre></div>
+</div>
+</section>
+<section id="key-methods">
+<h2>Key Methods<a class="headerlink" href="#key-methods" title="Link to this heading"></a></h2>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">reset()</span></code>: Reset the engine state</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">update(timestamp,</span> <span class="pre">prices,</span> <span class="pre">actions)</span></code>: Process updates for multiple assets</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">get_portfolio_value(prices)</span></code>: Calculate total portfolio value</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">get_returns()</span></code>: Get historical returns</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">get_trade_history()</span></code>: Get detailed trade history</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">get_position_history()</span></code>: Get position size history</p></li>
+</ul>
+</section>
+<section id="implementation-details">
+<h2>Implementation Details<a class="headerlink" href="#implementation-details" title="Link to this heading"></a></h2>
+<section id="portfolio-management">
+<h3>Portfolio Management<a class="headerlink" href="#portfolio-management" title="Link to this heading"></a></h3>
+<p>The engine manages a portfolio by:</p>
+<ul class="simple">
+<li><p>Tracking positions across multiple assets</p></li>
+<li><p>Calculating portfolio-level metrics</p></li>
+<li><p>Managing risk exposure</p></li>
+</ul>
+</section>
+<section id="trade-processing">
+<h3>Trade Processing<a class="headerlink" href="#trade-processing" title="Link to this heading"></a></h3>
+<p>Trade execution includes:</p>
+<ol class="arabic simple">
+<li><p>Position sizing calculations</p></li>
+<li><p>Transaction cost application</p></li>
+<li><p>Portfolio rebalancing</p></li>
+<li><p>Performance tracking</p></li>
+</ol>
+</section>
+</section>
+<section id="dependencies">
+<h2>Dependencies<a class="headerlink" href="#dependencies" title="Link to this heading"></a></h2>
+<ul class="simple">
+<li><p>pandas</p></li>
+<li><p>numpy</p></li>
+<li><p>logging</p></li>
+</ul>
+</section>
+<section id="usage-example">
+<h2>Usage Example<a class="headerlink" href="#usage-example" title="Link to this heading"></a></h2>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">engine</span> <span class="o">=</span> <span class="n">BacktestEngine</span><span class="p">(</span><span class="n">initial_capital</span><span class="o">=</span><span class="mf">100000.0</span><span class="p">,</span> <span class="n">transaction_cost</span><span class="o">=</span><span class="mf">0.001</span><span class="p">)</span>
+<span class="n">engine</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">timestamp</span><span class="p">,</span> <span class="n">prices</span><span class="p">,</span> <span class="n">actions</span><span class="p">)</span>
+<span class="n">portfolio_value</span> <span class="o">=</span> <span class="n">engine</span><span class="o">.</span><span class="n">get_portfolio_value</span><span class="p">(</span><span class="n">current_prices</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="recent-changes">
+<h2>Recent Changes<a class="headerlink" href="#recent-changes" title="Link to this heading"></a></h2>
+<ul class="simple">
+<li><p>Added portfolio rebalancing functionality</p></li>
+<li><p>Improved risk management features</p></li>
+<li><p>Enhanced performance tracking</p></li>
+</ul>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="backtester.html" class="btn btn-neutral float-left" title="Backtester API" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="risk_manager.html" class="btn btn-neutral float-right" title="Risk Manager API" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2024, Your Name.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

@@ -1,6 +1,129 @@
 """
-Backtesting Engine for Trading Bot
-Handles portfolio management, trade execution, and performance tracking
+Multi-Asset Backtesting Engine
+=============================
+
+This module implements a generalized backtesting engine supporting multiple assets
+and portfolio management. It provides a foundation for building complex trading
+systems with sophisticated position management and risk controls.
+
+File Structure:
+--------------
+- Class: BacktestEngine
+  - Core engine for multi-asset backtesting
+  - Portfolio management and trade execution
+  - Performance tracking and analysis
+
+Key Components:
+--------------
+1. Portfolio Management
+   - Multi-asset position tracking
+   - Position size limits per asset
+   - Portfolio value calculation
+   - Cash balance management
+
+2. Trade Execution
+   - Action processing (-1 to 1 per asset)
+   - Transaction cost handling
+   - Position updates and tracking
+   - Trade history logging
+
+3. Performance Analysis
+   - Portfolio value history
+   - Return calculation
+   - Position history tracking
+   - Trade history management
+
+Dependencies:
+------------
+- numpy: Numerical operations
+- pandas: Data handling and analysis
+- typing: Type hints and annotations
+- datetime: Timestamp processing
+
+Implementation Notes:
+-------------------
+1. Position Management
+   - Uses dictionary for multi-asset positions
+   - Implements position limits per asset
+   - Handles cash balance separately
+   - Tracks entry prices for PnL
+
+2. Trade Processing
+   - Supports simultaneous trades across assets
+   - Validates position limits before execution
+   - Updates portfolio state after each trade
+   - Maintains detailed trade history
+
+3. Data Requirements
+   - Timestamp-indexed price data
+   - Asset identifiers as dictionary keys
+   - Price data for all tracked assets
+
+Example Usage:
+-------------
+```python
+# Initialize engine
+engine = BacktestEngine(
+    initial_capital=100000.0,
+    transaction_cost=0.001,  # 0.1% fee
+    max_position=0.2        # 20% max per asset
+)
+
+# Prepare multi-asset data
+prices = {
+    'BTC': 50000.0,
+    'ETH': 3000.0
+}
+
+# Define actions (-1 to 1 for each asset)
+actions = {
+    'BTC': 0.5,   # Buy 50% of allowed size
+    'ETH': -0.3   # Sell 30% of allowed size
+}
+
+# Update portfolio
+engine.update(
+    timestamp=pd.Timestamp.now(),
+    prices=prices,
+    actions=actions
+)
+
+# Get results
+print(f"Portfolio Value: {engine.get_portfolio_value(prices)}")
+print(f"Returns: {engine.get_returns()}")
+print(f"Positions:\\n{engine.get_position_history()}")
+```
+
+Portfolio Tracking:
+-----------------
+1. Value Components
+   - Cash balance
+   - Asset positions
+   - Total portfolio value
+
+2. History Tracking
+   - Portfolio value over time
+   - Position sizes per asset
+   - Trade execution details
+   - Cash balance changes
+
+3. Performance Metrics
+   - Returns calculation
+   - Position exposure
+   - Trading activity
+
+Recent Changes:
+--------------
+- Added position history tracking
+- Improved transaction cost handling
+- Enhanced portfolio value calculation
+- Added detailed trade logging
+
+See Also:
+---------
+- Backtester: Single-asset implementation
+- RiskAwareBacktester: Risk-managed version
+- ExperimentalBacktester: Advanced features
 """
 
 import numpy as np

@@ -1,0 +1,433 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Batch Strategy API &mdash; trading_bot  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=80d5e7a1" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=e59714d7" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="../_static/doctools.js?v=9bcbadda"></script>
+      <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Hyperopt API" href="hyperopt.html" />
+    <link rel="prev" title="MLflow Manager API" href="mlflow_manager.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            trading_bot
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">API Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="backtester.html">Backtester API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="backtest_engine.html">Backtest Engine API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="risk_manager.html">Risk Manager API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="base_env.html">Trading Environment Base</a></li>
+<li class="toctree-l1"><a class="reference internal" href="experimental_backtester.html">ExperimentalBacktester</a></li>
+<li class="toctree-l1"><a class="reference internal" href="live_trading_env.html">Live Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="multi_agent_env.html">Multi-Agent Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="paper_trading_env.html">Paper Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="trading_env.html">Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="wrap_env.html">Environment Wrappers</a></li>
+<li class="toctree-l1"><a class="reference internal" href="ppo_agent.html">PPO Agent API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="mlflow_management.html">MLflow Management Components</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Agents &amp; Training</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="base_policy.html">Base Policy API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="mlflow_manager.html">MLflow Manager API</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Batch Strategy API</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#class-structure">Class Structure</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#batchstats">BatchStats</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#base-strategy">Base Strategy</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#time-sensitive-strategy">Time-Sensitive Strategy</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#adaptive-strategy">Adaptive Strategy</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#implementation-details">Implementation Details</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#base-strategy-logic">Base Strategy Logic</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#time-sensitive-features">Time-Sensitive Features</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#data-adaptive-features">Data-Adaptive Features</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#usage-example">Usage Example</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#basic-usage">Basic Usage</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#adaptive-usage">Adaptive Usage</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#best-practices">Best Practices</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#strategy-selection">1. Strategy Selection</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#parameter-tuning">2. Parameter Tuning</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#performance-monitoring">3. Performance Monitoring</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#error-handling">4. Error Handling</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="hyperopt.html">Hyperopt API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="mlflow_logger.html">MLflow Logger API</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Hyperparameter Optimization</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="hyperopt_agent.html">Hyperopt Agent API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="hyperopt_env.html">Hyperopt Environment API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="hyperopt_tuner.html">Hyperopt Tuner API</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Monitoring &amp; Utilities</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="training_optimizer.html">Training Optimizer API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="advanced_scenario.html">Advanced Scenario API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="performance_metrics.html">Performance Metrics API</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Architecture</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../architecture/backtesting/single_asset.html">Single-Asset Backtesting System</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../architecture/backtesting/multi_asset.html">Multi-Asset Backtesting System</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../architecture/risk_management/overview.html">Risk Management Overview</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Examples</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../examples/index.html">Usage Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/single_asset_example.html">Single Asset Trading Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/multi_asset_example.html">Multi-Asset Trading Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/reinforcement_learning.html">Reinforcement Learning Example</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Project Info</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../changelog.html">Changelog</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">trading_bot</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Batch Strategy API</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/api/batch_strategy.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="batch-strategy-api">
+<h1>Batch Strategy API<a class="headerlink" href="#batch-strategy-api" title="Link to this heading"></a></h1>
+<section id="overview">
+<h2>Overview<a class="headerlink" href="#overview" title="Link to this heading"></a></h2>
+<p>The batch strategy module provides dynamic batch size adjustment strategies for training, with support for time-weighted and data-adaptive approaches.</p>
+</section>
+<section id="class-structure">
+<h2>Class Structure<a class="headerlink" href="#class-structure" title="Link to this heading"></a></h2>
+<section id="batchstats">
+<h3>BatchStats<a class="headerlink" href="#batchstats" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="nd">@dataclass</span>
+<span class="k">class</span> <span class="nc">BatchStats</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Statistics for a single batch processing.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        batch_size: Size of the batch</span>
+<span class="sd">        processing_time: Time taken to process</span>
+<span class="sd">        loss: Training loss value</span>
+<span class="sd">        metrics: Additional metrics</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">batch_size</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">processing_time</span><span class="p">:</span> <span class="nb">float</span>
+    <span class="n">loss</span><span class="p">:</span> <span class="nb">float</span>
+    <span class="n">metrics</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span>
+</pre></div>
+</div>
+</section>
+<section id="base-strategy">
+<h3>Base Strategy<a class="headerlink" href="#base-strategy" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">BatchStrategy</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Base class for dynamic batch processing strategies.&quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">target_time</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.1</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialize batch strategy.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            target_time: Target processing time per batch</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">target_time</span> <span class="o">=</span> <span class="n">target_time</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">history</span> <span class="o">=</span> <span class="p">[]</span>
+
+    <span class="k">def</span> <span class="nf">get_next_batch_size</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Calculate next batch size based on history.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            int: Next batch size to use</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">history</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">5</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">current_batch_size</span>
+
+        <span class="n">avg_time</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">mean</span><span class="p">([</span>
+            <span class="n">stat</span><span class="o">.</span><span class="n">processing_time</span>
+            <span class="k">for</span> <span class="n">stat</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">history</span><span class="p">[</span><span class="o">-</span><span class="mi">5</span><span class="p">:]</span>
+        <span class="p">])</span>
+
+        <span class="k">if</span> <span class="n">avg_time</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_time</span><span class="p">:</span>
+            <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">current_batch_size</span> <span class="o">*</span> <span class="mf">0.8</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">current_batch_size</span> <span class="o">*</span> <span class="mf">1.2</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="time-sensitive-strategy">
+<h3>Time-Sensitive Strategy<a class="headerlink" href="#time-sensitive-strategy" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">TimeSensitiveBatchStrategy</span><span class="p">(</span><span class="n">BatchStrategy</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Batch strategy with time-weighted history.&quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="nf">get_next_batch_size</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Calculate next batch size with time weighting.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            int: Next batch size to use</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">base_size</span> <span class="o">=</span> <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">get_next_batch_size</span><span class="p">()</span>
+
+        <span class="c1"># Apply time weighting</span>
+        <span class="n">weights</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="mf">0.5</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">history</span><span class="p">[</span><span class="o">-</span><span class="mi">5</span><span class="p">:]))</span>
+        <span class="n">weighted_time</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">average</span><span class="p">(</span>
+            <span class="p">[</span><span class="n">stat</span><span class="o">.</span><span class="n">processing_time</span> <span class="k">for</span> <span class="n">stat</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">history</span><span class="p">[</span><span class="o">-</span><span class="mi">5</span><span class="p">:]],</span>
+            <span class="n">weights</span><span class="o">=</span><span class="n">weights</span>
+        <span class="p">)</span>
+
+        <span class="c1"># Additional adjustment based on weighted time</span>
+        <span class="k">if</span> <span class="n">weighted_time</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_time</span><span class="p">:</span>
+            <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="n">base_size</span> <span class="o">*</span> <span class="mf">0.9</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">base_size</span>
+</pre></div>
+</div>
+</section>
+<section id="adaptive-strategy">
+<h3>Adaptive Strategy<a class="headerlink" href="#adaptive-strategy" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">AdaptiveBatchStrategy</span><span class="p">(</span><span class="n">BatchStrategy</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Data-aware batch size adjustment strategy.&quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="nf">adjust_for_data</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Adjust batch size based on data characteristics.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            df: Input DataFrame</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            int: Adjusted batch size</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">stats</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">analyze_data</span><span class="p">(</span><span class="n">df</span><span class="p">)</span>
+        <span class="n">base_size</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_next_batch_size</span><span class="p">()</span>
+
+        <span class="c1"># Adjust for volatility</span>
+        <span class="k">if</span> <span class="n">stats</span><span class="p">[</span><span class="s1">&#39;volatility&#39;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mf">0.1</span><span class="p">:</span>
+            <span class="n">base_size</span> <span class="o">*=</span> <span class="mf">0.8</span>
+
+        <span class="c1"># Adjust for missing data</span>
+        <span class="k">if</span> <span class="n">stats</span><span class="p">[</span><span class="s1">&#39;missing_ratio&#39;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mf">0.05</span><span class="p">:</span>
+            <span class="n">base_size</span> <span class="o">*=</span> <span class="mf">0.7</span>
+
+        <span class="c1"># Adjust for unique values</span>
+        <span class="k">if</span> <span class="n">stats</span><span class="p">[</span><span class="s1">&#39;unique_ratio&#39;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mf">0.8</span><span class="p">:</span>
+            <span class="n">base_size</span> <span class="o">*=</span> <span class="mf">1.1</span>
+
+        <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="n">base_size</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="implementation-details">
+<h2>Implementation Details<a class="headerlink" href="#implementation-details" title="Link to this heading"></a></h2>
+<section id="base-strategy-logic">
+<h3>Base Strategy Logic<a class="headerlink" href="#base-strategy-logic" title="Link to this heading"></a></h3>
+<ol class="arabic simple">
+<li><p>History Management:
+- Track recent batch statistics
+- Use rolling window of 5 batches
+- Calculate average processing time</p></li>
+<li><p>Size Adjustment:
+- Compare against target time
+- Increase/decrease by 20%
+- Maintain minimum size</p></li>
+</ol>
+</section>
+<section id="time-sensitive-features">
+<h3>Time-Sensitive Features<a class="headerlink" href="#time-sensitive-features" title="Link to this heading"></a></h3>
+<ol class="arabic simple">
+<li><p>Time Weighting:
+- Linear weights from 0.5 to 1.0
+- More emphasis on recent batches
+- Weighted average calculation</p></li>
+<li><p>Additional Adjustment:
+- Based on weighted processing time
+- More conservative scaling
+- Smoother transitions</p></li>
+</ol>
+</section>
+<section id="data-adaptive-features">
+<h3>Data-Adaptive Features<a class="headerlink" href="#data-adaptive-features" title="Link to this heading"></a></h3>
+<ol class="arabic simple">
+<li><p>Data Analysis:
+- Volatility calculation
+- Missing data ratio
+- Unique value ratio</p></li>
+<li><p>Size Adjustments:
+- Reduce for high volatility
+- Reduce for missing data
+- Increase for high uniqueness</p></li>
+</ol>
+</section>
+</section>
+<section id="dependencies">
+<h2>Dependencies<a class="headerlink" href="#dependencies" title="Link to this heading"></a></h2>
+<ul class="simple">
+<li><p>NumPy (array operations)</p></li>
+<li><p>Pandas (DataFrame analysis)</p></li>
+<li><p>Python dataclasses</p></li>
+<li><p>typing (type hints)</p></li>
+</ul>
+</section>
+<section id="usage-example">
+<h2>Usage Example<a class="headerlink" href="#usage-example" title="Link to this heading"></a></h2>
+<section id="basic-usage">
+<h3>Basic Usage<a class="headerlink" href="#basic-usage" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Create strategy</span>
+<span class="n">strategy</span> <span class="o">=</span> <span class="n">BatchStrategy</span><span class="p">(</span><span class="n">target_time</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>
+
+<span class="c1"># Process batches</span>
+<span class="k">while</span> <span class="n">training</span><span class="p">:</span>
+    <span class="n">batch_size</span> <span class="o">=</span> <span class="n">strategy</span><span class="o">.</span><span class="n">get_next_batch_size</span><span class="p">()</span>
+    <span class="n">start_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+
+    <span class="c1"># Process batch</span>
+    <span class="n">loss</span> <span class="o">=</span> <span class="n">train_batch</span><span class="p">(</span><span class="n">batch_size</span><span class="p">)</span>
+
+    <span class="c1"># Record statistics</span>
+    <span class="n">strategy</span><span class="o">.</span><span class="n">record_batch</span><span class="p">(</span><span class="n">BatchStats</span><span class="p">(</span>
+        <span class="n">batch_size</span><span class="o">=</span><span class="n">batch_size</span><span class="p">,</span>
+        <span class="n">processing_time</span><span class="o">=</span><span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span> <span class="o">-</span> <span class="n">start_time</span><span class="p">,</span>
+        <span class="n">loss</span><span class="o">=</span><span class="n">loss</span><span class="p">,</span>
+        <span class="n">metrics</span><span class="o">=</span><span class="p">{}</span>
+    <span class="p">))</span>
+</pre></div>
+</div>
+</section>
+<section id="adaptive-usage">
+<h3>Adaptive Usage<a class="headerlink" href="#adaptive-usage" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Create adaptive strategy</span>
+<span class="n">strategy</span> <span class="o">=</span> <span class="n">AdaptiveBatchStrategy</span><span class="p">(</span><span class="n">target_time</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>
+
+<span class="c1"># Adjust for data</span>
+<span class="n">batch_size</span> <span class="o">=</span> <span class="n">strategy</span><span class="o">.</span><span class="n">adjust_for_data</span><span class="p">(</span><span class="n">training_data</span><span class="p">)</span>
+
+<span class="c1"># Use adjusted size</span>
+<span class="n">loss</span> <span class="o">=</span> <span class="n">train_batch</span><span class="p">(</span><span class="n">batch_size</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="best-practices">
+<h2>Best Practices<a class="headerlink" href="#best-practices" title="Link to this heading"></a></h2>
+<section id="strategy-selection">
+<h3>1. Strategy Selection<a class="headerlink" href="#strategy-selection" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Use base strategy for simple cases</p></li>
+<li><p>Use time-sensitive for dynamic workloads</p></li>
+<li><p>Use adaptive for complex data</p></li>
+</ul>
+</section>
+<section id="parameter-tuning">
+<h3>2. Parameter Tuning<a class="headerlink" href="#parameter-tuning" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Set appropriate target time</p></li>
+<li><p>Monitor adjustment frequency</p></li>
+<li><p>Consider hardware constraints</p></li>
+</ul>
+</section>
+<section id="performance-monitoring">
+<h3>3. Performance Monitoring<a class="headerlink" href="#performance-monitoring" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Track batch statistics</p></li>
+<li><p>Monitor convergence</p></li>
+<li><p>Validate improvements</p></li>
+</ul>
+</section>
+<section id="error-handling">
+<h3>4. Error Handling<a class="headerlink" href="#error-handling" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Handle empty history</p></li>
+<li><p>Validate batch sizes</p></li>
+<li><p>Check processing times</p></li>
+</ul>
+</section>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="mlflow_manager.html" class="btn btn-neutral float-left" title="MLflow Manager API" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="hyperopt.html" class="btn btn-neutral float-right" title="Hyperopt API" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2024, Your Name.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

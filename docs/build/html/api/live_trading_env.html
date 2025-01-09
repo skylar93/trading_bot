@@ -1,0 +1,436 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Live Trading Environment &mdash; trading_bot  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=80d5e7a1" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=e59714d7" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="../_static/doctools.js?v=9bcbadda"></script>
+      <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Multi-Agent Trading Environment" href="multi_agent_env.html" />
+    <link rel="prev" title="ExperimentalBacktester" href="experimental_backtester.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            trading_bot
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">API Reference</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="backtester.html">Backtester API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="backtest_engine.html">Backtest Engine API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="risk_manager.html">Risk Manager API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="base_env.html">Trading Environment Base</a></li>
+<li class="toctree-l1"><a class="reference internal" href="experimental_backtester.html">ExperimentalBacktester</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Live Trading Environment</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#class-structure">Class Structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#key-components">Key Components</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#order-status-and-management">Order Status and Management</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#key-methods">Key Methods</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#create-order">create_order</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#cancel-order">cancel_order</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#monitor-order">monitor_order</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#implementation-details">Implementation Details</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#test-mode">Test Mode</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#order-management">Order Management</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#async-structure">Async Structure</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#usage-example">Usage Example</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#basic-usage">Basic Usage</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#advanced-usage">Advanced Usage</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#best-practices">Best Practices</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#error-handling">1. Error Handling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#id1">2. Order Management</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#state-management">3. State Management</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#testing">4. Testing</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#recent-changes">Recent Changes</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="multi_agent_env.html">Multi-Agent Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="paper_trading_env.html">Paper Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="trading_env.html">Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="wrap_env.html">Environment Wrappers</a></li>
+<li class="toctree-l1"><a class="reference internal" href="ppo_agent.html">PPO Agent API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="mlflow_management.html">MLflow Management Components</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Agents &amp; Training</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="base_policy.html">Base Policy API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="mlflow_manager.html">MLflow Manager API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="batch_strategy.html">Batch Strategy API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="hyperopt.html">Hyperopt API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="mlflow_logger.html">MLflow Logger API</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Hyperparameter Optimization</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="hyperopt_agent.html">Hyperopt Agent API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="hyperopt_env.html">Hyperopt Environment API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="hyperopt_tuner.html">Hyperopt Tuner API</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Monitoring &amp; Utilities</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="training_optimizer.html">Training Optimizer API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="advanced_scenario.html">Advanced Scenario API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="performance_metrics.html">Performance Metrics API</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Architecture</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../architecture/backtesting/single_asset.html">Single-Asset Backtesting System</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../architecture/backtesting/multi_asset.html">Multi-Asset Backtesting System</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../architecture/risk_management/overview.html">Risk Management Overview</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Examples</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../examples/index.html">Usage Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/single_asset_example.html">Single Asset Trading Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/multi_asset_example.html">Multi-Asset Trading Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/reinforcement_learning.html">Reinforcement Learning Example</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Project Info</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../changelog.html">Changelog</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">trading_bot</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Live Trading Environment</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/api/live_trading_env.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="live-trading-environment">
+<h1>Live Trading Environment<a class="headerlink" href="#live-trading-environment" title="Link to this heading"></a></h1>
+<section id="overview">
+<h2>Overview<a class="headerlink" href="#overview" title="Link to this heading"></a></h2>
+<p>The <code class="docutils literal notranslate"><span class="pre">LiveTradingEnvironment</span></code> class provides a real-time trading environment that connects to actual exchanges (or simulated ones) using the OpenAI Gym interface with async methods.</p>
+</section>
+<section id="class-structure">
+<h2>Class Structure<a class="headerlink" href="#class-structure" title="Link to this heading"></a></h2>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">LiveTradingEnvironment</span><span class="p">(</span><span class="n">gym</span><span class="o">.</span><span class="n">Env</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">symbol</span><span class="p">,</span> <span class="n">initial_balance</span><span class="p">,</span> <span class="n">trading_fee</span><span class="p">,</span>
+                <span class="n">websocket</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">exchange</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">test_mode</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">symbol</span> <span class="o">=</span> <span class="n">symbol</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">initial_balance</span> <span class="o">=</span> <span class="n">initial_balance</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">trading_fee</span> <span class="o">=</span> <span class="n">trading_fee</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websocket</span> <span class="o">=</span> <span class="n">websocket</span> <span class="ow">or</span> <span class="n">WebSocketLoader</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">exchange</span> <span class="o">=</span> <span class="n">exchange</span> <span class="ow">or</span> <span class="n">ccxt</span><span class="o">.</span><span class="n">async_support</span><span class="o">.</span><span class="n">exchange</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">test_mode</span> <span class="o">=</span> <span class="n">test_mode</span>
+</pre></div>
+</div>
+</section>
+<section id="key-components">
+<h2>Key Components<a class="headerlink" href="#key-components" title="Link to this heading"></a></h2>
+<section id="order-status-and-management">
+<h3>Order Status and Management<a class="headerlink" href="#order-status-and-management" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">OrderStatus</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Order status constants.&quot;&quot;&quot;</span>
+    <span class="n">PENDING</span> <span class="o">=</span> <span class="s1">&#39;pending&#39;</span>
+    <span class="n">OPEN</span> <span class="o">=</span> <span class="s1">&#39;open&#39;</span>
+    <span class="n">CLOSED</span> <span class="o">=</span> <span class="s1">&#39;closed&#39;</span>
+    <span class="n">CANCELED</span> <span class="o">=</span> <span class="s1">&#39;canceled&#39;</span>
+    <span class="n">REJECTED</span> <span class="o">=</span> <span class="s1">&#39;rejected&#39;</span>
+
+<span class="k">class</span> <span class="nc">Order</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Order representation.&quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">order_id</span><span class="p">,</span> <span class="n">symbol</span><span class="p">,</span> <span class="n">order_type</span><span class="p">,</span>
+                <span class="n">size</span><span class="p">,</span> <span class="n">price</span><span class="p">,</span> <span class="n">timestamp</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">order_id</span> <span class="o">=</span> <span class="n">order_id</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">symbol</span> <span class="o">=</span> <span class="n">symbol</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">type</span> <span class="o">=</span> <span class="n">order_type</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">size</span> <span class="o">=</span> <span class="n">size</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">price</span> <span class="o">=</span> <span class="n">price</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">timestamp</span> <span class="o">=</span> <span class="n">timestamp</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">status</span> <span class="o">=</span> <span class="n">OrderStatus</span><span class="o">.</span><span class="n">PENDING</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">filled_size</span> <span class="o">=</span> <span class="mf">0.0</span>
+</pre></div>
+</div>
+</section>
+<section id="key-methods">
+<h3>Key Methods<a class="headerlink" href="#key-methods" title="Link to this heading"></a></h3>
+<section id="create-order">
+<h4>create_order<a class="headerlink" href="#create-order" title="Link to this heading"></a></h4>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">async</span> <span class="k">def</span> <span class="nf">create_order</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">side</span><span class="p">,</span> <span class="n">amount</span><span class="p">,</span> <span class="n">price</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Create an order in the exchange or test environment.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        side: &#39;buy&#39; or &#39;sell&#39;</span>
+<span class="sd">        amount: Order size</span>
+<span class="sd">        price: Order price</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Order object with status updates</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+</pre></div>
+</div>
+<p>Features:
+* Creates real or simulated orders
+* Handles test mode differently
+* Manages order tracking
+* Updates account state</p>
+</section>
+<section id="cancel-order">
+<h4>cancel_order<a class="headerlink" href="#cancel-order" title="Link to this heading"></a></h4>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">async</span> <span class="k">def</span> <span class="nf">cancel_order</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">order_id</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Cancel an existing order.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        order_id: ID of order to cancel</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        True if canceled, False otherwise</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+</pre></div>
+</div>
+<p>Features:
+* Cancels orders in exchange or test mode
+* Updates order status
+* Manages order lists
+* Handles exceptions</p>
+</section>
+<section id="monitor-order">
+<h4>monitor_order<a class="headerlink" href="#monitor-order" title="Link to this heading"></a></h4>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">async</span> <span class="k">def</span> <span class="nf">monitor_order</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">order_id</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mf">30.0</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Monitor order status until completion or timeout.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        order_id: Order to monitor</span>
+<span class="sd">        timeout: Maximum wait time</span>
+
+<span class="sd">    Yields:</span>
+<span class="sd">        Order status updates</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+</pre></div>
+</div>
+<p>Features:
+* Async generator pattern
+* Periodic status checks
+* Timeout handling
+* Order completion detection</p>
+</section>
+</section>
+</section>
+<section id="implementation-details">
+<h2>Implementation Details<a class="headerlink" href="#implementation-details" title="Link to this heading"></a></h2>
+<section id="test-mode">
+<h3>Test Mode<a class="headerlink" href="#test-mode" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Uses mock data for price simulation</p></li>
+<li><p>Local order execution logic</p></li>
+<li><p>No network calls required</p></li>
+<li><p>Useful for strategy testing</p></li>
+</ul>
+</section>
+<section id="order-management">
+<h3>Order Management<a class="headerlink" href="#order-management" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><dl class="simple">
+<dt>Tracks orders in different states:</dt><dd><ul>
+<li><p>active_orders: Currently open</p></li>
+<li><p>filled_orders: Successfully executed</p></li>
+<li><p>canceled_orders: Manually canceled</p></li>
+</ul>
+</dd>
+</dl>
+</li>
+</ul>
+</section>
+<section id="async-structure">
+<h3>Async Structure<a class="headerlink" href="#async-structure" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Uses async/await for I/O operations</p></li>
+<li><p>Efficient handling of network calls</p></li>
+<li><p>Integration with WebSocket feeds</p></li>
+<li><p>Non-blocking order monitoring</p></li>
+</ul>
+</section>
+</section>
+<section id="dependencies">
+<h2>Dependencies<a class="headerlink" href="#dependencies" title="Link to this heading"></a></h2>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">gymnasium</span></code>: OpenAI Gym interface</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ccxt.async_support</span></code>: Exchange API</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">WebSocketLoader</span></code>: Real-time data</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">numpy</span></code>: Numerical operations</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">pandas</span></code>: Data handling</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">asyncio</span></code>: Async support</p></li>
+</ul>
+</section>
+<section id="usage-example">
+<h2>Usage Example<a class="headerlink" href="#usage-example" title="Link to this heading"></a></h2>
+<section id="basic-usage">
+<h3>Basic Usage<a class="headerlink" href="#basic-usage" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Initialize environment</span>
+<span class="n">env</span> <span class="o">=</span> <span class="n">LiveTradingEnvironment</span><span class="p">(</span>
+    <span class="n">symbol</span><span class="o">=</span><span class="s2">&quot;BTC/USD&quot;</span><span class="p">,</span>
+    <span class="n">initial_balance</span><span class="o">=</span><span class="mf">10000.0</span><span class="p">,</span>
+    <span class="n">trading_fee</span><span class="o">=</span><span class="mf">0.001</span><span class="p">,</span>
+    <span class="n">test_mode</span><span class="o">=</span><span class="kc">True</span>
+<span class="p">)</span>
+
+<span class="c1"># Reset environment</span>
+<span class="n">obs</span><span class="p">,</span> <span class="n">info</span> <span class="o">=</span> <span class="k">await</span> <span class="n">env</span><span class="o">.</span><span class="n">reset</span><span class="p">()</span>
+
+<span class="c1"># Execute trades</span>
+<span class="n">action</span> <span class="o">=</span> <span class="mf">0.5</span>  <span class="c1"># Buy with 50% of max size</span>
+<span class="n">obs</span><span class="p">,</span> <span class="n">reward</span><span class="p">,</span> <span class="n">done</span><span class="p">,</span> <span class="n">truncated</span><span class="p">,</span> <span class="n">info</span> <span class="o">=</span> <span class="k">await</span> <span class="n">env</span><span class="o">.</span><span class="n">step</span><span class="p">(</span><span class="n">action</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="advanced-usage">
+<h3>Advanced Usage<a class="headerlink" href="#advanced-usage" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Create specific orders</span>
+<span class="n">order</span> <span class="o">=</span> <span class="k">await</span> <span class="n">env</span><span class="o">.</span><span class="n">create_order</span><span class="p">(</span>
+    <span class="n">side</span><span class="o">=</span><span class="s1">&#39;buy&#39;</span><span class="p">,</span>
+    <span class="n">amount</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+    <span class="n">price</span><span class="o">=</span><span class="mf">50000.0</span>
+<span class="p">)</span>
+
+<span class="c1"># Monitor order execution</span>
+<span class="k">async</span> <span class="k">for</span> <span class="n">status</span> <span class="ow">in</span> <span class="n">env</span><span class="o">.</span><span class="n">monitor_order</span><span class="p">(</span><span class="n">order</span><span class="o">.</span><span class="n">order_id</span><span class="p">):</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Order status: </span><span class="si">{</span><span class="n">status</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">status</span> <span class="o">==</span> <span class="n">OrderStatus</span><span class="o">.</span><span class="n">CLOSED</span><span class="p">:</span>
+        <span class="k">break</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="best-practices">
+<h2>Best Practices<a class="headerlink" href="#best-practices" title="Link to this heading"></a></h2>
+<section id="error-handling">
+<h3>1. Error Handling<a class="headerlink" href="#error-handling" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Handle network errors</p></li>
+<li><p>Manage rate limits</p></li>
+<li><p>Implement retry logic</p></li>
+<li><p>Log all exceptions</p></li>
+</ul>
+</section>
+<section id="id1">
+<h3>2. Order Management<a class="headerlink" href="#id1" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Monitor order timeouts</p></li>
+<li><p>Validate order parameters</p></li>
+<li><p>Track fill rates</p></li>
+<li><p>Handle partial fills</p></li>
+</ul>
+</section>
+<section id="state-management">
+<h3>3. State Management<a class="headerlink" href="#state-management" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Maintain accurate balances</p></li>
+<li><p>Track position sizes</p></li>
+<li><p>Monitor portfolio value</p></li>
+<li><p>Handle edge cases</p></li>
+</ul>
+</section>
+<section id="testing">
+<h3>4. Testing<a class="headerlink" href="#testing" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Use test_mode for development</p></li>
+<li><p>Validate order logic</p></li>
+<li><p>Check error handling</p></li>
+<li><p>Monitor performance</p></li>
+</ul>
+</section>
+</section>
+<section id="recent-changes">
+<h2>Recent Changes<a class="headerlink" href="#recent-changes" title="Link to this heading"></a></h2>
+<ul class="simple">
+<li><p>Added async/await support</p></li>
+<li><p>Improved order monitoring</p></li>
+<li><p>Enhanced test mode features</p></li>
+<li><p>Added WebSocket integration</p></li>
+</ul>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="experimental_backtester.html" class="btn btn-neutral float-left" title="ExperimentalBacktester" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="multi_agent_env.html" class="btn btn-neutral float-right" title="Multi-Agent Trading Environment" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2024, Your Name.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

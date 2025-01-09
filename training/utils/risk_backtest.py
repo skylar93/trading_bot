@@ -1,24 +1,93 @@
 """
-Risk-aware backtesting system that integrates risk management with trading strategy.
-Extends the base backtester with risk management capabilities.
+Risk-Aware Backtesting System
+============================
+
+This module extends the base Backtester with advanced risk management capabilities.
+It provides multi-asset support and sophisticated risk controls through RiskManager integration.
 
 File Structure:
-    - RiskAwareBacktester: Main backtesting class with risk management
-        - __init__: Initializes backtester with risk config
-        - reset: Resets backtester state
-        - get_position_value: Calculates position value
-        - calculate_volatility: Computes rolling volatility
-        - get_current_leverage: Calculates leverage ratio
-        - execute_trade: Core trade execution with risk checks
-        - run: Main backtesting loop
+--------------
+- Class: RiskAwareBacktester
+  - Inherits from Backtester
+  - Adds risk management and multi-asset support
+  - Integrates with RiskManager for risk signal processing
+
+Key Components:
+--------------
+1. Risk Management
+   - Position size limits (e.g., 10% max per asset)
+   - Portfolio VaR monitoring
+   - Asset correlation tracking
+   - Drawdown controls
+
+2. Multi-Asset Support
+   - Multiple asset position tracking
+   - Correlation-based risk assessment
+   - Portfolio-level metrics
+
+3. Trade Execution
+   - Risk-adjusted position sizing
+   - PnL calculation with fees
+   - Entry price tracking per asset
 
 Dependencies:
-    - training.backtest.Backtester
-    - risk.risk_manager.RiskManager
-    - risk.risk_manager.RiskConfig
-    - pandas
-    - numpy
-    - logging
+------------
+- training.backtest: Base Backtester class
+- risk.risk_manager: RiskManager, RiskConfig
+- pandas: Data handling and calculations
+- numpy: Numerical operations
+- logging: Debug and transaction logging
+
+Implementation Notes:
+-------------------
+1. Position Management
+   - Tracks positions and entry prices per asset
+   - Implements strict position size limits
+   - Handles dust position cleanup
+
+2. Risk Controls
+   - Updates correlation matrix on each trade
+   - Processes risk signals before execution
+   - Monitors portfolio-level metrics
+
+3. PnL Calculation
+   - Accurate fee consideration
+   - Entry price tracking per position
+   - Realized PnL on position closure
+
+Example Usage:
+-------------
+```python
+# Initialize with risk configuration
+risk_config = RiskConfig(
+    max_position_size=0.1,  # 10% max position
+    stop_loss_pct=0.02,     # 2% stop loss
+    max_drawdown_pct=0.15   # 15% max drawdown
+)
+
+# Create backtester instance
+backtester = RiskAwareBacktester(
+    data=multi_asset_data,
+    risk_config=risk_config,
+    initial_balance=10000.0
+)
+
+# Run backtest with strategy
+results = backtester.run(strategy, window_size=20)
+```
+
+Recent Changes:
+--------------
+- Enhanced multi-asset support
+- Improved PnL calculation accuracy
+- Added correlation-based risk checks
+- Enhanced logging for debugging
+
+See Also:
+---------
+- Backtester: Base backtesting class
+- RiskManager: Risk management implementation
+- BacktestEngine: Alternative backtesting engine
 """
 
 from typing import Dict, Optional, Any
@@ -33,48 +102,38 @@ logger = logging.getLogger(__name__)
 
 
 class RiskAwareBacktester(Backtester):
-    """Risk-aware backtesting engine that enforces position limits and accurate PnL tracking.
-    
+    """
+    Risk-aware backtesting system with advanced risk management capabilities.
+
+    This class extends the base Backtester to add sophisticated risk management
+    and multi-asset support. It integrates with RiskManager to enforce position
+    limits, monitor portfolio risk, and manage asset correlations.
+
     Features:
-    - Strict position size management (max 10% per position)
-    - Accurate PnL calculation with fee consideration
-    - Risk signal integration for position sizing
-    - Multi-asset correlation tracking
+    ---------
+    - Multi-asset position tracking
+    - Risk-adjusted position sizing
     - Portfolio VaR monitoring
-    
+    - Correlation-based risk assessment
+    - Drawdown control
+    - Detailed trade logging
+
+    Risk Parameters:
+    ---------------
+    - max_position_size: Maximum position size as % of portfolio
+    - stop_loss_pct: Stop loss threshold
+    - max_drawdown_pct: Maximum allowed drawdown
+    - daily_trade_limit: Maximum trades per day
+    - var_confidence_level: VaR confidence level
+    - portfolio_var_limit: Maximum portfolio VaR
+    - max_correlation: Maximum allowed asset correlation
+
     Implementation Notes:
-    - Position size calculation uses 0.999 buffer for float precision
-    - PnL Formula: size * (price - entry_price) - size * price * fee
-    - Entry prices tracked per asset for accurate PnL
-    - Zero positions automatically cleaned up
-    
-    Key Components:
-    1. Data Handling:
-        - Supports both single and multi-asset data
-        - Converts multi-asset data for parent class
-        - Maintains original data in full_data
-    
-    2. Position Management:
-        - Enforces max_position_size limit (e.g., 10%)
-        - Tracks positions and entry prices per asset
-        - Adjusts sizes based on risk signals
-    
-    3. Risk Integration:
-        - Uses RiskManager for signal processing
-        - Updates correlation matrix
-        - Monitors portfolio VaR
-    
-    Example:
-        >>> risk_config = RiskConfig(max_position_size=0.1)  # 10% limit
-        >>> backtester = RiskAwareBacktester(df, risk_config)
-        >>> backtester.run(strategy)
-        >>> print(f"Final PnL: {backtester.get_pnl()}")
-    
-    Recent Changes:
-    - Fixed position size limit enforcement
-    - Improved PnL calculation accuracy
-    - Added position verification steps
-    - Enhanced logging for debugging
+    -------------------
+    - Uses dictionaries to track positions and entry prices per asset
+    - Updates correlation matrix before each trade
+    - Implements strict position size limits with safety buffers
+    - Calculates PnL with accurate fee consideration
     """
 
     def __init__(
@@ -85,13 +144,32 @@ class RiskAwareBacktester(Backtester):
         trading_fee: float = 0.001,
     ):
         """
-        Initialize risk-aware backtester
+        Initialize the risk-aware backtester.
 
-        Args:
-            data: DataFrame with OHLCV data (must have $ prefixed columns)
-            risk_config: Risk management configuration
-            initial_balance: Initial portfolio balance
-            trading_fee: Trading fee as decimal
+        Parameters:
+        -----------
+        data : pd.DataFrame
+            Multi-asset OHLCV data with columns formatted as:
+            {asset}_$open, {asset}_$high, {asset}_$low, {asset}_$close, {asset}_$volume
+        risk_config : RiskConfig, optional
+            Risk management configuration containing:
+            - max_position_size: float
+            - stop_loss_pct: float
+            - max_drawdown_pct: float
+            - daily_trade_limit: int
+            - var_confidence_level: float
+            - portfolio_var_limit: float
+            - max_correlation: float
+        initial_balance : float, optional
+            Starting portfolio balance (default: 10000.0)
+        trading_fee : float, optional
+            Trading fee as decimal (default: 0.001)
+
+        Notes:
+        ------
+        - Initializes position tracking dictionaries
+        - Sets up RiskManager with provided config
+        - Configures logging for trade execution
         """
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.info("Initializing RiskAwareBacktester")
@@ -130,7 +208,22 @@ class RiskAwareBacktester(Backtester):
         self.logger.info("Parent Backtester initialized with balance: %.2f", initial_balance)
 
     def reset(self):
-        """Reset backtester and risk manager state"""
+        """
+        Reset the backtester state.
+
+        Resets all tracking variables including:
+        - Portfolio values and balance
+        - Asset positions and entry prices
+        - Risk manager state
+        - Trade counter
+        - Peak portfolio value
+
+        Notes:
+        ------
+        - Calls parent class reset()
+        - Resets risk manager state
+        - Clears multi-asset tracking dictionaries
+        """
         super().reset()
         self.risk_manager.reset()
         self.trade_counter = 0
@@ -138,7 +231,24 @@ class RiskAwareBacktester(Backtester):
         self.entry_prices = {}
 
     def get_position_value(self, asset: str) -> float:
-        """Get current position value for an asset"""
+        """
+        Calculate the current value of a position in a specific asset.
+
+        Parameters:
+        -----------
+        asset : str
+            Asset identifier (e.g., 'BTC', 'ETH')
+
+        Returns:
+        --------
+        float
+            Current position value in quote currency
+
+        Notes:
+        ------
+        - Uses latest close price from full_data
+        - Returns 0 if position doesn't exist
+        """
         if asset not in self.positions:
             return 0.0
         
@@ -151,13 +261,23 @@ class RiskAwareBacktester(Backtester):
         return self.positions[asset] * current_price
 
     def calculate_volatility(self, window: int = 20) -> float:
-        """Calculate local volatility
+        """
+        Calculate rolling volatility of portfolio returns.
 
-        Args:
-            window: Rolling window size for volatility calculation
+        Parameters:
+        -----------
+        window : int, optional
+            Rolling window size (default: 20)
 
         Returns:
-            Current volatility estimate
+        --------
+        float
+            Annualized volatility (standard deviation of returns)
+
+        Notes:
+        ------
+        - Uses daily close prices
+        - Annualizes by multiplying by sqrt(252)
         """
         if len(self.data) < window:
             return 0.0
@@ -167,7 +287,19 @@ class RiskAwareBacktester(Backtester):
         return volatility if not np.isnan(volatility) else 0.0
 
     def get_current_leverage(self) -> float:
-        """Calculate current leverage ratio"""
+        """
+        Calculate current portfolio leverage ratio.
+
+        Returns:
+        --------
+        float
+            Leverage ratio = total_position_value / portfolio_value
+
+        Notes:
+        ------
+        - Sums position values across all assets
+        - Includes cash balance in denominator
+        """
         total_position_value = 0.0
         for asset in self.positions:
             total_position_value += self.get_position_value(asset)
@@ -176,23 +308,46 @@ class RiskAwareBacktester(Backtester):
         return abs(total_position_value / portfolio_value) if portfolio_value > 0 else 0.0
 
     def execute_trade(self, timestamp, action, price_data):
-        """Execute trade with integrated risk management and precise position sizing.
-        
-        Args:
-            timestamp (pd.Timestamp): Current timestamp for the trade
-            action (float): Raw action from strategy (-1 to 1)
-            price_data (Dict[str, float]): Price data with $-prefixed columns
-            
+        """
+        Execute trade with integrated risk management.
+
+        Parameters:
+        -----------
+        timestamp : pd.Timestamp
+            Current timestamp
+        action : float
+            Strategy action (-1 to 1)
+        price_data : Dict[str, float]
+            Price data for the asset with keys:
+            {asset}_$open, {asset}_$high, {asset}_$low, {asset}_$close, {asset}_$volume
+
         Returns:
-            Dict[str, Any]: Trade execution result containing:
-                - timestamp: Execution time
-                - type: "buy"/"sell"/"none"
-                - price: Execution price
-                - size: Absolute position size
-                - portfolio_value: Updated portfolio value
-                - position: Signed position size
-                - pnl: Realized PnL (for sells)
-                - risk_metrics: Dict of risk measurements
+        --------
+        Dict[str, Any]
+            Trade execution result containing:
+            - timestamp: Trade timestamp
+            - type: Trade type (buy/sell/none)
+            - size: Trade size
+            - price: Execution price
+            - cost/revenue: Trade cost or revenue
+            - portfolio_value: Updated portfolio value
+            - risk_metrics: Dict of risk measurements
+            - pnl: Realized PnL (for sells)
+
+        Risk Checks:
+        ------------
+        1. Portfolio VaR limit
+        2. Position size limits
+        3. Asset correlation
+        4. Current drawdown
+        5. Daily trade limits
+
+        Notes:
+        ------
+        - Updates correlation matrix before trade
+        - Processes risk signals via RiskManager
+        - Adjusts position size based on risk limits
+        - Tracks entry prices for PnL calculation
         """
         # Calculate portfolio metrics
         def get_price_value(v):
@@ -466,15 +621,40 @@ class RiskAwareBacktester(Backtester):
         self, agent: Any, window_size: int = 20, verbose: bool = True
     ) -> Dict:
         """
-        Run backtest with risk management
+        Run backtest with risk management.
 
-        Args:
-            agent: Trading agent
-            window_size: Observation window size
-            verbose: Whether to print progress
+        Parameters:
+        -----------
+        agent : Any
+            Trading agent with get_action method
+        window_size : int, optional
+            Observation window size (default: 20)
+        verbose : bool, optional
+            Whether to print progress (default: True)
 
         Returns:
-            Dictionary with backtest results including risk metrics
+        --------
+        Dict[str, Any]
+            Backtest results containing:
+            - trades: List of all trades
+            - portfolio_values: Historical portfolio values
+            - risk_summary: Risk metrics summary
+            - metrics: Performance metrics
+
+        Risk Summary:
+        -------------
+        - avg_position_size: Average position size
+        - avg_volatility: Average portfolio volatility
+        - avg_leverage: Average leverage ratio
+        - max_drawdown: Maximum drawdown
+        - portfolio_var: Final portfolio VaR
+        - avg_correlation: Average asset correlation
+
+        Notes:
+        ------
+        - Handles both single and multi-asset data formats
+        - Updates risk metrics at each step
+        - Accumulates detailed trade history
         """
         # Initialize results
         self.trades = []

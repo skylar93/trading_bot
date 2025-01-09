@@ -1,0 +1,482 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MLflow Logger API &mdash; trading_bot  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=80d5e7a1" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=e59714d7" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="../_static/doctools.js?v=9bcbadda"></script>
+      <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Hyperopt Agent API" href="hyperopt_agent.html" />
+    <link rel="prev" title="Hyperopt API" href="hyperopt.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            trading_bot
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">API Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="backtester.html">Backtester API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="backtest_engine.html">Backtest Engine API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="risk_manager.html">Risk Manager API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="base_env.html">Trading Environment Base</a></li>
+<li class="toctree-l1"><a class="reference internal" href="experimental_backtester.html">ExperimentalBacktester</a></li>
+<li class="toctree-l1"><a class="reference internal" href="live_trading_env.html">Live Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="multi_agent_env.html">Multi-Agent Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="paper_trading_env.html">Paper Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="trading_env.html">Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="wrap_env.html">Environment Wrappers</a></li>
+<li class="toctree-l1"><a class="reference internal" href="ppo_agent.html">PPO Agent API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="mlflow_management.html">MLflow Management Components</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Agents &amp; Training</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="base_policy.html">Base Policy API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="mlflow_manager.html">MLflow Manager API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="batch_strategy.html">Batch Strategy API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="hyperopt.html">Hyperopt API</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">MLflow Logger API</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#class-structure">Class Structure</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#mlflowlogger">MLflowLogger</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#key-methods">Key Methods</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#run-management">Run Management</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#logging-methods">Logging Methods</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#artifact-logging">Artifact Logging</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#backtest-results">Backtest Results</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#best-run-retrieval">Best Run Retrieval</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#implementation-details">Implementation Details</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#experiment-management">Experiment Management</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#logging-features">Logging Features</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#usage-example">Usage Example</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#basic-usage">Basic Usage</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#backtest-logging">Backtest Logging</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#best-practices">Best Practices</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#experiment-organization">1. Experiment Organization</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#parameter-management">2. Parameter Management</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#metric-tracking">3. Metric Tracking</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#artifact-management">4. Artifact Management</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Hyperparameter Optimization</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="hyperopt_agent.html">Hyperopt Agent API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="hyperopt_env.html">Hyperopt Environment API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="hyperopt_tuner.html">Hyperopt Tuner API</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Monitoring &amp; Utilities</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="training_optimizer.html">Training Optimizer API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="advanced_scenario.html">Advanced Scenario API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="performance_metrics.html">Performance Metrics API</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Architecture</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../architecture/backtesting/single_asset.html">Single-Asset Backtesting System</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../architecture/backtesting/multi_asset.html">Multi-Asset Backtesting System</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../architecture/risk_management/overview.html">Risk Management Overview</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Examples</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../examples/index.html">Usage Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/single_asset_example.html">Single Asset Trading Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/multi_asset_example.html">Multi-Asset Trading Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/reinforcement_learning.html">Reinforcement Learning Example</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Project Info</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../changelog.html">Changelog</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">trading_bot</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">MLflow Logger API</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/api/mlflow_logger.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="mlflow-logger-api">
+<h1>MLflow Logger API<a class="headerlink" href="#mlflow-logger-api" title="Link to this heading"></a></h1>
+<section id="overview">
+<h2>Overview<a class="headerlink" href="#overview" title="Link to this heading"></a></h2>
+<p>The MLflow logger module provides a convenient wrapper for MLflow experiment tracking, with specialized support for trading models and backtest results.</p>
+</section>
+<section id="class-structure">
+<h2>Class Structure<a class="headerlink" href="#class-structure" title="Link to this heading"></a></h2>
+<section id="mlflowlogger">
+<h3>MLflowLogger<a class="headerlink" href="#mlflowlogger" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">MLflowLogger</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Wrapper for MLflow experiment tracking.&quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">experiment_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialize logger.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            experiment_name: Name of MLflow experiment</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">experiment_name</span> <span class="o">=</span> <span class="n">experiment_name</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_setup_experiment</span><span class="p">()</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="key-methods">
+<h2>Key Methods<a class="headerlink" href="#key-methods" title="Link to this heading"></a></h2>
+<section id="run-management">
+<h3>Run Management<a class="headerlink" href="#run-management" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">start_run</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">run_name</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Start new MLflow run.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        run_name: Optional name for run</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">run_name</span><span class="p">:</span>
+        <span class="n">run_name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;run_</span><span class="si">{</span><span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">()</span><span class="si">:</span><span class="s2">%Y%m%d_%H%M%S</span><span class="si">}</span><span class="s2">&quot;</span>
+    <span class="n">mlflow</span><span class="o">.</span><span class="n">start_run</span><span class="p">(</span>
+        <span class="n">experiment_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">experiment</span><span class="o">.</span><span class="n">experiment_id</span><span class="p">,</span>
+        <span class="n">run_name</span><span class="o">=</span><span class="n">run_name</span>
+    <span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">end_run</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;End current MLflow run.&quot;&quot;&quot;</span>
+    <span class="n">mlflow</span><span class="o">.</span><span class="n">end_run</span><span class="p">()</span>
+</pre></div>
+</div>
+</section>
+<section id="logging-methods">
+<h3>Logging Methods<a class="headerlink" href="#logging-methods" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">log_params</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">params</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Log parameters to MLflow.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        params: Dictionary of parameters</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Convert complex types to strings</span>
+    <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">params</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="p">(</span><span class="nb">dict</span><span class="p">,</span> <span class="nb">list</span><span class="p">)):</span>
+            <span class="n">params</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+    <span class="n">mlflow</span><span class="o">.</span><span class="n">log_params</span><span class="p">(</span><span class="n">params</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">log_metrics</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">metrics</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">],</span>
+               <span class="n">step</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Log metrics to MLflow.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        metrics: Dictionary of metric values</span>
+<span class="sd">        step: Optional step number</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">mlflow</span><span class="o">.</span><span class="n">log_metrics</span><span class="p">(</span><span class="n">metrics</span><span class="p">,</span> <span class="n">step</span><span class="o">=</span><span class="n">step</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="artifact-logging">
+<h3>Artifact Logging<a class="headerlink" href="#artifact-logging" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">log_model</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">artifact_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Log PyTorch model.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        model: PyTorch model</span>
+<span class="sd">        artifact_path: Path for artifact</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">mlflow</span><span class="o">.</span><span class="n">pytorch</span><span class="o">.</span><span class="n">log_model</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">artifact_path</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">log_figure</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">figure</span><span class="p">,</span> <span class="n">artifact_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Log matplotlib figure.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        figure: Matplotlib figure</span>
+<span class="sd">        artifact_path: Path for artifact</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">mlflow</span><span class="o">.</span><span class="n">log_figure</span><span class="p">(</span><span class="n">figure</span><span class="p">,</span> <span class="n">artifact_path</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">log_dict</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">dictionary</span><span class="p">:</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">artifact_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Log dictionary as JSON.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        dictionary: Dictionary to log</span>
+<span class="sd">        artifact_path: Path for artifact</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">mlflow</span><span class="o">.</span><span class="n">log_dict</span><span class="p">(</span><span class="n">dictionary</span><span class="p">,</span> <span class="n">artifact_path</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="backtest-results">
+<h3>Backtest Results<a class="headerlink" href="#backtest-results" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">log_backtest_results</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">results</span><span class="p">:</span> <span class="n">Dict</span><span class="p">,</span>
+                       <span class="n">artifact_path</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;backtest&#39;</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Log backtest results.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        results: Dictionary of backtest results</span>
+<span class="sd">        artifact_path: Base path for artifacts</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Log trades as table</span>
+    <span class="k">if</span> <span class="s1">&#39;trades&#39;</span> <span class="ow">in</span> <span class="n">results</span><span class="p">:</span>
+        <span class="n">trades_df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">results</span><span class="p">[</span><span class="s1">&#39;trades&#39;</span><span class="p">])</span>
+        <span class="n">mlflow</span><span class="o">.</span><span class="n">log_table</span><span class="p">(</span>
+            <span class="n">trades_df</span><span class="p">,</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">artifact_path</span><span class="si">}</span><span class="s2">/trades.csv&quot;</span>
+        <span class="p">)</span>
+
+    <span class="c1"># Log portfolio values</span>
+    <span class="k">if</span> <span class="s1">&#39;portfolio_values&#39;</span> <span class="ow">in</span> <span class="n">results</span><span class="p">:</span>
+        <span class="n">values_df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">results</span><span class="p">[</span><span class="s1">&#39;portfolio_values&#39;</span><span class="p">])</span>
+        <span class="n">mlflow</span><span class="o">.</span><span class="n">log_table</span><span class="p">(</span>
+            <span class="n">values_df</span><span class="p">,</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">artifact_path</span><span class="si">}</span><span class="s2">/portfolio_values.csv&quot;</span>
+        <span class="p">)</span>
+
+    <span class="c1"># Log full results as JSON</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">log_dict</span><span class="p">(</span><span class="n">results</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">artifact_path</span><span class="si">}</span><span class="s2">/results.json&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="best-run-retrieval">
+<h3>Best Run Retrieval<a class="headerlink" href="#best-run-retrieval" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">get_best_run</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">metric_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+                <span class="n">mode</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;max&#39;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Get best run by metric.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        metric_name: Metric to sort by</span>
+<span class="sd">        mode: &#39;max&#39; or &#39;min&#39;</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        dict: Best run info</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">order</span> <span class="o">=</span> <span class="s2">&quot;DESC&quot;</span> <span class="k">if</span> <span class="n">mode</span> <span class="o">==</span> <span class="s1">&#39;max&#39;</span> <span class="k">else</span> <span class="s2">&quot;ASC&quot;</span>
+    <span class="n">runs</span> <span class="o">=</span> <span class="n">mlflow</span><span class="o">.</span><span class="n">search_runs</span><span class="p">(</span>
+        <span class="n">experiment_ids</span><span class="o">=</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">experiment</span><span class="o">.</span><span class="n">experiment_id</span><span class="p">],</span>
+        <span class="n">order_by</span><span class="o">=</span><span class="p">[</span><span class="sa">f</span><span class="s2">&quot;metrics.</span><span class="si">{</span><span class="n">metric_name</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">order</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">]</span>
+    <span class="p">)</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">runs</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span>
+
+    <span class="n">best_run</span> <span class="o">=</span> <span class="n">runs</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="k">return</span> <span class="p">{</span>
+        <span class="s1">&#39;run_id&#39;</span><span class="p">:</span> <span class="n">best_run</span><span class="o">.</span><span class="n">run_id</span><span class="p">,</span>
+        <span class="s1">&#39;metrics&#39;</span><span class="p">:</span> <span class="n">best_run</span><span class="o">.</span><span class="n">metrics</span><span class="p">,</span>
+        <span class="s1">&#39;params&#39;</span><span class="p">:</span> <span class="n">best_run</span><span class="o">.</span><span class="n">params</span>
+    <span class="p">}</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="implementation-details">
+<h2>Implementation Details<a class="headerlink" href="#implementation-details" title="Link to this heading"></a></h2>
+<section id="experiment-management">
+<h3>Experiment Management<a class="headerlink" href="#experiment-management" title="Link to this heading"></a></h3>
+<ol class="arabic simple">
+<li><p>Setup:
+- Create/get experiment
+- Configure tracking URI
+- Handle experiment ID</p></li>
+<li><p>Run Lifecycle:
+- Start/end runs
+- Run naming
+- Run metadata</p></li>
+</ol>
+</section>
+<section id="logging-features">
+<h3>Logging Features<a class="headerlink" href="#logging-features" title="Link to this heading"></a></h3>
+<ol class="arabic simple">
+<li><p>Parameter Logging:
+- Type conversion
+- Complex object handling
+- Validation</p></li>
+<li><p>Metric Logging:
+- Step tracking
+- Batch logging
+- History management</p></li>
+<li><p>Artifact Management:
+- Model saving
+- Figure logging
+- JSON/CSV handling</p></li>
+</ol>
+</section>
+</section>
+<section id="dependencies">
+<h2>Dependencies<a class="headerlink" href="#dependencies" title="Link to this heading"></a></h2>
+<ul class="simple">
+<li><p>MLflow</p></li>
+<li><p>Pandas (DataFrame operations)</p></li>
+<li><p>PyTorch (model logging)</p></li>
+<li><p>JSON (serialization)</p></li>
+</ul>
+</section>
+<section id="usage-example">
+<h2>Usage Example<a class="headerlink" href="#usage-example" title="Link to this heading"></a></h2>
+<section id="basic-usage">
+<h3>Basic Usage<a class="headerlink" href="#basic-usage" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Create logger</span>
+<span class="n">logger</span> <span class="o">=</span> <span class="n">MLflowLogger</span><span class="p">(</span><span class="s2">&quot;trading_experiment&quot;</span><span class="p">)</span>
+
+<span class="c1"># Start run</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">start_run</span><span class="p">(</span><span class="s2">&quot;training_001&quot;</span><span class="p">)</span>
+
+<span class="c1"># Log parameters and metrics</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">log_params</span><span class="p">({</span>
+    <span class="s1">&#39;learning_rate&#39;</span><span class="p">:</span> <span class="mf">0.001</span><span class="p">,</span>
+    <span class="s1">&#39;batch_size&#39;</span><span class="p">:</span> <span class="mi">64</span>
+<span class="p">})</span>
+
+<span class="n">logger</span><span class="o">.</span><span class="n">log_metrics</span><span class="p">({</span>
+    <span class="s1">&#39;loss&#39;</span><span class="p">:</span> <span class="mf">0.5</span><span class="p">,</span>
+    <span class="s1">&#39;accuracy&#39;</span><span class="p">:</span> <span class="mf">0.95</span>
+<span class="p">},</span> <span class="n">step</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+<span class="c1"># Log model</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">log_model</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="s2">&quot;model&quot;</span><span class="p">)</span>
+
+<span class="c1"># End run</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">end_run</span><span class="p">()</span>
+</pre></div>
+</div>
+</section>
+<section id="backtest-logging">
+<h3>Backtest Logging<a class="headerlink" href="#backtest-logging" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Log backtest results</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">log_backtest_results</span><span class="p">({</span>
+    <span class="s1">&#39;trades&#39;</span><span class="p">:</span> <span class="n">trades_list</span><span class="p">,</span>
+    <span class="s1">&#39;portfolio_values&#39;</span><span class="p">:</span> <span class="n">values_list</span><span class="p">,</span>
+    <span class="s1">&#39;metrics&#39;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s1">&#39;sharpe_ratio&#39;</span><span class="p">:</span> <span class="mf">1.5</span><span class="p">,</span>
+        <span class="s1">&#39;max_drawdown&#39;</span><span class="p">:</span> <span class="mf">0.2</span>
+    <span class="p">}</span>
+<span class="p">})</span>
+
+<span class="c1"># Get best run</span>
+<span class="n">best_run</span> <span class="o">=</span> <span class="n">logger</span><span class="o">.</span><span class="n">get_best_run</span><span class="p">(</span>
+    <span class="n">metric_name</span><span class="o">=</span><span class="s1">&#39;sharpe_ratio&#39;</span><span class="p">,</span>
+    <span class="n">mode</span><span class="o">=</span><span class="s1">&#39;max&#39;</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="best-practices">
+<h2>Best Practices<a class="headerlink" href="#best-practices" title="Link to this heading"></a></h2>
+<section id="experiment-organization">
+<h3>1. Experiment Organization<a class="headerlink" href="#experiment-organization" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Use consistent naming</p></li>
+<li><p>Group related runs</p></li>
+<li><p>Track experiment versions</p></li>
+</ul>
+</section>
+<section id="parameter-management">
+<h3>2. Parameter Management<a class="headerlink" href="#parameter-management" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Document parameter meanings</p></li>
+<li><p>Use consistent types</p></li>
+<li><p>Handle nested structures</p></li>
+</ul>
+</section>
+<section id="metric-tracking">
+<h3>3. Metric Tracking<a class="headerlink" href="#metric-tracking" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Define key metrics</p></li>
+<li><p>Use appropriate steps</p></li>
+<li><p>Track training progress</p></li>
+</ul>
+</section>
+<section id="artifact-management">
+<h3>4. Artifact Management<a class="headerlink" href="#artifact-management" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Organize artifact paths</p></li>
+<li><p>Version artifacts</p></li>
+<li><p>Clean up unused artifacts</p></li>
+</ul>
+</section>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="hyperopt.html" class="btn btn-neutral float-left" title="Hyperopt API" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="hyperopt_agent.html" class="btn btn-neutral float-right" title="Hyperopt Agent API" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2024, Your Name.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

@@ -1,0 +1,432 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PPO Agent API &mdash; trading_bot  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=80d5e7a1" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=e59714d7" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="../_static/doctools.js?v=9bcbadda"></script>
+      <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="MLflow Management Components" href="mlflow_management.html" />
+    <link rel="prev" title="Environment Wrappers" href="wrap_env.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            trading_bot
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">API Reference</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="backtester.html">Backtester API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="backtest_engine.html">Backtest Engine API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="risk_manager.html">Risk Manager API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="base_env.html">Trading Environment Base</a></li>
+<li class="toctree-l1"><a class="reference internal" href="experimental_backtester.html">ExperimentalBacktester</a></li>
+<li class="toctree-l1"><a class="reference internal" href="live_trading_env.html">Live Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="multi_agent_env.html">Multi-Agent Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="paper_trading_env.html">Paper Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="trading_env.html">Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="wrap_env.html">Environment Wrappers</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">PPO Agent API</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#class-structure">Class Structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#key-components">Key Components</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#actor-critic-architecture">Actor-Critic Architecture</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#state-processing">State Processing</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#key-methods">Key Methods</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#get-action">get_action</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#train">train</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#update">update</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#implementation-details">Implementation Details</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#ppo-algorithm">PPO Algorithm</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#advantage-estimation">Advantage Estimation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#learning-rate-schedule">Learning Rate Schedule</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#usage-example">Usage Example</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#basic-usage">Basic Usage</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#shared-experience">Shared Experience</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#best-practices">Best Practices</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#hyperparameter-tuning">1. Hyperparameter Tuning</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#buffer-management">2. Buffer Management</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#training-stability">3. Training Stability</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#model-deployment">4. Model Deployment</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#recent-changes">Recent Changes</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="mlflow_management.html">MLflow Management Components</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Agents &amp; Training</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="base_policy.html">Base Policy API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="mlflow_manager.html">MLflow Manager API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="batch_strategy.html">Batch Strategy API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="hyperopt.html">Hyperopt API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="mlflow_logger.html">MLflow Logger API</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Hyperparameter Optimization</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="hyperopt_agent.html">Hyperopt Agent API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="hyperopt_env.html">Hyperopt Environment API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="hyperopt_tuner.html">Hyperopt Tuner API</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Monitoring &amp; Utilities</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="training_optimizer.html">Training Optimizer API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="advanced_scenario.html">Advanced Scenario API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="performance_metrics.html">Performance Metrics API</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Architecture</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../architecture/backtesting/single_asset.html">Single-Asset Backtesting System</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../architecture/backtesting/multi_asset.html">Multi-Asset Backtesting System</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../architecture/risk_management/overview.html">Risk Management Overview</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Examples</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../examples/index.html">Usage Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/single_asset_example.html">Single Asset Trading Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/multi_asset_example.html">Multi-Asset Trading Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/reinforcement_learning.html">Reinforcement Learning Example</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Project Info</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../changelog.html">Changelog</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">trading_bot</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">PPO Agent API</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/api/ppo_agent.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="ppo-agent-api">
+<h1>PPO Agent API<a class="headerlink" href="#ppo-agent-api" title="Link to this heading"></a></h1>
+<section id="overview">
+<h2>Overview<a class="headerlink" href="#overview" title="Link to this heading"></a></h2>
+<p>The <code class="docutils literal notranslate"><span class="pre">PPOAgent</span></code> class implements the Proximal Policy Optimization (PPO) algorithm with an actor-critic architecture, supporting both single-agent and shared buffer learning.</p>
+</section>
+<section id="class-structure">
+<h2>Class Structure<a class="headerlink" href="#class-structure" title="Link to this heading"></a></h2>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">PPOAgent</span><span class="p">(</span><span class="n">BaseAgent</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state_dim</span><span class="p">,</span> <span class="n">action_dim</span><span class="p">,</span> <span class="n">hidden_dim</span><span class="o">=</span><span class="mi">256</span><span class="p">,</span>
+                 <span class="n">lr</span><span class="o">=</span><span class="mf">3e-4</span><span class="p">,</span> <span class="n">gamma</span><span class="o">=</span><span class="mf">0.99</span><span class="p">,</span> <span class="n">clip_epsilon</span><span class="o">=</span><span class="mf">0.2</span><span class="p">,</span>
+                 <span class="n">c1</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">c2</span><span class="o">=</span><span class="mf">0.01</span><span class="p">,</span> <span class="n">c3</span><span class="o">=</span><span class="mf">0.01</span><span class="p">,</span> <span class="n">target_kl</span><span class="o">=</span><span class="mf">0.015</span><span class="p">,</span>
+                 <span class="n">batch_size</span><span class="o">=</span><span class="mi">64</span><span class="p">,</span> <span class="n">n_epochs</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">buffer_size</span><span class="o">=</span><span class="mi">2048</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialize PPO agent.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            state_dim (int): Dimension of state space</span>
+<span class="sd">            action_dim (int): Dimension of action space</span>
+<span class="sd">            hidden_dim (int): Hidden layer dimension</span>
+<span class="sd">            lr (float): Learning rate</span>
+<span class="sd">            gamma (float): Discount factor</span>
+<span class="sd">            clip_epsilon (float): PPO clip ratio</span>
+<span class="sd">            c1 (float): Value loss coefficient</span>
+<span class="sd">            c2 (float): Entropy bonus coefficient</span>
+<span class="sd">            c3 (float): KL penalty coefficient</span>
+<span class="sd">            target_kl (float): Target KL divergence</span>
+<span class="sd">            batch_size (int): Mini-batch size</span>
+<span class="sd">            n_epochs (int): Number of epochs per update</span>
+<span class="sd">            buffer_size (int): Experience buffer size</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+</pre></div>
+</div>
+</section>
+<section id="key-components">
+<h2>Key Components<a class="headerlink" href="#key-components" title="Link to this heading"></a></h2>
+<section id="actor-critic-architecture">
+<h3>Actor-Critic Architecture<a class="headerlink" href="#actor-critic-architecture" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>PolicyNetwork (Actor): Outputs action mean and standard deviation</p></li>
+<li><p>ValueNetwork (Critic): Estimates state values</p></li>
+<li><p>Shared feature extraction layers</p></li>
+<li><p>CosineAnnealing learning rate scheduler</p></li>
+</ul>
+</section>
+<section id="state-processing">
+<h3>State Processing<a class="headerlink" href="#state-processing" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Running statistics for state normalization</p></li>
+<li><p>Support for various input shapes (batch, window, features)</p></li>
+<li><p>Momentum-based updates for mean/std</p></li>
+</ul>
+</section>
+</section>
+<section id="key-methods">
+<h2>Key Methods<a class="headerlink" href="#key-methods" title="Link to this heading"></a></h2>
+<section id="get-action">
+<h3>get_action<a class="headerlink" href="#get-action" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">get_action</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">,</span> <span class="n">deterministic</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Get action from current policy.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        state: Current observation</span>
+<span class="sd">        deterministic: If True, return mean action</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        action: Selected action</span>
+<span class="sd">        log_prob: Log probability of action</span>
+<span class="sd">        value: Estimated state value</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+</pre></div>
+</div>
+</section>
+<section id="train">
+<h3>train<a class="headerlink" href="#train" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">train</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">env_or_experiences</span><span class="p">,</span> <span class="n">total_timesteps</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+          <span class="n">eval_env</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">eval_freq</span><span class="o">=</span><span class="mi">10000</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Train the agent.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        env_or_experiences: Gym env or list of experiences</span>
+<span class="sd">        total_timesteps: Total training timesteps</span>
+<span class="sd">        eval_env: Optional environment for evaluation</span>
+<span class="sd">        eval_freq: Evaluation frequency</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        dict: Training statistics</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+</pre></div>
+</div>
+</section>
+<section id="update">
+<h3>update<a class="headerlink" href="#update" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">update</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">states</span><span class="p">,</span> <span class="n">actions</span><span class="p">,</span> <span class="n">rewards</span><span class="p">,</span> <span class="n">values</span><span class="p">,</span>
+           <span class="n">log_probs</span><span class="p">,</span> <span class="n">dones</span><span class="p">,</span> <span class="n">next_values</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Update networks using PPO.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        states: Batch of states</span>
+<span class="sd">        actions: Batch of actions</span>
+<span class="sd">        rewards: Batch of rewards</span>
+<span class="sd">        values: Batch of values</span>
+<span class="sd">        log_probs: Batch of log probabilities</span>
+<span class="sd">        dones: Batch of done flags</span>
+<span class="sd">        next_values: Batch of next state values</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        dict: Update statistics</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="implementation-details">
+<h2>Implementation Details<a class="headerlink" href="#implementation-details" title="Link to this heading"></a></h2>
+<section id="ppo-algorithm">
+<h3>PPO Algorithm<a class="headerlink" href="#ppo-algorithm" title="Link to this heading"></a></h3>
+<ol class="arabic simple">
+<li><p>Collect experiences using current policy</p></li>
+<li><p>Compute advantages using GAE</p></li>
+<li><p>Update policy using clipped objective</p></li>
+<li><p>Monitor KL divergence for early stopping</p></li>
+<li><p>Update value network to minimize MSE</p></li>
+<li><p>Apply entropy bonus for exploration</p></li>
+</ol>
+</section>
+<section id="advantage-estimation">
+<h3>Advantage Estimation<a class="headerlink" href="#advantage-estimation" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">_compute_gae</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">rewards</span><span class="p">,</span> <span class="n">values</span><span class="p">,</span> <span class="n">dones</span><span class="p">,</span> <span class="n">next_values</span><span class="p">,</span>
+                 <span class="n">gamma</span><span class="o">=</span><span class="mf">0.99</span><span class="p">,</span> <span class="n">gae_lambda</span><span class="o">=</span><span class="mf">0.95</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute Generalized Advantage Estimation.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        rewards: Episode rewards</span>
+<span class="sd">        values: Value estimates</span>
+<span class="sd">        dones: Episode done flags</span>
+<span class="sd">        next_values: Next state values</span>
+<span class="sd">        gamma: Discount factor</span>
+<span class="sd">        gae_lambda: GAE parameter</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        advantages: GAE advantages</span>
+<span class="sd">        returns: Value function targets</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+</pre></div>
+</div>
+</section>
+<section id="learning-rate-schedule">
+<h3>Learning Rate Schedule<a class="headerlink" href="#learning-rate-schedule" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>CosineAnnealing scheduler</p></li>
+<li><p>Decay over training epochs</p></li>
+<li><p>Minimum learning rate threshold</p></li>
+</ul>
+</section>
+</section>
+<section id="dependencies">
+<h2>Dependencies<a class="headerlink" href="#dependencies" title="Link to this heading"></a></h2>
+<ul class="simple">
+<li><p>torch: Neural network implementation</p></li>
+<li><p>numpy: Numerical operations</p></li>
+<li><p>gym: Environment interface</p></li>
+<li><p>logging: Debug information</p></li>
+</ul>
+</section>
+<section id="usage-example">
+<h2>Usage Example<a class="headerlink" href="#usage-example" title="Link to this heading"></a></h2>
+<section id="basic-usage">
+<h3>Basic Usage<a class="headerlink" href="#basic-usage" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Initialize agent</span>
+<span class="n">agent</span> <span class="o">=</span> <span class="n">PPOAgent</span><span class="p">(</span>
+    <span class="n">state_dim</span><span class="o">=</span><span class="n">env</span><span class="o">.</span><span class="n">observation_space</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
+    <span class="n">action_dim</span><span class="o">=</span><span class="n">env</span><span class="o">.</span><span class="n">action_space</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+<span class="p">)</span>
+
+<span class="c1"># Train agent</span>
+<span class="n">stats</span> <span class="o">=</span> <span class="n">agent</span><span class="o">.</span><span class="n">train</span><span class="p">(</span><span class="n">env</span><span class="p">,</span> <span class="n">total_timesteps</span><span class="o">=</span><span class="mi">1000000</span><span class="p">)</span>
+
+<span class="c1"># Save agent</span>
+<span class="n">agent</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="s2">&quot;ppo_agent.pt&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="shared-experience">
+<h3>Shared Experience<a class="headerlink" href="#shared-experience" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Train from shared buffer</span>
+<span class="n">agent</span><span class="o">.</span><span class="n">learn_from_shared_experience</span><span class="p">(</span>
+    <span class="n">shared_buffer</span><span class="p">,</span>
+    <span class="n">batch_size</span><span class="o">=</span><span class="mi">64</span><span class="p">,</span>
+    <span class="n">n_epochs</span><span class="o">=</span><span class="mi">10</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="best-practices">
+<h2>Best Practices<a class="headerlink" href="#best-practices" title="Link to this heading"></a></h2>
+<section id="hyperparameter-tuning">
+<h3>1. Hyperparameter Tuning<a class="headerlink" href="#hyperparameter-tuning" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Adjust clip_epsilon based on task complexity</p></li>
+<li><p>Monitor KL divergence and adjust target_kl</p></li>
+<li><p>Balance value loss and policy loss coefficients</p></li>
+<li><p>Tune entropy bonus for exploration/exploitation</p></li>
+</ul>
+</section>
+<section id="buffer-management">
+<h3>2. Buffer Management<a class="headerlink" href="#buffer-management" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Use appropriate buffer_size for task</p></li>
+<li><p>Consider episode boundaries</p></li>
+<li><p>Handle incomplete episodes</p></li>
+<li><p>Monitor buffer statistics</p></li>
+</ul>
+</section>
+<section id="training-stability">
+<h3>3. Training Stability<a class="headerlink" href="#training-stability" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Use state normalization</p></li>
+<li><p>Monitor value loss convergence</p></li>
+<li><p>Check policy entropy</p></li>
+<li><p>Validate advantage estimates</p></li>
+</ul>
+</section>
+<section id="model-deployment">
+<h3>4. Model Deployment<a class="headerlink" href="#model-deployment" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Save checkpoints regularly</p></li>
+<li><p>Validate loaded models</p></li>
+<li><p>Monitor inference performance</p></li>
+<li><p>Track environment changes</p></li>
+</ul>
+</section>
+</section>
+<section id="recent-changes">
+<h2>Recent Changes<a class="headerlink" href="#recent-changes" title="Link to this heading"></a></h2>
+<ul class="simple">
+<li><p>Added shared experience learning</p></li>
+<li><p>Improved state normalization</p></li>
+<li><p>Enhanced logging capabilities</p></li>
+<li><p>Added early stopping based on KL</p></li>
+</ul>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="wrap_env.html" class="btn btn-neutral float-left" title="Environment Wrappers" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="mlflow_management.html" class="btn btn-neutral float-right" title="MLflow Management Components" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2024, Your Name.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

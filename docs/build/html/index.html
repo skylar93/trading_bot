@@ -1,0 +1,504 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="./">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Welcome to trading_bot’s documentation! &mdash; trading_bot  documentation</title>
+      <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=80d5e7a1" />
+      <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=e59714d7" />
+
+  
+      <script src="_static/jquery.js?v=5d32c60e"></script>
+      <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="_static/doctools.js?v=9bcbadda"></script>
+      <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Backtester API" href="api/backtester.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="#" class="icon icon-home">
+            trading_bot
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">API Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="api/backtester.html">Backtester API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api/backtest_engine.html">Backtest Engine API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api/risk_manager.html">Risk Manager API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api/base_env.html">Trading Environment Base</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api/experimental_backtester.html">ExperimentalBacktester</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api/live_trading_env.html">Live Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api/multi_agent_env.html">Multi-Agent Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api/paper_trading_env.html">Paper Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api/trading_env.html">Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api/wrap_env.html">Environment Wrappers</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api/ppo_agent.html">PPO Agent API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api/mlflow_management.html">MLflow Management Components</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Agents &amp; Training</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="api/base_policy.html">Base Policy API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api/mlflow_manager.html">MLflow Manager API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api/batch_strategy.html">Batch Strategy API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api/hyperopt.html">Hyperopt API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api/mlflow_logger.html">MLflow Logger API</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Hyperparameter Optimization</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="api/hyperopt_agent.html">Hyperopt Agent API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api/hyperopt_env.html">Hyperopt Environment API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api/hyperopt_tuner.html">Hyperopt Tuner API</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Monitoring &amp; Utilities</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="api/training_optimizer.html">Training Optimizer API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api/advanced_scenario.html">Advanced Scenario API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api/performance_metrics.html">Performance Metrics API</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Architecture</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="architecture/backtesting/single_asset.html">Single-Asset Backtesting System</a></li>
+<li class="toctree-l1"><a class="reference internal" href="architecture/backtesting/multi_asset.html">Multi-Asset Backtesting System</a></li>
+<li class="toctree-l1"><a class="reference internal" href="architecture/risk_management/overview.html">Risk Management Overview</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Examples</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="examples/index.html">Usage Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="examples/single_asset_example.html">Single Asset Trading Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="examples/multi_asset_example.html">Multi-Asset Trading Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="examples/reinforcement_learning.html">Reinforcement Learning Example</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Project Info</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="changelog.html">Changelog</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="#">trading_bot</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="#" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Welcome to trading_bot’s documentation!</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="_sources/index.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="welcome-to-trading-bot-s-documentation">
+<h1>Welcome to trading_bot’s documentation!<a class="headerlink" href="#welcome-to-trading-bot-s-documentation" title="Link to this heading"></a></h1>
+<section id="architecture-overview">
+<h2>Architecture Overview<a class="headerlink" href="#architecture-overview" title="Link to this heading"></a></h2>
+</section>
+<section id="getting-started">
+<h2>Getting Started<a class="headerlink" href="#getting-started" title="Link to this heading"></a></h2>
+</section>
+<section id="recent-changes">
+<h2>Recent Changes<a class="headerlink" href="#recent-changes" title="Link to this heading"></a></h2>
+</section>
+<section id="contents">
+<h2>Contents<a class="headerlink" href="#contents" title="Link to this heading"></a></h2>
+<div class="toctree-wrapper compound">
+<p class="caption" role="heading"><span class="caption-text">API Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="api/backtester.html">Backtester API</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="api/backtester.html#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/backtester.html#class-structure">Class Structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/backtester.html#key-methods">Key Methods</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/backtester.html#implementation-details">Implementation Details</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/backtester.html#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/backtester.html#usage-example">Usage Example</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/backtester.html#recent-changes">Recent Changes</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="api/backtest_engine.html">Backtest Engine API</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="api/backtest_engine.html#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/backtest_engine.html#class-structure">Class Structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/backtest_engine.html#key-methods">Key Methods</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/backtest_engine.html#implementation-details">Implementation Details</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/backtest_engine.html#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/backtest_engine.html#usage-example">Usage Example</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/backtest_engine.html#recent-changes">Recent Changes</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="api/risk_manager.html">Risk Manager API</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="api/risk_manager.html#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/risk_manager.html#class-structure">Class Structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/risk_manager.html#key-methods">Key Methods</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/risk_manager.html#implementation-details">Implementation Details</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/risk_manager.html#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/risk_manager.html#usage-example">Usage Example</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/risk_manager.html#recent-changes">Recent Changes</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="api/base_env.html">Trading Environment Base</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="api/base_env.html#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/base_env.html#position-class">Position Class</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/base_env.html#tradingenvironment-class">TradingEnvironment Class</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/base_env.html#implementation-details">Implementation Details</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/base_env.html#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/base_env.html#usage-guide">Usage Guide</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/base_env.html#recent-changes">Recent Changes</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="api/experimental_backtester.html">ExperimentalBacktester</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="api/experimental_backtester.html#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/experimental_backtester.html#class-structure">Class Structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/experimental_backtester.html#key-components">Key Components</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/experimental_backtester.html#implementation-details">Implementation Details</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/experimental_backtester.html#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/experimental_backtester.html#recent-changes">Recent Changes</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="api/live_trading_env.html">Live Trading Environment</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="api/live_trading_env.html#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/live_trading_env.html#class-structure">Class Structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/live_trading_env.html#key-components">Key Components</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/live_trading_env.html#implementation-details">Implementation Details</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/live_trading_env.html#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/live_trading_env.html#usage-example">Usage Example</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/live_trading_env.html#best-practices">Best Practices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/live_trading_env.html#recent-changes">Recent Changes</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="api/multi_agent_env.html">Multi-Agent Trading Environment</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="api/multi_agent_env.html#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/multi_agent_env.html#class-structure">Class Structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/multi_agent_env.html#key-components">Key Components</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/multi_agent_env.html#implementation-details">Implementation Details</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/multi_agent_env.html#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/multi_agent_env.html#usage-example">Usage Example</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/multi_agent_env.html#best-practices">Best Practices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/multi_agent_env.html#recent-changes">Recent Changes</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="api/paper_trading_env.html">Paper Trading Environment</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="api/paper_trading_env.html#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/paper_trading_env.html#class-structure">Class Structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/paper_trading_env.html#key-components">Key Components</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/paper_trading_env.html#implementation-details">Implementation Details</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/paper_trading_env.html#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/paper_trading_env.html#usage-example">Usage Example</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/paper_trading_env.html#best-practices">Best Practices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/paper_trading_env.html#recent-changes">Recent Changes</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="api/trading_env.html">Trading Environment</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="api/trading_env.html#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/trading_env.html#class-structure">Class Structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/trading_env.html#key-components">Key Components</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/trading_env.html#implementation-details">Implementation Details</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/trading_env.html#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/trading_env.html#usage-example">Usage Example</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/trading_env.html#best-practices">Best Practices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/trading_env.html#recent-changes">Recent Changes</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="api/wrap_env.html">Environment Wrappers</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="api/wrap_env.html#wrapper-classes">Wrapper Classes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/wrap_env.html#environment-factory">Environment Factory</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/wrap_env.html#implementation-details">Implementation Details</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/wrap_env.html#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/wrap_env.html#usage-example">Usage Example</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/wrap_env.html#best-practices">Best Practices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/wrap_env.html#recent-changes">Recent Changes</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="api/ppo_agent.html">PPO Agent API</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="api/ppo_agent.html#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/ppo_agent.html#class-structure">Class Structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/ppo_agent.html#key-components">Key Components</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/ppo_agent.html#key-methods">Key Methods</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/ppo_agent.html#implementation-details">Implementation Details</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/ppo_agent.html#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/ppo_agent.html#usage-example">Usage Example</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/ppo_agent.html#best-practices">Best Practices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/ppo_agent.html#recent-changes">Recent Changes</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="api/mlflow_management.html">MLflow Management Components</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="api/mlflow_management.html#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/mlflow_management.html#component-structure">Component Structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/mlflow_management.html#implementation-details">Implementation Details</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/mlflow_management.html#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/mlflow_management.html#usage-guidelines">Usage Guidelines</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/mlflow_management.html#best-practices">Best Practices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/mlflow_management.html#recent-changes">Recent Changes</a></li>
+</ul>
+</li>
+</ul>
+</div>
+<div class="toctree-wrapper compound">
+<p class="caption" role="heading"><span class="caption-text">Agents &amp; Training</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="api/base_policy.html">Base Policy API</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="api/base_policy.html#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/base_policy.html#class-structure">Class Structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/base_policy.html#key-methods">Key Methods</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/base_policy.html#implementation-details">Implementation Details</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/base_policy.html#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/base_policy.html#usage-example">Usage Example</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/base_policy.html#best-practices">Best Practices</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="api/mlflow_manager.html">MLflow Manager API</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="api/mlflow_manager.html#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/mlflow_manager.html#class-structure">Class Structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/mlflow_manager.html#key-methods">Key Methods</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/mlflow_manager.html#implementation-details">Implementation Details</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/mlflow_manager.html#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/mlflow_manager.html#usage-example">Usage Example</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/mlflow_manager.html#best-practices">Best Practices</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="api/batch_strategy.html">Batch Strategy API</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="api/batch_strategy.html#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/batch_strategy.html#class-structure">Class Structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/batch_strategy.html#implementation-details">Implementation Details</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/batch_strategy.html#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/batch_strategy.html#usage-example">Usage Example</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/batch_strategy.html#best-practices">Best Practices</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="api/hyperopt.html">Hyperopt API</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="api/hyperopt.html#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/hyperopt.html#class-structure">Class Structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/hyperopt.html#key-methods">Key Methods</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/hyperopt.html#implementation-details">Implementation Details</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/hyperopt.html#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/hyperopt.html#usage-example">Usage Example</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/hyperopt.html#best-practices">Best Practices</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="api/mlflow_logger.html">MLflow Logger API</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="api/mlflow_logger.html#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/mlflow_logger.html#class-structure">Class Structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/mlflow_logger.html#key-methods">Key Methods</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/mlflow_logger.html#implementation-details">Implementation Details</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/mlflow_logger.html#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/mlflow_logger.html#usage-example">Usage Example</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/mlflow_logger.html#best-practices">Best Practices</a></li>
+</ul>
+</li>
+</ul>
+</div>
+<div class="toctree-wrapper compound">
+<p class="caption" role="heading"><span class="caption-text">Hyperparameter Optimization</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="api/hyperopt_agent.html">Hyperopt Agent API</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="api/hyperopt_agent.html#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/hyperopt_agent.html#class-structure">Class Structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/hyperopt_agent.html#key-methods">Key Methods</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/hyperopt_agent.html#implementation-details">Implementation Details</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/hyperopt_agent.html#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/hyperopt_agent.html#usage-example">Usage Example</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/hyperopt_agent.html#best-practices">Best Practices</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="api/hyperopt_env.html">Hyperopt Environment API</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="api/hyperopt_env.html#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/hyperopt_env.html#class-structure">Class Structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/hyperopt_env.html#key-methods">Key Methods</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/hyperopt_env.html#implementation-details">Implementation Details</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/hyperopt_env.html#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/hyperopt_env.html#usage-example">Usage Example</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/hyperopt_env.html#best-practices">Best Practices</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="api/hyperopt_tuner.html">Hyperopt Tuner API</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="api/hyperopt_tuner.html#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/hyperopt_tuner.html#class-structure">Class Structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/hyperopt_tuner.html#key-methods">Key Methods</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/hyperopt_tuner.html#implementation-details">Implementation Details</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/hyperopt_tuner.html#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/hyperopt_tuner.html#usage-example">Usage Example</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/hyperopt_tuner.html#best-practices">Best Practices</a></li>
+</ul>
+</li>
+</ul>
+</div>
+<div class="toctree-wrapper compound">
+<p class="caption" role="heading"><span class="caption-text">Monitoring &amp; Utilities</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="api/training_optimizer.html">Training Optimizer API</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="api/training_optimizer.html#class-structure">Class Structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/training_optimizer.html#key-methods">Key Methods</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/training_optimizer.html#implementation-details">Implementation Details</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/training_optimizer.html#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/training_optimizer.html#usage-example">Usage Example</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/training_optimizer.html#best-practices">Best Practices</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="api/advanced_scenario.html">Advanced Scenario API</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="api/advanced_scenario.html#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/advanced_scenario.html#class-structure">Class Structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/advanced_scenario.html#key-methods">Key Methods</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/advanced_scenario.html#implementation-details">Implementation Details</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/advanced_scenario.html#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/advanced_scenario.html#usage-example">Usage Example</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/advanced_scenario.html#best-practices">Best Practices</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="api/performance_metrics.html">Performance Metrics API</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="api/performance_metrics.html#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/performance_metrics.html#key-functions">Key Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/performance_metrics.html#implementation-details">Implementation Details</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/performance_metrics.html#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/performance_metrics.html#usage-example">Usage Example</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/performance_metrics.html#best-practices">Best Practices</a></li>
+</ul>
+</li>
+</ul>
+</div>
+<div class="toctree-wrapper compound">
+<p class="caption" role="heading"><span class="caption-text">Architecture</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="architecture/backtesting/single_asset.html">Single-Asset Backtesting System</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="architecture/backtesting/single_asset.html#core-features">Core Features</a></li>
+<li class="toctree-l2"><a class="reference internal" href="architecture/backtesting/single_asset.html#implementation-details">Implementation Details</a></li>
+<li class="toctree-l2"><a class="reference internal" href="architecture/backtesting/single_asset.html#usage-example">Usage Example</a></li>
+<li class="toctree-l2"><a class="reference internal" href="architecture/backtesting/single_asset.html#logging-structure">Logging Structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="architecture/backtesting/single_asset.html#recent-changes">Recent Changes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="architecture/backtesting/single_asset.html#related-components">Related Components</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="architecture/backtesting/multi_asset.html">Multi-Asset Backtesting System</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="architecture/backtesting/multi_asset.html#core-features">Core Features</a></li>
+<li class="toctree-l2"><a class="reference internal" href="architecture/backtesting/multi_asset.html#implementation-details">Implementation Details</a></li>
+<li class="toctree-l2"><a class="reference internal" href="architecture/backtesting/multi_asset.html#usage-example">Usage Example</a></li>
+<li class="toctree-l2"><a class="reference internal" href="architecture/backtesting/multi_asset.html#portfolio-tracking">Portfolio Tracking</a></li>
+<li class="toctree-l2"><a class="reference internal" href="architecture/backtesting/multi_asset.html#recent-changes">Recent Changes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="architecture/backtesting/multi_asset.html#related-components">Related Components</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="architecture/risk_management/overview.html">Risk Management Overview</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="architecture/risk_management/overview.html#live-trading-environment">Live Trading Environment</a></li>
+<li class="toctree-l2"><a class="reference internal" href="architecture/risk_management/overview.html#implementation-details">Implementation Details</a></li>
+<li class="toctree-l2"><a class="reference internal" href="architecture/risk_management/overview.html#multi-agent-environment">Multi-Agent Environment</a></li>
+<li class="toctree-l2"><a class="reference internal" href="architecture/risk_management/overview.html#id2">Implementation Details</a></li>
+<li class="toctree-l2"><a class="reference internal" href="architecture/risk_management/overview.html#best-practices">Best Practices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="architecture/risk_management/overview.html#recent-changes">Recent Changes</a></li>
+</ul>
+</li>
+</ul>
+</div>
+<div class="toctree-wrapper compound">
+<p class="caption" role="heading"><span class="caption-text">Examples</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="examples/index.html">Usage Examples</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="examples/index.html#basic-examples">Basic Examples</a></li>
+<li class="toctree-l2"><a class="reference internal" href="examples/index.html#quick-start">Quick Start</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="examples/single_asset_example.html">Single Asset Trading Example</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="examples/single_asset_example.html#basic-setup">Basic Setup</a></li>
+<li class="toctree-l2"><a class="reference internal" href="examples/single_asset_example.html#strategy-implementation">Strategy Implementation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="examples/single_asset_example.html#running-the-backtest">Running the Backtest</a></li>
+<li class="toctree-l2"><a class="reference internal" href="examples/single_asset_example.html#analyzing-results">Analyzing Results</a></li>
+<li class="toctree-l2"><a class="reference internal" href="examples/single_asset_example.html#advanced-usage">Advanced Usage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="examples/single_asset_example.html#best-practices">Best Practices</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="examples/multi_asset_example.html">Multi-Asset Trading Example</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="examples/multi_asset_example.html#basic-setup">Basic Setup</a></li>
+<li class="toctree-l2"><a class="reference internal" href="examples/multi_asset_example.html#portfolio-management">Portfolio Management</a></li>
+<li class="toctree-l2"><a class="reference internal" href="examples/multi_asset_example.html#strategy-implementation">Strategy Implementation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="examples/multi_asset_example.html#running-the-backtest">Running the Backtest</a></li>
+<li class="toctree-l2"><a class="reference internal" href="examples/multi_asset_example.html#analyzing-results">Analyzing Results</a></li>
+<li class="toctree-l2"><a class="reference internal" href="examples/multi_asset_example.html#advanced-features">Advanced Features</a></li>
+<li class="toctree-l2"><a class="reference internal" href="examples/multi_asset_example.html#best-practices">Best Practices</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="examples/reinforcement_learning.html">Reinforcement Learning Example</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="examples/reinforcement_learning.html#environment-setup">Environment Setup</a></li>
+<li class="toctree-l2"><a class="reference internal" href="examples/reinforcement_learning.html#creating-the-environment">Creating the Environment</a></li>
+<li class="toctree-l2"><a class="reference internal" href="examples/reinforcement_learning.html#simple-agent-implementation">Simple Agent Implementation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="examples/reinforcement_learning.html#training-loop">Training Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="examples/reinforcement_learning.html#model-evaluation">Model Evaluation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="examples/reinforcement_learning.html#advanced-features">Advanced Features</a></li>
+<li class="toctree-l2"><a class="reference internal" href="examples/reinforcement_learning.html#best-practices">Best Practices</a></li>
+</ul>
+</li>
+</ul>
+</div>
+<div class="toctree-wrapper compound">
+<p class="caption" role="heading"><span class="caption-text">Project Info</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="changelog.html">Changelog</a></li>
+</ul>
+</div>
+</section>
+</section>
+<section id="indices-and-tables">
+<h1>Indices and tables<a class="headerlink" href="#indices-and-tables" title="Link to this heading"></a></h1>
+<ul class="simple">
+<li><p><a class="reference internal" href="genindex.html"><span class="std std-ref">Index</span></a></p></li>
+<li><p><a class="reference internal" href="py-modindex.html"><span class="std std-ref">Module Index</span></a></p></li>
+<li><p><a class="reference internal" href="search.html"><span class="std std-ref">Search Page</span></a></p></li>
+</ul>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="api/backtester.html" class="btn btn-neutral float-right" title="Backtester API" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2024, Your Name.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

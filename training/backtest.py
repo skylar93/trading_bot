@@ -1,64 +1,117 @@
 """
-Backtesting System Core Implementation
-====================================
+Single-Asset Backtesting System
+==============================
 
-This module implements the core backtesting functionality for single-asset trading strategies.
+This module implements a basic backtesting system for single-asset trading strategies.
+Focused on simplicity and clarity, it serves as a foundation for more complex backtesting systems.
 
 File Structure:
 --------------
 - Class: Backtester
   - Core backtesting engine for single-asset trading
-  - Handles trade execution, PnL calculation, and performance metrics
-  
+  - Handles trade execution and performance tracking
+  - Calculates key trading metrics
+
 Key Components:
 --------------
 1. Trade Execution
-   - execute_trade(): Processes buy/sell actions with transaction costs
-   - Position tracking and balance management
-   
+   - Position sizing based on action (-1 to 1)
+   - Transaction cost consideration
+   - Balance and position tracking
+
 2. Performance Tracking
-   - Portfolio value calculation
+   - Portfolio value history
    - Trade history logging
-   - Performance metrics (Sharpe, Sortino, Max DD)
+   - Performance metrics calculation
+   - Peak value tracking for drawdown
+
+3. Strategy Integration
+   - Window-based strategy execution
+   - Action validation and processing
+   - Trade result accumulation
 
 Dependencies:
 ------------
 - numpy: Numerical computations and metrics
 - pandas: Data handling and time series operations
 - logging: Debug and transaction logging
-
-Usage Example:
--------------
-```python
-data = pd.DataFrame(...)  # OHLCV data with required columns
-backtester = Backtester(data, initial_balance=10000, trading_fee=0.001)
-results = backtester.run(strategy, window_size=20)
-```
+- datetime: Timestamp handling
+- typing: Type hints for better code clarity
 
 Implementation Notes:
 -------------------
-1. Position Management
-   - Single asset position tracking
+1. Data Requirements
+   - OHLCV columns must be prefixed with '$'
+   - Required columns: $open, $high, $low, $close, $volume
+   - DataFrame index serves as timestamp
+
+2. Position Management
+   - Single position tracking (no multi-asset support)
+   - Dust position cleanup (< 1e-4)
    - Balance updates include transaction fees
-   
-2. Risk Considerations
-   - Basic position size limits
-   - Peak value tracking for drawdown
-   
+
 3. Performance Metrics
-   - Daily returns calculation
-   - Risk-adjusted metrics computation
+   - Sharpe Ratio (annualized, risk-free rate = 0)
+   - Sortino Ratio (downside deviation)
+   - Maximum Drawdown
+   - Win Rate calculation
+
+Example Usage:
+-------------
+```python
+# Prepare OHLCV data
+data = pd.DataFrame({
+    '$open': [...],
+    '$high': [...],
+    '$low': [...],
+    '$close': [...],
+    '$volume': [...]
+})
+
+# Initialize backtester
+backtester = Backtester(
+    data=data,
+    initial_balance=10000.0,
+    trading_fee=0.001  # 0.1% fee
+)
+
+# Create strategy (must implement get_action method)
+class SimpleStrategy:
+    def get_action(self, window_data):
+        # Return value between -1 and 1
+        return 0.5  # Example: always buy with 50% size
+
+# Run backtest
+results = backtester.run(
+    strategy=SimpleStrategy(),
+    window_size=20,
+    verbose=True
+)
+
+# Access results
+print(f"Final Value: {results['portfolio_values'][-1]}")
+print(f"Sharpe Ratio: {results['metrics']['sharpe_ratio']}")
+```
+
+Logging Structure:
+----------------
+- ERROR: Critical failures (e.g., strategy errors)
+- WARNING: Potential issues (e.g., invalid actions)
+- INFO: Trade execution, progress updates
+- DEBUG: Detailed calculations, state changes
 
 Recent Changes:
 --------------
-- Added detailed logging for trade execution
+- Enhanced logging for better debugging
 - Improved PnL calculation accuracy
-- Enhanced metrics calculation
+- Added detailed trade history
+- Fixed position size validation
 
 See Also:
 ---------
-- RiskAwareBacktester: Extended version with risk management
-- BacktestEngine: Multi-asset version
+- BacktestEngine: Multi-asset backtesting system
+- RiskAwareBacktester: Risk-managed version
+- ExperimentalBacktester: Advanced features testing
 """
 
 import logging
