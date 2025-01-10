@@ -9,7 +9,7 @@ import pandas as pd
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 
-from training.utils.mlflow_manager import MLflowManager
+from training.utils.unified_mlflow_manager import MLflowManager
 from training.utils.ray_manager import RayManager, RayConfig
 from envs.trading_env import TradingEnvironment
 from agents.strategies.ppo_agent import PPOAgent

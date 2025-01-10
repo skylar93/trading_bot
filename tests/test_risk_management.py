@@ -19,6 +19,10 @@ class TestRiskManager(unittest.TestCase):
             max_leverage=1.0,
             volatility_lookback=20,
             risk_free_rate=0.02,
+            var_confidence_level=0.95,
+            correlation_window=30,
+            max_correlation=0.7,
+            portfolio_var_limit=0.02
         )
         self.risk_manager = RiskManager(self.config)
 
@@ -27,6 +31,13 @@ class TestRiskManager(unittest.TestCase):
         self.sample_prices = pd.Series(
             np.random.lognormal(0, 0.02, 100), index=dates
         )
+        
+        # Create multi-asset price data
+        self.asset_prices = {
+            "BTC": pd.Series(np.random.lognormal(0, 0.03, 100), index=dates),
+            "ETH": pd.Series(np.random.lognormal(0, 0.04, 100), index=dates),
+            "SOL": pd.Series(np.random.lognormal(0, 0.05, 100), index=dates)
+        }
 
     def test_position_sizing(self):
         """Test position size calculation"""
@@ -210,6 +221,93 @@ class TestRiskManager(unittest.TestCase):
         self.assertFalse(
             self.risk_manager.process_trade_signal(invalid_size_signal),
             "Signal with zero size should be rejected",
+        )
+
+    def test_var_calculation(self):
+        """Test Value at Risk calculation"""
+        returns = self.sample_prices.pct_change().dropna()
+        
+        # Calculate 95% VaR
+        var_95 = self.risk_manager.calculate_var(returns, 0.95)
+        self.assertTrue(var_95 > 0, "VaR should be positive")
+        self.assertTrue(var_95 < 1, "VaR should be less than 100%")
+        
+        # Higher confidence level should give larger VaR
+        var_99 = self.risk_manager.calculate_var(returns, 0.99)
+        self.assertTrue(var_99 > var_95, "99% VaR should be larger than 95% VaR")
+
+    def test_cvar_calculation(self):
+        """Test Conditional Value at Risk calculation"""
+        returns = self.sample_prices.pct_change().dropna()
+        
+        # Calculate 95% CVaR
+        cvar_95 = self.risk_manager.calculate_cvar(returns, 0.95)
+        var_95 = self.risk_manager.calculate_var(returns, 0.95)
+        
+        self.assertTrue(cvar_95 > 0, "CVaR should be positive")
+        self.assertTrue(cvar_95 > var_95, "CVaR should be larger than VaR")
+
+    def test_correlation_matrix(self):
+        """Test correlation matrix calculation"""
+        self.risk_manager.update_correlation_matrix(self.asset_prices)
+        
+        # Check correlation matrix properties
+        self.assertIsNotNone(self.risk_manager._correlation_matrix)
+        self.assertEqual(
+            len(self.risk_manager._correlation_matrix),
+            len(self.asset_prices),
+            "Correlation matrix should have same size as number of assets"
+        )
+        
+        # Check correlation limits
+        correlation_within_limits = self.risk_manager.check_correlation_limits("BTC", "ETH")
+        self.assertIsInstance(correlation_within_limits, bool)
+        
+        # Test correlation values
+        btc_eth_corr = abs(self.risk_manager._correlation_matrix.loc["BTC", "ETH"])
+        self.assertTrue(0 <= btc_eth_corr <= 1, "Correlation should be between 0 and 1")
+
+    def test_portfolio_var(self):
+        """Test portfolio VaR calculation"""
+        self.risk_manager.update_correlation_matrix(self.asset_prices)
+        
+        portfolio_value = 10000
+        positions = {
+            "BTC": 3000,
+            "ETH": 4000,
+            "SOL": 3000
+        }
+        
+        portfolio_var = self.risk_manager.get_portfolio_var(positions, portfolio_value)
+        self.assertTrue(portfolio_var > 0, "Portfolio VaR should be positive")
+        self.assertTrue(portfolio_var < 1, "Portfolio VaR should be less than 100%")
+
+    def test_position_sizing_with_correlation(self):
+        """Test position sizing with correlation constraints"""
+        self.risk_manager.update_correlation_matrix(self.asset_prices)
+        
+        portfolio_value = 10000
+        price = 100
+        
+        # Test position sizing with no existing positions
+        size_no_positions = self.risk_manager.calculate_position_size(
+            portfolio_value=portfolio_value,
+            price=price,
+            asset_name="BTC"
+        )
+        
+        # Test position sizing with existing positions
+        current_positions = {"ETH": 2000, "SOL": 3000}
+        size_with_positions = self.risk_manager.calculate_position_size(
+            portfolio_value=portfolio_value,
+            price=price,
+            asset_name="BTC",
+            current_positions=current_positions
+        )
+        
+        self.assertTrue(
+            size_with_positions <= size_no_positions,
+            "Position size with existing positions should be less than or equal to size without positions"
         )
 
 

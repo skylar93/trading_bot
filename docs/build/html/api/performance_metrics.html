@@ -1,0 +1,406 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Performance Metrics API &mdash; trading_bot  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=80d5e7a1" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=e59714d7" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="../_static/doctools.js?v=9bcbadda"></script>
+      <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Single-Asset Backtesting System" href="../architecture/backtesting/single_asset.html" />
+    <link rel="prev" title="Advanced Scenario API" href="advanced_scenario.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            trading_bot
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">API Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="backtester.html">Backtester API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="backtest_engine.html">Backtest Engine API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="risk_manager.html">Risk Manager API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="base_env.html">Trading Environment Base</a></li>
+<li class="toctree-l1"><a class="reference internal" href="experimental_backtester.html">ExperimentalBacktester</a></li>
+<li class="toctree-l1"><a class="reference internal" href="live_trading_env.html">Live Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="multi_agent_env.html">Multi-Agent Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="paper_trading_env.html">Paper Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="trading_env.html">Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="wrap_env.html">Environment Wrappers</a></li>
+<li class="toctree-l1"><a class="reference internal" href="ppo_agent.html">PPO Agent API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="mlflow_management.html">MLflow Management Components</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Agents &amp; Training</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="base_policy.html">Base Policy API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="mlflow_manager.html">MLflow Manager API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="batch_strategy.html">Batch Strategy API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="hyperopt.html">Hyperopt API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="mlflow_logger.html">MLflow Logger API</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Hyperparameter Optimization</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="hyperopt_agent.html">Hyperopt Agent API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="hyperopt_env.html">Hyperopt Environment API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="hyperopt_tuner.html">Hyperopt Tuner API</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Monitoring &amp; Utilities</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="training_optimizer.html">Training Optimizer API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="advanced_scenario.html">Advanced Scenario API</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Performance Metrics API</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#key-functions">Key Functions</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#returns-metrics">Returns Metrics</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#trade-metrics">Trade Metrics</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#position-metrics">Position Metrics</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#implementation-details">Implementation Details</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#returns-analysis">Returns Analysis</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#trade-analysis">Trade Analysis</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#usage-example">Usage Example</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#basic-usage">Basic Usage</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#best-practices">Best Practices</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#data-quality">1. Data Quality</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#time-periods">2. Time Periods</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#risk-assessment">3. Risk Assessment</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#performance-attribution">4. Performance Attribution</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Architecture</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../architecture/backtesting/single_asset.html">Single-Asset Backtesting System</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../architecture/backtesting/multi_asset.html">Multi-Asset Backtesting System</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../architecture/risk_management/overview.html">Risk Management Overview</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Examples</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../examples/index.html">Usage Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/single_asset_example.html">Single Asset Trading Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/multi_asset_example.html">Multi-Asset Trading Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/reinforcement_learning.html">Reinforcement Learning Example</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Project Info</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../changelog.html">Changelog</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">trading_bot</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Performance Metrics API</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/api/performance_metrics.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="performance-metrics-api">
+<h1>Performance Metrics API<a class="headerlink" href="#performance-metrics-api" title="Link to this heading"></a></h1>
+<section id="overview">
+<h2>Overview<a class="headerlink" href="#overview" title="Link to this heading"></a></h2>
+<p>The performance metrics module provides comprehensive tools for calculating and analyzing trading performance across returns, trades, and positions.</p>
+</section>
+<section id="key-functions">
+<h2>Key Functions<a class="headerlink" href="#key-functions" title="Link to this heading"></a></h2>
+<section id="returns-metrics">
+<h3>Returns Metrics<a class="headerlink" href="#returns-metrics" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">calculate_returns_metrics</span><span class="p">(</span><span class="n">returns</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Calculate metrics based on returns series.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        returns: Series of period returns</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        dict: Metrics including:</span>
+<span class="sd">            - total_return</span>
+<span class="sd">            - annual_return</span>
+<span class="sd">            - volatility</span>
+<span class="sd">            - sharpe_ratio</span>
+<span class="sd">            - sortino_ratio</span>
+<span class="sd">            - max_drawdown</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">metrics</span> <span class="o">=</span> <span class="p">{}</span>
+
+    <span class="c1"># Total and annual returns</span>
+    <span class="n">metrics</span><span class="p">[</span><span class="s1">&#39;total_return&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span> <span class="o">+</span> <span class="n">returns</span><span class="p">)</span><span class="o">.</span><span class="n">prod</span><span class="p">()</span> <span class="o">-</span> <span class="mi">1</span>
+    <span class="n">metrics</span><span class="p">[</span><span class="s1">&#39;annual_return&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="p">(</span><span class="mi">1</span> <span class="o">+</span> <span class="n">metrics</span><span class="p">[</span><span class="s1">&#39;total_return&#39;</span><span class="p">])</span> <span class="o">**</span>
+        <span class="p">(</span><span class="mi">252</span> <span class="o">/</span> <span class="nb">len</span><span class="p">(</span><span class="n">returns</span><span class="p">))</span> <span class="o">-</span> <span class="mi">1</span>
+    <span class="p">)</span>
+
+    <span class="c1"># Risk metrics</span>
+    <span class="n">metrics</span><span class="p">[</span><span class="s1">&#39;volatility&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">returns</span><span class="o">.</span><span class="n">std</span><span class="p">()</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="mi">252</span><span class="p">)</span>
+    <span class="n">metrics</span><span class="p">[</span><span class="s1">&#39;sharpe_ratio&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">metrics</span><span class="p">[</span><span class="s1">&#39;annual_return&#39;</span><span class="p">]</span> <span class="o">/</span> <span class="n">metrics</span><span class="p">[</span><span class="s1">&#39;volatility&#39;</span><span class="p">]</span>
+    <span class="p">)</span>
+
+    <span class="c1"># Drawdown</span>
+    <span class="n">metrics</span><span class="p">[</span><span class="s1">&#39;max_drawdown&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">calculate_max_drawdown</span><span class="p">(</span><span class="n">returns</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">metrics</span>
+</pre></div>
+</div>
+</section>
+<section id="trade-metrics">
+<h3>Trade Metrics<a class="headerlink" href="#trade-metrics" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">calculate_trade_metrics</span><span class="p">(</span><span class="n">trades_df</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Calculate metrics based on individual trades.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        trades_df: DataFrame of trades with columns:</span>
+<span class="sd">                 - entry_price</span>
+<span class="sd">                 - exit_price</span>
+<span class="sd">                 - size</span>
+<span class="sd">                 - pnl</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        dict: Metrics including:</span>
+<span class="sd">            - win_rate</span>
+<span class="sd">            - profit_factor</span>
+<span class="sd">            - avg_win</span>
+<span class="sd">            - avg_loss</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">metrics</span> <span class="o">=</span> <span class="p">{}</span>
+
+    <span class="c1"># Win rate</span>
+    <span class="n">wins</span> <span class="o">=</span> <span class="n">trades_df</span><span class="p">[</span><span class="s1">&#39;pnl&#39;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">0</span>
+    <span class="n">metrics</span><span class="p">[</span><span class="s1">&#39;win_rate&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">wins</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+
+    <span class="c1"># Profit factor</span>
+    <span class="n">gross_profit</span> <span class="o">=</span> <span class="n">trades_df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">wins</span><span class="p">,</span> <span class="s1">&#39;pnl&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+    <span class="n">gross_loss</span> <span class="o">=</span> <span class="nb">abs</span><span class="p">(</span><span class="n">trades_df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="o">~</span><span class="n">wins</span><span class="p">,</span> <span class="s1">&#39;pnl&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">())</span>
+    <span class="n">metrics</span><span class="p">[</span><span class="s1">&#39;profit_factor&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">gross_profit</span> <span class="o">/</span> <span class="n">gross_loss</span>
+
+    <span class="c1"># Average trade metrics</span>
+    <span class="n">metrics</span><span class="p">[</span><span class="s1">&#39;avg_win&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">trades_df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">wins</span><span class="p">,</span> <span class="s1">&#39;pnl&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+    <span class="n">metrics</span><span class="p">[</span><span class="s1">&#39;avg_loss&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">trades_df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="o">~</span><span class="n">wins</span><span class="p">,</span> <span class="s1">&#39;pnl&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+
+    <span class="k">return</span> <span class="n">metrics</span>
+</pre></div>
+</div>
+</section>
+<section id="position-metrics">
+<h3>Position Metrics<a class="headerlink" href="#position-metrics" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">calculate_position_metrics</span><span class="p">(</span><span class="n">positions_df</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Calculate metrics based on position history.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        positions_df: DataFrame of positions with columns:</span>
+<span class="sd">                    - symbol</span>
+<span class="sd">                    - size</span>
+<span class="sd">                    - value</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        dict: Metrics including:</span>
+<span class="sd">            - avg_position_size</span>
+<span class="sd">            - max_position_size</span>
+<span class="sd">            - turnover</span>
+<span class="sd">            - concentration</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">metrics</span> <span class="o">=</span> <span class="p">{}</span>
+
+    <span class="c1"># Position sizing</span>
+    <span class="n">metrics</span><span class="p">[</span><span class="s1">&#39;avg_position_size&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">positions_df</span><span class="p">[</span><span class="s1">&#39;size&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+    <span class="n">metrics</span><span class="p">[</span><span class="s1">&#39;max_position_size&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">positions_df</span><span class="p">[</span><span class="s1">&#39;size&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">max</span><span class="p">()</span>
+
+    <span class="c1"># Turnover</span>
+    <span class="n">metrics</span><span class="p">[</span><span class="s1">&#39;turnover&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">positions_df</span><span class="p">[</span><span class="s1">&#39;size&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">diff</span><span class="p">()</span><span class="o">.</span><span class="n">abs</span><span class="p">()</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span> <span class="o">/</span>
+        <span class="nb">len</span><span class="p">(</span><span class="n">positions_df</span><span class="p">)</span>
+    <span class="p">)</span>
+
+    <span class="c1"># Concentration</span>
+    <span class="n">total_value</span> <span class="o">=</span> <span class="n">positions_df</span><span class="p">[</span><span class="s1">&#39;value&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+    <span class="n">metrics</span><span class="p">[</span><span class="s1">&#39;concentration&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="p">(</span><span class="n">positions_df</span><span class="p">[</span><span class="s1">&#39;value&#39;</span><span class="p">]</span> <span class="o">/</span> <span class="n">total_value</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span>
+    <span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+
+    <span class="k">return</span> <span class="n">metrics</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="implementation-details">
+<h2>Implementation Details<a class="headerlink" href="#implementation-details" title="Link to this heading"></a></h2>
+<section id="returns-analysis">
+<h3>Returns Analysis<a class="headerlink" href="#returns-analysis" title="Link to this heading"></a></h3>
+<ol class="arabic simple">
+<li><p>Return Calculations:
+- Period returns
+- Cumulative returns
+- Annualized metrics</p></li>
+<li><p>Risk Metrics:
+- Volatility (standard deviation)
+- Downside deviation
+- Maximum drawdown</p></li>
+<li><p>Risk-Adjusted Returns:
+- Sharpe ratio
+- Sortino ratio
+- Calmar ratio</p></li>
+</ol>
+</section>
+<section id="trade-analysis">
+<h3>Trade Analysis<a class="headerlink" href="#trade-analysis" title="Link to this heading"></a></h3>
+<ol class="arabic simple">
+<li><p>Trade Statistics:
+- Win/loss ratio
+- Average trade P&amp;L
+- Trade duration</p></li>
+<li><p>Risk Management:
+- Maximum drawdown
+- Value at Risk (VaR)
+- Expected Shortfall</p></li>
+<li><p>Transaction Analysis:
+- Trading costs
+- Slippage
+- Market impact</p></li>
+</ol>
+</section>
+</section>
+<section id="dependencies">
+<h2>Dependencies<a class="headerlink" href="#dependencies" title="Link to this heading"></a></h2>
+<ul class="simple">
+<li><p>NumPy (statistical calculations)</p></li>
+<li><p>Pandas (DataFrame operations)</p></li>
+<li><p>SciPy (optional, for advanced statistics)</p></li>
+</ul>
+</section>
+<section id="usage-example">
+<h2>Usage Example<a class="headerlink" href="#usage-example" title="Link to this heading"></a></h2>
+<section id="basic-usage">
+<h3>Basic Usage<a class="headerlink" href="#basic-usage" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Calculate returns metrics</span>
+<span class="n">returns</span> <span class="o">=</span> <span class="n">calculate_returns_metrics</span><span class="p">(</span><span class="n">daily_returns</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Sharpe Ratio: </span><span class="si">{</span><span class="n">returns</span><span class="p">[</span><span class="s1">&#39;sharpe_ratio&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+<span class="c1"># Calculate trade metrics</span>
+<span class="n">trades</span> <span class="o">=</span> <span class="n">calculate_trade_metrics</span><span class="p">(</span><span class="n">trades_df</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Win Rate: </span><span class="si">{</span><span class="n">trades</span><span class="p">[</span><span class="s1">&#39;win_rate&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">.2%</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+<span class="c1"># Calculate position metrics</span>
+<span class="n">positions</span> <span class="o">=</span> <span class="n">calculate_position_metrics</span><span class="p">(</span><span class="n">positions_df</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Turnover: </span><span class="si">{</span><span class="n">positions</span><span class="p">[</span><span class="s1">&#39;turnover&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="best-practices">
+<h2>Best Practices<a class="headerlink" href="#best-practices" title="Link to this heading"></a></h2>
+<section id="data-quality">
+<h3>1. Data Quality<a class="headerlink" href="#data-quality" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Clean and validate input data</p></li>
+<li><p>Handle missing values</p></li>
+<li><p>Check for outliers</p></li>
+</ul>
+</section>
+<section id="time-periods">
+<h3>2. Time Periods<a class="headerlink" href="#time-periods" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Use consistent periods</p></li>
+<li><p>Consider market hours</p></li>
+<li><p>Account for holidays</p></li>
+</ul>
+</section>
+<section id="risk-assessment">
+<h3>3. Risk Assessment<a class="headerlink" href="#risk-assessment" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Use multiple metrics</p></li>
+<li><p>Consider drawdowns</p></li>
+<li><p>Track correlations</p></li>
+</ul>
+</section>
+<section id="performance-attribution">
+<h3>4. Performance Attribution<a class="headerlink" href="#performance-attribution" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Analyze by strategy</p></li>
+<li><p>Track factor exposure</p></li>
+<li><p>Monitor style drift</p></li>
+</ul>
+</section>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="advanced_scenario.html" class="btn btn-neutral float-left" title="Advanced Scenario API" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../architecture/backtesting/single_asset.html" class="btn btn-neutral float-right" title="Single-Asset Backtesting System" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2024, Your Name.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

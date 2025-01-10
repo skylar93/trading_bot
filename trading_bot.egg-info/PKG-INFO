@@ -1,3 +1,10 @@
 Metadata-Version: 2.1
-Name: trading-bot
+Name: trading_bot
 Version: 0.1
+Requires-Dist: streamlit
+Requires-Dist: plotly
+Requires-Dist: pandas
+Requires-Dist: numpy
+Requires-Dist: ccxt
+Requires-Dist: ta
+Requires-Dist: websockets

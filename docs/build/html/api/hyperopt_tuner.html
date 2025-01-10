@@ -1,0 +1,416 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hyperopt Tuner API &mdash; trading_bot  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=80d5e7a1" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=e59714d7" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="../_static/doctools.js?v=9bcbadda"></script>
+      <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Training Optimizer API" href="training_optimizer.html" />
+    <link rel="prev" title="Hyperopt Environment API" href="hyperopt_env.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            trading_bot
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">API Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="backtester.html">Backtester API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="backtest_engine.html">Backtest Engine API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="risk_manager.html">Risk Manager API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="base_env.html">Trading Environment Base</a></li>
+<li class="toctree-l1"><a class="reference internal" href="experimental_backtester.html">ExperimentalBacktester</a></li>
+<li class="toctree-l1"><a class="reference internal" href="live_trading_env.html">Live Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="multi_agent_env.html">Multi-Agent Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="paper_trading_env.html">Paper Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="trading_env.html">Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="wrap_env.html">Environment Wrappers</a></li>
+<li class="toctree-l1"><a class="reference internal" href="ppo_agent.html">PPO Agent API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="mlflow_management.html">MLflow Management Components</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Agents &amp; Training</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="base_policy.html">Base Policy API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="mlflow_manager.html">MLflow Manager API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="batch_strategy.html">Batch Strategy API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="hyperopt.html">Hyperopt API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="mlflow_logger.html">MLflow Logger API</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Hyperparameter Optimization</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="hyperopt_agent.html">Hyperopt Agent API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="hyperopt_env.html">Hyperopt Environment API</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Hyperopt Tuner API</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#class-structure">Class Structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#key-methods">Key Methods</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#objective-function">Objective Function</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#configuration-evaluation">Configuration Evaluation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#optimization-process">Optimization Process</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#implementation-details">Implementation Details</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#search-space-configuration">Search Space Configuration</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#evaluation-process">Evaluation Process</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#usage-example">Usage Example</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#basic-usage">Basic Usage</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#mlflow-integration">MLflow Integration</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#best-practices">Best Practices</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#search-space-design">1. Search Space Design</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#resource-management">2. Resource Management</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#evaluation-strategy">3. Evaluation Strategy</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#result-analysis">4. Result Analysis</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Monitoring &amp; Utilities</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="training_optimizer.html">Training Optimizer API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="advanced_scenario.html">Advanced Scenario API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="performance_metrics.html">Performance Metrics API</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Architecture</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../architecture/backtesting/single_asset.html">Single-Asset Backtesting System</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../architecture/backtesting/multi_asset.html">Multi-Asset Backtesting System</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../architecture/risk_management/overview.html">Risk Management Overview</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Examples</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../examples/index.html">Usage Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/single_asset_example.html">Single Asset Trading Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/multi_asset_example.html">Multi-Asset Trading Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/reinforcement_learning.html">Reinforcement Learning Example</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Project Info</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../changelog.html">Changelog</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">trading_bot</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Hyperopt Tuner API</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/api/hyperopt_tuner.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="hyperopt-tuner-api">
+<h1>Hyperopt Tuner API<a class="headerlink" href="#hyperopt-tuner-api" title="Link to this heading"></a></h1>
+<section id="overview">
+<h2>Overview<a class="headerlink" href="#overview" title="Link to this heading"></a></h2>
+<p>The <code class="docutils literal notranslate"><span class="pre">MinimalTuner</span></code> class provides a streamlined interface for hyperparameter optimization using Ray Tune, with optional MLflow integration for experiment tracking.</p>
+</section>
+<section id="class-structure">
+<h2>Class Structure<a class="headerlink" href="#class-structure" title="Link to this heading"></a></h2>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">MinimalTuner</span><span class="p">:</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">train_data</span><span class="p">,</span> <span class="n">val_data</span><span class="p">,</span> <span class="n">mlflow_tracking</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialize hyperparameter tuner.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            train_data: Training dataset</span>
+<span class="sd">            val_data: Validation dataset</span>
+<span class="sd">            mlflow_tracking: Whether to use MLflow</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">train_data</span> <span class="o">=</span> <span class="n">train_data</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">val_data</span> <span class="o">=</span> <span class="n">val_data</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">mlflow_tracking</span> <span class="o">=</span> <span class="n">mlflow_tracking</span>
+        <span class="k">if</span> <span class="n">mlflow_tracking</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">mlflow_manager</span> <span class="o">=</span> <span class="n">MLflowManager</span><span class="p">()</span>
+</pre></div>
+</div>
+</section>
+<section id="key-methods">
+<h2>Key Methods<a class="headerlink" href="#key-methods" title="Link to this heading"></a></h2>
+<section id="objective-function">
+<h3>Objective Function<a class="headerlink" href="#objective-function" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">objective</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">session</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Objective function for Ray Tune.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        config: Hyperparameter configuration</span>
+<span class="sd">        session: Ray Tune session</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        None (reports metrics via session)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Train agent with config</span>
+    <span class="n">agent</span> <span class="o">=</span> <span class="n">train_agent</span><span class="p">(</span><span class="n">config</span><span class="p">)</span>
+
+    <span class="c1"># Evaluate on validation set</span>
+    <span class="n">metrics</span> <span class="o">=</span> <span class="n">evaluate_config</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">agent</span><span class="p">)</span>
+
+    <span class="c1"># Report results</span>
+    <span class="n">session</span><span class="o">.</span><span class="n">report</span><span class="p">(</span><span class="n">metrics</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="configuration-evaluation">
+<h3>Configuration Evaluation<a class="headerlink" href="#configuration-evaluation" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">evaluate_config</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">agent</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Evaluate configuration on validation data.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        config: Hyperparameter configuration</span>
+<span class="sd">        agent: Optional pre-trained agent</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        dict: Evaluation metrics</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">env</span> <span class="o">=</span> <span class="n">TradingEnvironment</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">val_data</span><span class="p">)</span>
+
+    <span class="c1"># Run evaluation episodes</span>
+    <span class="n">returns</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">episode</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">20</span><span class="p">):</span>
+        <span class="n">episode_return</span> <span class="o">=</span> <span class="n">run_episode</span><span class="p">(</span><span class="n">env</span><span class="p">,</span> <span class="n">agent</span><span class="p">)</span>
+        <span class="n">returns</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">episode_return</span><span class="p">)</span>
+
+    <span class="c1"># Calculate metrics</span>
+    <span class="n">metrics</span> <span class="o">=</span> <span class="n">calculate_metrics</span><span class="p">(</span><span class="n">returns</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">metrics</span>
+</pre></div>
+</div>
+</section>
+<section id="optimization-process">
+<h3>Optimization Process<a class="headerlink" href="#optimization-process" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">optimize</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">search_space</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">num_samples</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>
+            <span class="n">max_concurrent</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Run hyperparameter optimization.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        search_space: Parameter search space</span>
+<span class="sd">        num_samples: Number of trials</span>
+<span class="sd">        max_concurrent: Max parallel trials</span>
+<span class="sd">        **kwargs: Additional tuner config</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        dict: Best trial results</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Setup tuner</span>
+    <span class="n">search_alg</span> <span class="o">=</span> <span class="n">OptunaSearch</span><span class="p">(</span>
+        <span class="n">metric</span><span class="o">=</span><span class="s2">&quot;score&quot;</span><span class="p">,</span>
+        <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;max&quot;</span>
+    <span class="p">)</span>
+
+    <span class="n">tuner</span> <span class="o">=</span> <span class="n">tune</span><span class="o">.</span><span class="n">Tuner</span><span class="p">(</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">objective</span><span class="p">,</span>
+        <span class="n">param_space</span><span class="o">=</span><span class="n">search_space</span><span class="p">,</span>
+        <span class="n">tune_config</span><span class="o">=</span><span class="n">tune</span><span class="o">.</span><span class="n">TuneConfig</span><span class="p">(</span>
+            <span class="n">num_samples</span><span class="o">=</span><span class="n">num_samples</span><span class="p">,</span>
+            <span class="n">max_concurrent_trials</span><span class="o">=</span><span class="n">max_concurrent</span>
+        <span class="p">)</span>
+    <span class="p">)</span>
+
+    <span class="c1"># Run optimization</span>
+    <span class="n">results</span> <span class="o">=</span> <span class="n">tuner</span><span class="o">.</span><span class="n">fit</span><span class="p">()</span>
+    <span class="k">return</span> <span class="n">results</span><span class="o">.</span><span class="n">get_best_result</span><span class="p">()</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="implementation-details">
+<h2>Implementation Details<a class="headerlink" href="#implementation-details" title="Link to this heading"></a></h2>
+<section id="search-space-configuration">
+<h3>Search Space Configuration<a class="headerlink" href="#search-space-configuration" title="Link to this heading"></a></h3>
+<ol class="arabic simple">
+<li><p>Default Parameters:
+- Learning rate (log uniform)
+- Hidden size (choice)
+- Batch size (choice)
+- Training steps (fixed)</p></li>
+<li><p>Custom Parameters:
+- Support for user-defined spaces
+- Integration with Optuna
+- Constraint handling</p></li>
+</ol>
+</section>
+<section id="evaluation-process">
+<h3>Evaluation Process<a class="headerlink" href="#evaluation-process" title="Link to this heading"></a></h3>
+<ol class="arabic simple">
+<li><p>Training Phase:
+- Configure agent with params
+- Train on training data
+- Track training metrics</p></li>
+<li><p>Validation Phase:
+- Run multiple episodes
+- Calculate performance metrics
+- Compute composite score</p></li>
+<li><p>Metric Reporting:
+- Performance metrics
+- Resource utilization
+- Training statistics</p></li>
+</ol>
+</section>
+</section>
+<section id="dependencies">
+<h2>Dependencies<a class="headerlink" href="#dependencies" title="Link to this heading"></a></h2>
+<ul class="simple">
+<li><p>Ray (tune, air)</p></li>
+<li><p>MLflow (optional)</p></li>
+<li><p>Optuna</p></li>
+<li><p>Pandas</p></li>
+</ul>
+</section>
+<section id="usage-example">
+<h2>Usage Example<a class="headerlink" href="#usage-example" title="Link to this heading"></a></h2>
+<section id="basic-usage">
+<h3>Basic Usage<a class="headerlink" href="#basic-usage" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Initialize tuner</span>
+<span class="n">tuner</span> <span class="o">=</span> <span class="n">MinimalTuner</span><span class="p">(</span><span class="n">train_data</span><span class="p">,</span> <span class="n">val_data</span><span class="p">)</span>
+
+<span class="c1"># Define search space</span>
+<span class="n">space</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;lr&quot;</span><span class="p">:</span> <span class="n">tune</span><span class="o">.</span><span class="n">loguniform</span><span class="p">(</span><span class="mf">1e-4</span><span class="p">,</span> <span class="mf">1e-2</span><span class="p">),</span>
+    <span class="s2">&quot;hidden_size&quot;</span><span class="p">:</span> <span class="n">tune</span><span class="o">.</span><span class="n">choice</span><span class="p">([</span><span class="mi">32</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">128</span><span class="p">]),</span>
+    <span class="s2">&quot;batch_size&quot;</span><span class="p">:</span> <span class="n">tune</span><span class="o">.</span><span class="n">choice</span><span class="p">([</span><span class="mi">32</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">128</span><span class="p">])</span>
+<span class="p">}</span>
+
+<span class="c1"># Run optimization</span>
+<span class="n">results</span> <span class="o">=</span> <span class="n">tuner</span><span class="o">.</span><span class="n">optimize</span><span class="p">(</span>
+    <span class="n">search_space</span><span class="o">=</span><span class="n">space</span><span class="p">,</span>
+    <span class="n">num_samples</span><span class="o">=</span><span class="mi">50</span><span class="p">,</span>
+    <span class="n">max_concurrent</span><span class="o">=</span><span class="mi">4</span>
+<span class="p">)</span>
+
+<span class="c1"># Get best configuration</span>
+<span class="n">best_config</span> <span class="o">=</span> <span class="n">results</span><span class="o">.</span><span class="n">config</span>
+<span class="n">best_metrics</span> <span class="o">=</span> <span class="n">results</span><span class="o">.</span><span class="n">metrics</span>
+</pre></div>
+</div>
+</section>
+<section id="mlflow-integration">
+<h3>MLflow Integration<a class="headerlink" href="#mlflow-integration" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># With MLflow tracking</span>
+<span class="n">tuner</span> <span class="o">=</span> <span class="n">MinimalTuner</span><span class="p">(</span>
+    <span class="n">train_data</span><span class="p">,</span>
+    <span class="n">val_data</span><span class="p">,</span>
+    <span class="n">mlflow_tracking</span><span class="o">=</span><span class="kc">True</span>
+<span class="p">)</span>
+
+<span class="c1"># Metrics and parameters automatically logged</span>
+<span class="n">results</span> <span class="o">=</span> <span class="n">tuner</span><span class="o">.</span><span class="n">optimize</span><span class="p">(</span><span class="n">search_space</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="best-practices">
+<h2>Best Practices<a class="headerlink" href="#best-practices" title="Link to this heading"></a></h2>
+<section id="search-space-design">
+<h3>1. Search Space Design<a class="headerlink" href="#search-space-design" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Use appropriate distributions</p></li>
+<li><p>Set reasonable bounds</p></li>
+<li><p>Consider parameter interactions</p></li>
+</ul>
+</section>
+<section id="resource-management">
+<h3>2. Resource Management<a class="headerlink" href="#resource-management" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Monitor memory usage</p></li>
+<li><p>Adjust concurrent trials</p></li>
+<li><p>Set appropriate timeouts</p></li>
+</ul>
+</section>
+<section id="evaluation-strategy">
+<h3>3. Evaluation Strategy<a class="headerlink" href="#evaluation-strategy" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Use multiple validation episodes</p></li>
+<li><p>Consider different metrics</p></li>
+<li><p>Balance exploration/exploitation</p></li>
+</ul>
+</section>
+<section id="result-analysis">
+<h3>4. Result Analysis<a class="headerlink" href="#result-analysis" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Analyze parameter importance</p></li>
+<li><p>Check for convergence</p></li>
+<li><p>Compare trial performances</p></li>
+</ul>
+</section>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="hyperopt_env.html" class="btn btn-neutral float-left" title="Hyperopt Environment API" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="training_optimizer.html" class="btn btn-neutral float-right" title="Training Optimizer API" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2024, Your Name.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

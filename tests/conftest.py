@@ -12,10 +12,15 @@ from pathlib import Path
 import shutil
 import mlflow
 import time
-from training.utils.mlflow_manager import MLflowManager
+from training.utils.unified_mlflow_manager import MLflowManager
 import asyncio
+import sys
 
 logger = logging.getLogger(__name__)
+
+# Add root directory to Python path
+root_dir = str(Path(__file__).parent.parent)
+sys.path.insert(0, root_dir)
 
 
 @pytest.fixture
@@ -89,35 +94,19 @@ def mlflow_test_context(request):
 
 @pytest.fixture
 def sample_data():
-    """Create sample price data for testing with $ prefix columns"""
-    dates = pd.date_range(
-        start=datetime.now() - timedelta(days=100),
-        end=datetime.now(),
-        freq="1H",
-    )
-
-    # Generate consistent OHLCV data
-    base_price = 100
-    returns = np.random.normal(0, 0.01, len(dates))
-    prices = base_price * np.exp(np.cumsum(returns))
-
+    """Generate sample price data for testing"""
+    dates = pd.date_range("2024-01-01", periods=100, freq="H")
     df = pd.DataFrame(
         {
-            "timestamp": dates,
-            "$open": prices
-            * (1 + np.random.uniform(-0.001, 0.001, len(dates))),
-            "$high": prices * (1 + np.random.uniform(0, 0.002, len(dates))),
-            "$low": prices * (1 - np.random.uniform(0, 0.002, len(dates))),
-            "$close": prices,
-            "$volume": np.abs(np.random.normal(1000, 100, len(dates))),
-        }
+            "$open": np.random.randn(100) * 100 + 1000,
+            "$high": np.random.randn(100) * 100 + 1100,
+            "$low": np.random.randn(100) * 100 + 900,
+            "$close": np.random.randn(100) * 100 + 1000,
+            "$volume": np.random.rand(100) * 1000,
+        },
+        index=dates,
     )
-
-    # Ensure high is highest and low is lowest
-    df["$high"] = df[["$open", "$high", "$low", "$close"]].max(axis=1)
-    df["$low"] = df[["$open", "$high", "$low", "$close"]].min(axis=1)
-
-    return df.set_index("timestamp")
+    return df
 
 
 @pytest.fixture

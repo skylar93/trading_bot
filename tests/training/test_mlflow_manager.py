@@ -1,16 +1,18 @@
 """Tests for MLflow experiment tracking"""
 
-import pytest
-import pandas as pd
-import numpy as np
-import mlflow
-from pathlib import Path
+import os
 import shutil
 import tempfile
-import os
-import time
+from pathlib import Path
+from unittest.mock import patch
+
+import mlflow
+import numpy as np
+import pandas as pd
+import pytest
 import torch
-from training.utils.mlflow_manager import MLflowManager
+
+from training.utils.unified_mlflow_manager import MLflowManager
 
 
 @pytest.fixture

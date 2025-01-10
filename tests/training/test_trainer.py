@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import mlflow
 from training.train import TrainingPipeline, Trainer
-from training.utils.mlflow_manager import MLflowManager
+from training.utils.unified_mlflow_manager import MLflowManager
 from envs.trading_env import TradingEnvironment
 from agents.strategies.single.ppo_agent import PPOAgent
 import gym

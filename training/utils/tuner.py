@@ -11,7 +11,7 @@ from ray.tune.integration.mlflow import MLflowLoggerCallback
 import logging
 import mlflow
 from datetime import datetime
-from .mlflow_manager import MLflowManager
+from .unified_mlflow_manager import MLflowManager
 from ..train import TrainingPipeline
 
 logger = logging.getLogger(__name__)

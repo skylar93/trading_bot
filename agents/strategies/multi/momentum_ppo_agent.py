@@ -72,6 +72,7 @@ class MomentumPPOAgent(PPOAgent):
         # Momentum-specific parameters
         self.momentum_window = config.get("momentum_window", 20)
         self.momentum_threshold = config.get("momentum_threshold", 0.0)
+        self.strategy = "momentum"  # Add strategy attribute
         
         logger.info(
             f"Initialized MomentumPPOAgent with window={self.momentum_window}, "

@@ -1,0 +1,423 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Trading Environment &mdash; trading_bot  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=80d5e7a1" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=e59714d7" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="../_static/doctools.js?v=9bcbadda"></script>
+      <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Environment Wrappers" href="wrap_env.html" />
+    <link rel="prev" title="Paper Trading Environment" href="paper_trading_env.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            trading_bot
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">API Reference</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="backtester.html">Backtester API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="backtest_engine.html">Backtest Engine API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="risk_manager.html">Risk Manager API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="base_env.html">Trading Environment Base</a></li>
+<li class="toctree-l1"><a class="reference internal" href="experimental_backtester.html">ExperimentalBacktester</a></li>
+<li class="toctree-l1"><a class="reference internal" href="live_trading_env.html">Live Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="multi_agent_env.html">Multi-Agent Trading Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="paper_trading_env.html">Paper Trading Environment</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Trading Environment</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#class-structure">Class Structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#key-components">Key Components</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#observation-space">Observation Space</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#action-space">Action Space</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#key-methods">Key Methods</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#reset">reset</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#step">step</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#implementation-details">Implementation Details</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#position-sizing">Position Sizing</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#portfolio-value">Portfolio Value</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#observation-processing">Observation Processing</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#dependencies">Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#usage-example">Usage Example</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#basic-setup">Basic Setup</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#training-loop">Training Loop</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#best-practices">Best Practices</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#data-preparation">1. Data Preparation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#feature-engineering">2. Feature Engineering</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#position-management">3. Position Management</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#reward-design">4. Reward Design</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#recent-changes">Recent Changes</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="wrap_env.html">Environment Wrappers</a></li>
+<li class="toctree-l1"><a class="reference internal" href="ppo_agent.html">PPO Agent API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="mlflow_management.html">MLflow Management Components</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Agents &amp; Training</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="base_policy.html">Base Policy API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="mlflow_manager.html">MLflow Manager API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="batch_strategy.html">Batch Strategy API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="hyperopt.html">Hyperopt API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="mlflow_logger.html">MLflow Logger API</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Hyperparameter Optimization</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="hyperopt_agent.html">Hyperopt Agent API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="hyperopt_env.html">Hyperopt Environment API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="hyperopt_tuner.html">Hyperopt Tuner API</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Monitoring &amp; Utilities</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="training_optimizer.html">Training Optimizer API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="advanced_scenario.html">Advanced Scenario API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="performance_metrics.html">Performance Metrics API</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Architecture</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../architecture/backtesting/single_asset.html">Single-Asset Backtesting System</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../architecture/backtesting/multi_asset.html">Multi-Asset Backtesting System</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../architecture/risk_management/overview.html">Risk Management Overview</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Examples</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../examples/index.html">Usage Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/single_asset_example.html">Single Asset Trading Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/multi_asset_example.html">Multi-Asset Trading Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/reinforcement_learning.html">Reinforcement Learning Example</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Project Info</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../changelog.html">Changelog</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">trading_bot</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Trading Environment</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/api/trading_env.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="trading-environment">
+<h1>Trading Environment<a class="headerlink" href="#trading-environment" title="Link to this heading"></a></h1>
+<section id="overview">
+<h2>Overview<a class="headerlink" href="#overview" title="Link to this heading"></a></h2>
+<p>The <code class="docutils literal notranslate"><span class="pre">TradingEnvironment</span></code> class implements a single-asset trading environment following the OpenAI Gym interface for reinforcement learning experiments.</p>
+</section>
+<section id="class-structure">
+<h2>Class Structure<a class="headerlink" href="#class-structure" title="Link to this heading"></a></h2>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">TradingEnvironment</span><span class="p">(</span><span class="n">gym</span><span class="o">.</span><span class="n">Env</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">initial_balance</span><span class="o">=</span><span class="mf">10000.0</span><span class="p">,</span>
+                <span class="n">trading_fee</span><span class="o">=</span><span class="mf">0.001</span><span class="p">,</span> <span class="n">window_size</span><span class="o">=</span><span class="mi">20</span><span class="p">,</span>
+                <span class="n">max_position_size</span><span class="o">=</span><span class="mf">1.0</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">df</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_validate_columns</span><span class="p">(</span><span class="n">df</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">initial_balance</span> <span class="o">=</span> <span class="n">initial_balance</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">trading_fee</span> <span class="o">=</span> <span class="n">trading_fee</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">window_size</span> <span class="o">=</span> <span class="n">window_size</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">max_position_size</span> <span class="o">=</span> <span class="n">max_position_size</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_setup_spaces</span><span class="p">()</span>
+</pre></div>
+</div>
+</section>
+<section id="key-components">
+<h2>Key Components<a class="headerlink" href="#key-components" title="Link to this heading"></a></h2>
+<section id="observation-space">
+<h3>Observation Space<a class="headerlink" href="#observation-space" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Shape: (window_size, 5) for OHLCV data</p></li>
+<li><p>Normalized features</p></li>
+<li><p>Price ratios relative to first value</p></li>
+<li><p>Volume normalized by mean</p></li>
+</ul>
+</section>
+<section id="action-space">
+<h3>Action Space<a class="headerlink" href="#action-space" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Continuous: Box(-1, 1)</p></li>
+<li><p>Negative values for short positions</p></li>
+<li><p>Positive values for long positions</p></li>
+<li><p>Absolute value determines position size</p></li>
+</ul>
+</section>
+<section id="key-methods">
+<h3>Key Methods<a class="headerlink" href="#key-methods" title="Link to this heading"></a></h3>
+<section id="reset">
+<h4>reset<a class="headerlink" href="#reset" title="Link to this heading"></a></h4>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">reset</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Reset environment to initial state.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        tuple: (observation, info)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+</pre></div>
+</div>
+<p>Features:
+* Resets current step
+* Initializes balance
+* Clears position
+* Returns initial observation</p>
+</section>
+<section id="step">
+<h4>step<a class="headerlink" href="#step" title="Link to this heading"></a></h4>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">step</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">action</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Execute one environment step.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        action: numpy array with values in [-1, 1]</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        tuple: (observation, reward, done, truncated, info)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+</pre></div>
+</div>
+<p>Features:
+* Processes trading action
+* Updates position and balance
+* Calculates reward
+* Returns next state</p>
+</section>
+</section>
+</section>
+<section id="implementation-details">
+<h2>Implementation Details<a class="headerlink" href="#implementation-details" title="Link to this heading"></a></h2>
+<section id="position-sizing">
+<h3>Position Sizing<a class="headerlink" href="#position-sizing" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">_calculate_target_position</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">action</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Calculate target position from action.&quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="n">action</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_position_size</span>
+</pre></div>
+</div>
+<p>Features:
+* Scales action to position size
+* Respects maximum position limit
+* Handles both long and short positions</p>
+</section>
+<section id="portfolio-value">
+<h3>Portfolio Value<a class="headerlink" href="#portfolio-value" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">_calculate_portfolio_value</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">step</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Calculate total portfolio value.&quot;&quot;&quot;</span>
+    <span class="n">price</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">df</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="n">step</span><span class="p">][</span><span class="s2">&quot;$close&quot;</span><span class="p">]</span>
+    <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">balance</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">position</span> <span class="o">*</span> <span class="n">price</span>
+</pre></div>
+</div>
+<p>Features:
+* Combines cash and position value
+* Uses current market price
+* Basis for reward calculation</p>
+</section>
+<section id="observation-processing">
+<h3>Observation Processing<a class="headerlink" href="#observation-processing" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">_get_observation</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Get normalized price window.&quot;&quot;&quot;</span>
+    <span class="n">start</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">current_step</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">window_size</span>
+    <span class="n">end</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">current_step</span>
+
+    <span class="n">window</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">df</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="n">start</span><span class="p">:</span><span class="n">end</span><span class="p">]</span>
+    <span class="n">prices</span> <span class="o">=</span> <span class="n">window</span><span class="p">[[</span><span class="s2">&quot;$open&quot;</span><span class="p">,</span> <span class="s2">&quot;$high&quot;</span><span class="p">,</span> <span class="s2">&quot;$low&quot;</span><span class="p">,</span> <span class="s2">&quot;$close&quot;</span><span class="p">]]</span>
+    <span class="n">volume</span> <span class="o">=</span> <span class="n">window</span><span class="p">[</span><span class="s2">&quot;$volume&quot;</span><span class="p">]</span>
+
+    <span class="c1"># Normalize prices relative to first value</span>
+    <span class="n">price_matrix</span> <span class="o">=</span> <span class="n">prices</span><span class="o">.</span><span class="n">values</span> <span class="o">/</span> <span class="n">prices</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">values</span>
+
+    <span class="c1"># Normalize volume by mean</span>
+    <span class="n">volume_matrix</span> <span class="o">=</span> <span class="n">volume</span><span class="o">.</span><span class="n">values</span> <span class="o">/</span> <span class="n">volume</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+
+    <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">column_stack</span><span class="p">([</span><span class="n">price_matrix</span><span class="p">,</span> <span class="n">volume_matrix</span><span class="p">])</span>
+</pre></div>
+</div>
+<p>Features:
+* Extracts price window
+* Normalizes features
+* Handles missing data
+* Returns numpy array</p>
+</section>
+</section>
+<section id="dependencies">
+<h2>Dependencies<a class="headerlink" href="#dependencies" title="Link to this heading"></a></h2>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">gymnasium</span></code>: OpenAI Gym interface</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">numpy</span></code>: Numerical operations</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">pandas</span></code>: Data handling</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">logging</span></code>: Error tracking</p></li>
+</ul>
+</section>
+<section id="usage-example">
+<h2>Usage Example<a class="headerlink" href="#usage-example" title="Link to this heading"></a></h2>
+<section id="basic-setup">
+<h3>Basic Setup<a class="headerlink" href="#basic-setup" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Prepare data</span>
+<span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span>
+    <span class="s2">&quot;$open&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">...</span><span class="p">],</span>
+    <span class="s2">&quot;$high&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">...</span><span class="p">],</span>
+    <span class="s2">&quot;$low&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">...</span><span class="p">],</span>
+    <span class="s2">&quot;$close&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">...</span><span class="p">],</span>
+    <span class="s2">&quot;$volume&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">...</span><span class="p">]</span>
+<span class="p">})</span>
+
+<span class="c1"># Create environment</span>
+<span class="n">env</span> <span class="o">=</span> <span class="n">TradingEnvironment</span><span class="p">(</span>
+    <span class="n">df</span><span class="o">=</span><span class="n">df</span><span class="p">,</span>
+    <span class="n">initial_balance</span><span class="o">=</span><span class="mf">10000.0</span><span class="p">,</span>
+    <span class="n">trading_fee</span><span class="o">=</span><span class="mf">0.001</span><span class="p">,</span>
+    <span class="n">window_size</span><span class="o">=</span><span class="mi">20</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="training-loop">
+<h3>Training Loop<a class="headerlink" href="#training-loop" title="Link to this heading"></a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Reset environment</span>
+<span class="n">obs</span><span class="p">,</span> <span class="n">info</span> <span class="o">=</span> <span class="n">env</span><span class="o">.</span><span class="n">reset</span><span class="p">()</span>
+
+<span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1000</span><span class="p">):</span>
+    <span class="c1"># Get action from agent</span>
+    <span class="n">action</span> <span class="o">=</span> <span class="n">agent</span><span class="o">.</span><span class="n">get_action</span><span class="p">(</span><span class="n">obs</span><span class="p">)</span>
+
+    <span class="c1"># Execute step</span>
+    <span class="n">obs</span><span class="p">,</span> <span class="n">reward</span><span class="p">,</span> <span class="n">done</span><span class="p">,</span> <span class="n">truncated</span><span class="p">,</span> <span class="n">info</span> <span class="o">=</span> <span class="n">env</span><span class="o">.</span><span class="n">step</span><span class="p">(</span><span class="n">action</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">done</span><span class="p">:</span>
+        <span class="k">break</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="best-practices">
+<h2>Best Practices<a class="headerlink" href="#best-practices" title="Link to this heading"></a></h2>
+<section id="data-preparation">
+<h3>1. Data Preparation<a class="headerlink" href="#data-preparation" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Ensure OHLCV columns have ‘$’ prefix</p></li>
+<li><p>Handle missing values</p></li>
+<li><p>Check data quality</p></li>
+<li><p>Validate timestamps</p></li>
+</ul>
+</section>
+<section id="feature-engineering">
+<h3>2. Feature Engineering<a class="headerlink" href="#feature-engineering" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Normalize observations</p></li>
+<li><p>Handle outliers</p></li>
+<li><p>Consider additional features</p></li>
+<li><p>Validate calculations</p></li>
+</ul>
+</section>
+<section id="position-management">
+<h3>3. Position Management<a class="headerlink" href="#position-management" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Set appropriate position limits</p></li>
+<li><p>Consider transaction costs</p></li>
+<li><p>Monitor exposure</p></li>
+<li><p>Track performance</p></li>
+</ul>
+</section>
+<section id="reward-design">
+<h3>4. Reward Design<a class="headerlink" href="#reward-design" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Use portfolio value changes</p></li>
+<li><p>Consider risk-adjusted returns</p></li>
+<li><p>Handle edge cases</p></li>
+<li><p>Validate calculations</p></li>
+</ul>
+</section>
+</section>
+<section id="recent-changes">
+<h2>Recent Changes<a class="headerlink" href="#recent-changes" title="Link to this heading"></a></h2>
+<ul class="simple">
+<li><p>Added observation normalization</p></li>
+<li><p>Improved reward calculation</p></li>
+<li><p>Enhanced position management</p></li>
+<li><p>Added performance tracking</p></li>
+</ul>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="paper_trading_env.html" class="btn btn-neutral float-left" title="Paper Trading Environment" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="wrap_env.html" class="btn btn-neutral float-right" title="Environment Wrappers" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2024, Your Name.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

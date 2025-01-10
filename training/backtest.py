@@ -1,3 +1,119 @@
+"""
+Single-Asset Backtesting System
+==============================
+
+This module implements a basic backtesting system for single-asset trading strategies.
+Focused on simplicity and clarity, it serves as a foundation for more complex backtesting systems.
+
+File Structure:
+--------------
+- Class: Backtester
+  - Core backtesting engine for single-asset trading
+  - Handles trade execution and performance tracking
+  - Calculates key trading metrics
+
+Key Components:
+--------------
+1. Trade Execution
+   - Position sizing based on action (-1 to 1)
+   - Transaction cost consideration
+   - Balance and position tracking
+
+2. Performance Tracking
+   - Portfolio value history
+   - Trade history logging
+   - Performance metrics calculation
+   - Peak value tracking for drawdown
+
+3. Strategy Integration
+   - Window-based strategy execution
+   - Action validation and processing
+   - Trade result accumulation
+
+Dependencies:
+------------
+- numpy: Numerical computations and metrics
+- pandas: Data handling and time series operations
+- logging: Debug and transaction logging
+- datetime: Timestamp handling
+- typing: Type hints for better code clarity
+
+Implementation Notes:
+-------------------
+1. Data Requirements
+   - OHLCV columns must be prefixed with '$'
+   - Required columns: $open, $high, $low, $close, $volume
+   - DataFrame index serves as timestamp
+
+2. Position Management
+   - Single position tracking (no multi-asset support)
+   - Dust position cleanup (< 1e-4)
+   - Balance updates include transaction fees
+
+3. Performance Metrics
+   - Sharpe Ratio (annualized, risk-free rate = 0)
+   - Sortino Ratio (downside deviation)
+   - Maximum Drawdown
+   - Win Rate calculation
+
+Example Usage:
+-------------
+```python
+# Prepare OHLCV data
+data = pd.DataFrame({
+    '$open': [...],
+    '$high': [...],
+    '$low': [...],
+    '$close': [...],
+    '$volume': [...]
+})
+
+# Initialize backtester
+backtester = Backtester(
+    data=data,
+    initial_balance=10000.0,
+    trading_fee=0.001  # 0.1% fee
+)
+
+# Create strategy (must implement get_action method)
+class SimpleStrategy:
+    def get_action(self, window_data):
+        # Return value between -1 and 1
+        return 0.5  # Example: always buy with 50% size
+
+# Run backtest
+results = backtester.run(
+    strategy=SimpleStrategy(),
+    window_size=20,
+    verbose=True
+)
+
+# Access results
+print(f"Final Value: {results['portfolio_values'][-1]}")
+print(f"Sharpe Ratio: {results['metrics']['sharpe_ratio']}")
+```
+
+Logging Structure:
+----------------
+- ERROR: Critical failures (e.g., strategy errors)
+- WARNING: Potential issues (e.g., invalid actions)
+- INFO: Trade execution, progress updates
+- DEBUG: Detailed calculations, state changes
+
+Recent Changes:
+--------------
+- Enhanced logging for better debugging
+- Improved PnL calculation accuracy
+- Added detailed trade history
+- Fixed position size validation
+
+See Also:
+---------
+- BacktestEngine: Multi-asset backtesting system
+- RiskAwareBacktester: Risk-managed version
+- ExperimentalBacktester: Advanced features testing
+"""
+
 import logging
 import numpy as np
 import pandas as pd
@@ -9,7 +125,34 @@ logger = logging.getLogger(__name__)
 
 
 class Backtester:
-    """Backtesting system for trading strategies"""
+    """
+    Single-asset backtesting engine for evaluating trading strategies.
+
+    This class implements a basic backtesting system for single-asset trading strategies.
+    It handles trade execution, position tracking, and performance measurement.
+
+    Features:
+    ---------
+    - Single asset position tracking
+    - Transaction fee consideration
+    - Basic risk management (position limits)
+    - Performance metrics calculation (Sharpe, Sortino, Max DD)
+    - Detailed trade logging
+
+    Implementation Notes:
+    -------------------
+    - Uses a position variable to track current holdings
+    - Maintains trade history and portfolio value history
+    - Implements peak value tracking for drawdown calculation
+    - Handles transaction fees for accurate PnL calculation
+
+    Example:
+    --------
+    >>> data = pd.DataFrame(...)  # OHLCV data
+    >>> backtester = Backtester(data, initial_balance=10000, trading_fee=0.001)
+    >>> results = backtester.run(strategy, window_size=20)
+    >>> print(f"Final portfolio value: {results['portfolio_values'][-1]}")
+    """
 
     REQUIRED_COLUMNS = {"$open", "$high", "$low", "$close", "$volume"}
 
@@ -19,12 +162,23 @@ class Backtester:
         initial_balance: float = 10000.0,
         trading_fee: float = 0.001,
     ):
-        """Initialize backtester
+        """
+        Initialize the backtester with data and parameters.
 
-        Args:
-            data: DataFrame with OHLCV data (must have $ prefixed columns)
-            initial_balance: Initial portfolio balance
-            trading_fee: Trading fee as decimal
+        Parameters:
+        -----------
+        data : pd.DataFrame
+            OHLCV data with columns: $open, $high, $low, $close, $volume
+        initial_balance : float, optional
+            Starting balance for the portfolio (default: 10000.0)
+        trading_fee : float, optional
+            Transaction fee as a decimal (default: 0.001 = 0.1%)
+
+        Notes:
+        ------
+        - Data columns must be prefixed with '$' (e.g., '$close')
+        - Initializes internal state (position, balance, trades list)
+        - Sets up logging for trade execution tracking
         """
         # Validate required columns
         missing_columns = self.REQUIRED_COLUMNS - set(data.columns)
@@ -41,7 +195,16 @@ class Backtester:
         self.reset()
 
     def reset(self):
-        """Reset backtester state"""
+        """
+        Reset the backtester to initial state.
+
+        This method resets all tracking variables to their initial values:
+        - Portfolio values list (starts with initial_balance)
+        - Trades list (empty)
+        - Current position (0)
+        - Current balance (initial_balance)
+        - Peak portfolio value (initial_balance)
+        """
         self.portfolio_values = [
             self.initial_balance
         ]  # Initialize with starting balance
@@ -56,15 +219,32 @@ class Backtester:
         window_size: int = 20,
         verbose: bool = False,
     ) -> Dict[str, Any]:
-        """Run backtest with given strategy
+        """
+        Run backtest with given strategy.
 
-        Args:
-            strategy: Trading strategy object with get_action method
-            window_size: Size of observation window
-            verbose: Whether to print progress
+        Parameters:
+        -----------
+        strategy : object
+            Trading strategy object with get_action method
+            Method should return float in [-1, 1] range
+        window_size : int, optional
+            Size of observation window for strategy (default: 20)
+        verbose : bool, optional
+            Whether to print progress (default: False)
 
         Returns:
-            Dictionary with backtest results
+        --------
+        Dict[str, Any]
+            Dictionary containing:
+            - metrics: Performance metrics (Sharpe, Sortino, etc.)
+            - trades: List of all executed trades
+            - portfolio_values: Historical portfolio values
+            - timestamps: Corresponding timestamps
+
+        Raises:
+        -------
+        ValueError
+            If data length is less than window_size
         """
         self.reset()
 
@@ -153,21 +333,52 @@ class Backtester:
         action: float,
         price_data: Dict[str, float],
     ) -> Dict[str, Any]:
-        """Execute trade based on action
+        """
+        Execute trade based on strategy action.
 
-        Args:
-            timestamp: Current timestamp
-            action: Action from strategy (-1 to 1)
-            price_data: Dictionary with current price data
+        Parameters:
+        -----------
+        timestamp : pd.Timestamp
+            Current timestamp for the trade
+        action : float
+            Strategy action in [-1, 1] range
+            - Positive: Buy signal (size proportional to value)
+            - Negative: Sell signal (size proportional to value)
+        price_data : Dict[str, float]
+            Current price data with keys:
+            - $open, $high, $low, $close, $volume
 
         Returns:
-            Dictionary with trade results
+        --------
+        Dict[str, Any]
+            Trade result containing:
+            - timestamp: Trade timestamp
+            - type: 'buy'/'sell'/'skip'
+            - size: Trade size
+            - price: Execution price
+            - cost/revenue: Trade cost or revenue
+            - balance: Updated balance
+            - position: Updated position
+            - action: Trade action
+            - reason: Execution status reason
+
+        Notes:
+        ------
+        - Implements basic position sizing
+        - Handles transaction fees
+        - Logs trade execution details
+        - Cleans up dust positions
         """
         try:
+            # Log trade attempt
+            self.logger.info("Attempting trade execution - Timestamp: %s, Action: %.4f", timestamp, action)
+            self.logger.debug("Price data: %s", price_data)
+            
             # Validate price data
             required_columns = {"$open", "$high", "$low", "$close", "$volume"}
             missing_cols = required_columns - set(price_data.keys())
             if missing_cols:
+                self.logger.warning("Missing required columns: %s", missing_cols)
                 self.position = 0
                 return {
                     "timestamp": timestamp,
@@ -177,12 +388,9 @@ class Backtester:
                     "reason": f"Missing required columns: {missing_cols}",
                 }
 
-            # Bound action between -1 and 1
-            action = max(min(action, 1.0), -1.0)
-
-            # Skip very small actions (increased threshold)
-            if abs(action) < 1e-4:  # Increased threshold for small actions
-                self.position = 0  # Reset position for very small actions
+            # Skip very small actions
+            if abs(action) < 1e-4:  # Strict threshold for small actions
+                self.logger.debug("Skipping trade - action too small: %.6f", action)
                 return {
                     "timestamp": timestamp,
                     "position": self.position,
@@ -191,15 +399,19 @@ class Backtester:
                     "reason": "action too small",
                 }
 
+            # Bound action between -1 and 1
+            action = max(min(action, 1.0), -1.0)
+            self.logger.debug("Bounded action: %.4f", action)
+
             current_price = price_data["$close"]
+            self.logger.info("Current price: %.2f, Current balance: %.2f", current_price, self.balance)
 
             # Calculate trade size
             if action > 0:  # Buy
                 # Check if balance is too low for any meaningful trade
                 if self.balance < 10:  # Minimum balance requirement
-                    self.position = (
-                        0  # Reset position for insufficient balance
-                    )
+                    self.logger.warning("Insufficient balance for minimum trade: %.2f", self.balance)
+                    self.position = 0  # Reset position for insufficient balance
                     return {
                         "timestamp": timestamp,
                         "position": self.position,
@@ -208,13 +420,14 @@ class Backtester:
                         "reason": "insufficient balance for minimum trade",
                     }
 
-                max_shares = self.balance / (
-                    current_price * (1 + self.trading_fee)
-                )
+                max_shares = self.balance / (current_price * (1 + self.trading_fee))
                 trade_shares = max_shares * abs(action)
+                self.logger.debug("Buy calculation - Max shares: %.4f, Trade shares: %.4f", 
+                               max_shares, trade_shares)
 
                 # Skip if trade size is too small
-                if trade_shares < 1e-4:
+                if trade_shares < 1e-6:
+                    self.logger.warning("Trade size too small: %.6f", trade_shares)
                     self.position = 0  # Reset position for very small trades
                     return {
                         "timestamp": timestamp,
@@ -225,12 +438,12 @@ class Backtester:
                     }
 
                 cost = trade_shares * current_price * (1 + self.trading_fee)
+                self.logger.info("Buy trade - Shares: %.4f, Cost: %.2f", trade_shares, cost)
 
                 if cost > self.balance:  # Added balance check
-                    self.logger.warning("Insufficient balance for trade")
-                    self.position = (
-                        0  # Reset position for insufficient balance
-                    )
+                    self.logger.warning("Insufficient balance for trade - Cost: %.2f, Balance: %.2f",
+                                     cost, self.balance)
+                    self.position = 0  # Reset position for insufficient balance
                     return {
                         "timestamp": timestamp,
                         "position": self.position,
@@ -244,6 +457,7 @@ class Backtester:
 
                 # Clean up dust after buy
                 if self.position < 1e-4:
+                    self.logger.debug("Cleaning up dust position: %.6f", self.position)
                     self.position = 0
 
                 trade = {
@@ -262,6 +476,7 @@ class Backtester:
             else:  # Sell
                 # Skip if no position to sell
                 if self.position < 1e-4:
+                    self.logger.debug("No position to sell: %.6f", self.position)
                     self.position = 0  # Clean up any dust
                     return {
                         "timestamp": timestamp,
@@ -272,9 +487,12 @@ class Backtester:
                     }
 
                 trade_shares = self.position * abs(action)
+                self.logger.debug("Sell calculation - Position: %.4f, Trade shares: %.4f",
+                               self.position, trade_shares)
 
                 # Skip if trade size is too small
-                if trade_shares < 1e-4:
+                if trade_shares < 1e-6:
+                    self.logger.warning("Trade size too small: %.6f", trade_shares)
                     self.position = 0  # Reset position for very small trades
                     return {
                         "timestamp": timestamp,
@@ -284,15 +502,15 @@ class Backtester:
                         "reason": "trade size too small",
                     }
 
-                proceeds = (
-                    trade_shares * current_price * (1 - self.trading_fee)
-                )
+                proceeds = trade_shares * current_price * (1 - self.trading_fee)
+                self.logger.info("Sell trade - Shares: %.4f, Proceeds: %.2f", trade_shares, proceeds)
 
                 self.balance += proceeds
                 self.position -= trade_shares
 
                 # Clean up any dust (very small remaining position)
                 if self.position < 1e-4:
+                    self.logger.debug("Cleaning up dust position: %.6f", self.position)
                     self.position = 0
 
                 trade = {
@@ -309,17 +527,20 @@ class Backtester:
                 }
 
             self.trades.append(trade)
+            self.logger.info("Trade executed successfully: %s", trade)
 
             # Update portfolio value
             portfolio_value = self._calculate_portfolio_value(current_price)
             self.portfolio_values.append(portfolio_value)
             self.peak_value = max(self.peak_value, portfolio_value)
+            self.logger.info("Updated portfolio value: %.2f (Peak: %.2f)", 
+                          portfolio_value, self.peak_value)
 
             trade["portfolio_value"] = portfolio_value
             return trade
 
         except Exception as e:
-            self.logger.error(f"Error executing trade: {str(e)}")
+            self.logger.error(f"Error executing trade: {str(e)}", exc_info=True)
             self.position = 0  # Reset position on error
             return {
                 "timestamp": timestamp,
@@ -331,21 +552,45 @@ class Backtester:
             }
 
     def _calculate_portfolio_value(self, current_price: float) -> float:
-        """Calculate current portfolio value
+        """
+        Calculate total portfolio value.
 
-        Args:
-            current_price: Current asset price
+        Parameters:
+        -----------
+        current_price : float
+            Current asset price
 
         Returns:
-            Total portfolio value
+        --------
+        float
+            Total portfolio value (balance + position_value)
+
+        Notes:
+        ------
+        - Position value = position_size * current_price
+        - Does not include unrealized fees
         """
         return self.balance + (self.position * current_price)
 
     def _calculate_metrics(self) -> Dict[str, float]:
-        """Calculate trading metrics
+        """
+        Calculate trading performance metrics.
 
         Returns:
-            Dictionary with trading metrics
+        --------
+        Dict[str, float]
+            Dictionary containing:
+            - total_return: Total portfolio return
+            - sharpe_ratio: Sharpe ratio (annualized)
+            - sortino_ratio: Sortino ratio (annualized)
+            - max_drawdown: Maximum drawdown percentage
+            - win_rate: Percentage of profitable trades
+
+        Notes:
+        ------
+        - Assumes 252 trading days per year
+        - Uses 0 as risk-free rate
+        - Calculates ratios using daily returns
         """
         try:
             # Calculate returns
