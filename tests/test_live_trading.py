@@ -118,6 +118,7 @@ async def test_portfolio_value(live_env):
     """Test portfolio value calculation"""
     # Initialize environment
     obs, info = await live_env.reset()
+    assert info['portfolio_value'] == 10000.0
     initial_value = float(live_env.portfolio_value)
     initial_balance = float(live_env.balance)
     
@@ -166,7 +167,7 @@ async def test_portfolio_value(live_env):
     
     # Portfolio value should increase with price
     new_portfolio_value = float(live_env.portfolio_value)
-    assert new_portfolio_value > portfolio_before_price_change
+    assert new_portfolio_value > portfolio_before_price_change  # Portfolio value should increase
     assert abs(new_portfolio_value - portfolio_before_price_change) > 1.0  # Should be a significant change
 
 if __name__ == "__main__":
