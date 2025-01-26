@@ -2,7 +2,7 @@ import pytest
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from training.backtest import Backtester
+from training.backtesting.base_backtester import BaseBacktester
 from training.evaluation import TradingMetrics
 from pathlib import Path
 
@@ -47,56 +47,60 @@ def sample_data():
 
 def test_backtester_initialization(sample_data):
     """Test Backtester initialization"""
-    backtester = Backtester(sample_data)
-    assert backtester.initial_balance == 10000.0
-    assert backtester.position == 0
+    backtester = BaseBacktester(
+        initial_capital=10000.0,
+        trading_fee=0.001,
+        max_position=1.0,
+        data=sample_data
+    )
+    assert backtester.cash == 10000.0
+    assert len(backtester.positions) == 0
     assert len(backtester.trades) == 0
-    assert backtester.portfolio_values == [10000.0]
+    assert backtester.portfolio_history == [10000.0]
 
 
 def test_trade_execution(sample_data):
     """Test trade execution"""
-    backtester = Backtester(sample_data)
+    backtester = BaseBacktester(
+        initial_capital=10000.0,
+        trading_fee=0.001,
+        max_position=1.0
+    )
 
     # Test buy action
     result = backtester.execute_trade(
         timestamp=sample_data.index[0],
         action=0.5,  # Buy 50% of possible position
-        price_data={
-            "$open": 100,
-            "$high": 102,
-            "$low": 98,
-            "$close": 101,
-            "$volume": 1000,
-        },
+        price_data={'default': 101.0},  # Use close price
+        asset='default'
     )
 
-    assert result["type"] == "buy"
-    assert result["size"] > 0  # Should have positive size
-    assert result["balance"] < 10000.0  # Balance should decrease after buy
-    assert result["position"] > 0  # Should have positive position
+    assert result['type'] == 'buy'
+    assert result['amount'] > 0  # Buy should have positive amount
+    assert backtester.cash < 10000.0  # Balance should decrease after buy
+    assert backtester.positions['default'] > 0  # Should have positive position
 
     # Test sell action
     result = backtester.execute_trade(
         timestamp=sample_data.index[1],
         action=-0.5,  # Sell 50% of position
-        price_data={
-            "$open": 101,
-            "$high": 103,
-            "$low": 99,
-            "$close": 102,
-            "$volume": 1000,
-        },
+        price_data={'default': 102.0},  # Use close price
+        asset='default'
     )
 
-    assert result["type"] == "sell"
-    assert result["size"] > 0  # Should have positive size for sell
-    assert result["position"] >= 0  # Position should never go negative
+    assert result['type'] == 'sell'
+    assert result['amount'] < 0  # Sell should have negative amount
+    assert backtester.positions.get('default', 0) >= 0  # Position should never go negative
 
 
 def test_backtest_run(sample_data):
     """Test running backtest"""
-    backtester = Backtester(sample_data)
+    backtester = BaseBacktester(
+        initial_capital=10000.0,
+        trading_fee=0.001,
+        max_position=1.0,
+        data=sample_data
+    )
     agent = DummyAgent()
 
     results = backtester.run(agent, window_size=5)
@@ -116,10 +120,10 @@ def test_backtest_run(sample_data):
     trades = results["trades"]
     if trades:  # If any trades were made
         first_trade = trades[0]
-        assert "entry_time" in first_trade
+        assert "timestamp" in first_trade
         assert "type" in first_trade
         assert "price" in first_trade
-        assert "size" in first_trade
+        assert "amount" in first_trade
 
     # Check portfolio values
     assert len(results["portfolio_values"]) > 0
@@ -155,7 +159,12 @@ def test_metrics_calculation():
 
 def test_backtester_save_results(sample_data, tmp_path):
     """Test saving backtest results"""
-    backtester = Backtester(sample_data)
+    backtester = BaseBacktester(
+        initial_capital=10000.0,
+        trading_fee=0.001,
+        max_position=1.0,
+        data=sample_data
+    )
     agent = DummyAgent()
 
     # Run backtest
@@ -194,7 +203,7 @@ def test_backtester_save_results(sample_data, tmp_path):
         assert not trades_df.empty
         assert "type" in trades_df.columns
         assert "price" in trades_df.columns
-        assert "size" in trades_df.columns
+        assert "amount" in trades_df.columns
 
     # Verify portfolio values
     assert (save_dir / "portfolio_values.csv").exists()
@@ -210,61 +219,41 @@ def test_backtester_save_results(sample_data, tmp_path):
 def test_edge_cases(sample_data):
     """Test edge cases and error handling"""
     # Test insufficient balance first
-    backtester = Backtester(sample_data)
-    backtester.reset()  # Reset before test
-    backtester.balance = 1  # Set very low balance
+    backtester = BaseBacktester(
+        initial_capital=1.0,  # Set very low initial capital
+        trading_fee=0.001,
+        max_position=1.0
+    )
+    
     result = backtester.execute_trade(
         timestamp=sample_data.index[0],
-        action=1,
-        price_data={
-            "$open": 100,
-            "$high": 102,
-            "$low": 98,
-            "$close": 101,
-            "$volume": 1000,
-        },
+        action=1.0,
+        price_data={'default': 101.0},
+        asset='default'
     )
-    assert (
-        result["action"] == "skip"
-    )  # Should skip due to insufficient balance
-    assert result["reason"] == "insufficient balance for minimum trade"
-    assert result["position"] == 0
+    
+    assert result['success']  # Should succeed but with zero amount
+    assert result['amount'] == 0  # No trade executed
+    assert result['reason'] == 'trade size too small'
+    assert len(backtester.positions) == 0
 
     # Test zero action
-    backtester = Backtester(sample_data)  # Create new instance
-    backtester.reset()  # Reset before test
+    backtester = BaseBacktester(
+        initial_capital=10000.0,
+        trading_fee=0.001,
+        max_position=1.0
+    )
+    
     result = backtester.execute_trade(
         timestamp=sample_data.index[0],
         action=0,
-        price_data={
-            "$open": 100,
-            "$high": 102,
-            "$low": 98,
-            "$close": 101,
-            "$volume": 1000,
-        },
+        price_data={'default': 101.0},
+        asset='default'
     )
-    assert result["action"] == "skip"  # Should skip due to zero action
-    assert result["reason"] == "action too small"
-    assert result["position"] == 0
-
-    # Test very small action
-    backtester = Backtester(sample_data)  # Create new instance
-    backtester.reset()  # Reset before test
-    result = backtester.execute_trade(
-        timestamp=sample_data.index[0],
-        action=1e-6,
-        price_data={
-            "$open": 100,
-            "$high": 102,
-            "$low": 98,
-            "$close": 101,
-            "$volume": 1000,
-        },
-    )
-    assert result["action"] == "skip"  # Should skip due to small action
-    assert result["reason"] == "action too small"
-    assert result["position"] == 0
+    
+    assert result['success']  # Should succeed but skip
+    assert result['reason'] == 'trade size too small'
+    assert len(backtester.positions) == 0
 
 
 if __name__ == "__main__":

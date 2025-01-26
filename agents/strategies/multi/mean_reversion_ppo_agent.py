@@ -205,6 +205,14 @@ class MeanReversionPPOAgent(PPOAgent):
         # Get base action from policy network
         base_action = super().get_action(augmented_state.reshape(-1), deterministic)
         
+        # Calculate trend strength
+        if len(state.shape) == 3:
+            close_prices = state[..., 3]
+            trend_strength = (close_prices[:, -1] - close_prices[:, -10]) / close_prices[:, -10]
+        else:
+            close_prices = state[:, 3]
+            trend_strength = (close_prices[-1] - close_prices[-10]) / close_prices[-10]
+        
         # Apply mean reversion based action modification
         if len(reversion_features.shape) > 1:
             rsi = reversion_features[:, 0]
@@ -219,6 +227,10 @@ class MeanReversionPPOAgent(PPOAgent):
             action_bias = np.zeros_like(base_action)
             action_bias[oversold_signal] = 2.0  # Stronger buy bias
             action_bias[overbought_signal] = -2.0  # Stronger sell bias
+            
+            # Add trend-based mean reversion bias
+            trend_bias = -np.sign(trend_strength) * np.abs(trend_strength) * 2.0  # Stronger counter-trend bias
+            action_bias += trend_bias
             
             # Calculate signal strength based on distance from thresholds with higher minimum
             oversold_strength = np.clip((self.oversold_threshold - rsi) / self.oversold_threshold, 0.6, 1.0)
@@ -242,6 +254,9 @@ class MeanReversionPPOAgent(PPOAgent):
             bb_upper_dist = reversion_features[1]
             bb_lower_dist = reversion_features[2]
             
+            # Calculate trend-based mean reversion bias
+            trend_bias = -np.sign(trend_strength) * np.abs(trend_strength) * 2.0  # Stronger counter-trend bias
+            
             # Calculate signal strength based on distance from thresholds with stronger scaling
             if rsi < self.oversold_threshold and bb_lower_dist < 0.02:  # Tighter BB condition
                 action_bias = 2.0  # Stronger buy bias
@@ -250,7 +265,7 @@ class MeanReversionPPOAgent(PPOAgent):
                 action_bias = -2.0  # Stronger sell bias
                 signal_strength = np.clip((rsi - self.overbought_threshold) / (100 - self.overbought_threshold), 0.6, 1.0)
             else:
-                action_bias = 0.0
+                action_bias = trend_bias
                 signal_strength = 0.6
             
             # Blend base action with bias (more weight on bias)
@@ -262,6 +277,10 @@ class MeanReversionPPOAgent(PPOAgent):
             
             # Ensure action stays within bounds
             action = np.clip(action, -1.0, 1.0)
+            
+            # If there's a strong trend, make sure we're taking the opposite position
+            if abs(trend_strength) > 0.1:  # Strong trend threshold
+                action = -np.sign(trend_strength) * max(abs(action), 0.5)  # Ensure minimum counter-trend position size
         
         return action
     

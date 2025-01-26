@@ -1,4 +1,41 @@
 """
+@deprecated: This module is deprecated.
+Please use BaseBacktester from training.backtesting.base_backtester instead.
+
+The multi-asset backtesting functionality has been merged into BaseBacktester,
+which now supports both single-asset and multi-asset trading.
+
+Example usage:
+    from training.backtesting.base_backtester import BaseBacktester
+    
+    backtester = BaseBacktester(
+        initial_capital=10000.0,
+        trading_fee=0.001,
+        max_position=1.0
+    )
+    
+    # For multi-asset trading:
+    result = backtester.update(
+        timestamp=timestamp,
+        prices={'BTC': 100.0, 'ETH': 50.0},
+        actions={'BTC': 0.3, 'ETH': 0.3}
+    )
+"""
+
+import warnings
+
+warnings.warn(
+    "backtest_engine.py is deprecated. Please use BaseBacktester from training.backtesting.base_backtester instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
+
+from training.backtesting.base_backtester import BaseBacktester
+
+# For backwards compatibility
+BacktestEngine = BaseBacktester
+
+"""
 Multi-Asset Backtesting Engine
 =============================
 

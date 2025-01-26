@@ -205,7 +205,7 @@ def test_complementary_actions(mixed_manager, trending_env):
     """Test if agents take complementary actions in different market conditions"""
     obs, _ = trending_env.reset()
     
-    # Generate strong trend
+    # Generate strong upward trend with clear momentum
     obs[-10:, 3] = np.linspace(0.5, 1.5, 10)  # Last 10 close prices show clear upward trend
     
     # Get actions from both agents
@@ -216,6 +216,18 @@ def test_complementary_actions(mixed_manager, trending_env):
     # - Mean reversion agent should be negative (expecting reversal)
     assert actions["momentum_1"] > 0, "Momentum agent should follow upward trend"
     assert actions["mean_reversion_1"] < 0, "Mean reversion agent should expect reversal"
+
+    # Generate strong downward trend
+    obs[-10:, 3] = np.linspace(1.5, 0.5, 10)  # Last 10 close prices show clear downward trend
+    
+    # Get actions from both agents
+    actions = mixed_manager.act({"momentum_1": obs, "mean_reversion_1": obs})
+    
+    # In a strong downward trend:
+    # - Momentum agent should be negative (following trend)
+    # - Mean reversion agent should be positive (expecting reversal)
+    assert actions["momentum_1"] < 0, "Momentum agent should follow downward trend"
+    assert actions["mean_reversion_1"] > 0, "Mean reversion agent should expect reversal"
 
 def test_selective_experience_sharing(mixed_manager, trending_env):
     """Test if experience sharing is selective based on reward magnitude and strategy"""

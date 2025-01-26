@@ -1,88 +1,90 @@
-.. trading_bot documentation master file, created by
-   sphinx-quickstart on Wed Jan  8 22:57:24 2025.
-   You can adapt this file completely to your liking, but it should at least
-   contain the root `toctree` directive.
+.. Trading Bot documentation master file
 
-Welcome to trading_bot's documentation!
-==========================================
+Welcome to Trading Bot's documentation!
+=====================================
+
+A comprehensive trading system that combines reinforcement learning, risk management, and real-time execution.
 
 Architecture Overview
 -------------------
 
+The trading bot is built with a modular architecture focusing on:
+
+* Reinforcement Learning based trading strategies
+* Advanced risk management
+* Real-time execution capabilities
+* Comprehensive backtesting
+
 Getting Started
---------------
+-------------
+
+See :doc:`quickstart` for installation and basic usage.
 
 Recent Changes
--------------
+------------
+
+See :doc:`changelog` for version history and updates.
 
 Contents
 --------
 
 .. toctree::
    :maxdepth: 2
-   :caption: API Reference
+   :caption: Project Info
+   
+   project_structure
+   quickstart
+   changelog
 
-   api/backtester
-   api/backtest_engine
+.. toctree::
+   :maxdepth: 2
+   :caption: API Reference
+   
+   api/agents
+   api/environments
    api/risk_manager
-   api/base_env
-   api/experimental_backtester
-   api/live_trading_env
-   api/multi_agent_env
-   api/paper_trading_env
-   api/trading_env
-   api/wrap_env
-   api/ppo_agent
-   api/mlflow_management
+   api/backtest
+   api/live_trading
 
 .. toctree::
    :maxdepth: 2
    :caption: Agents & Training
-
-   api/base_policy
-   api/mlflow_manager
-   api/batch_strategy
-   api/hyperopt
-   api/mlflow_logger
+   
+   agents/ppo
+   agents/networks
+   agents/memory
 
 .. toctree::
    :maxdepth: 2
    :caption: Hyperparameter Optimization
-
-   api/hyperopt_agent
-   api/hyperopt_env
-   api/hyperopt_tuner
+   
+   hyperopt/ray_tune
+   hyperopt/experiments
 
 .. toctree::
    :maxdepth: 2
    :caption: Monitoring & Utilities
-
-   api/training_optimizer
-   api/advanced_scenario
-   api/performance_metrics
+   
+   utils/logging
+   utils/metrics
+   utils/visualization
 
 .. toctree::
    :maxdepth: 2
    :caption: Architecture
-
-   architecture/backtesting/single_asset
-   architecture/backtesting/multi_asset
-   architecture/risk_management/overview
+   
+   architecture/overview
+   architecture/backtesting/index
+   architecture/risk/index
+   architecture/live_trading/index
 
 .. toctree::
    :maxdepth: 2
    :caption: Examples
-
-   examples/index
-   examples/single_asset_example
-   examples/multi_asset_example
-   examples/reinforcement_learning
-
-.. toctree::
-   :maxdepth: 1
-   :caption: Project Info
-
-   changelog
+   
+   examples/training
+   examples/backtesting
+   examples/live_trading
 
 Indices and tables
 ==================

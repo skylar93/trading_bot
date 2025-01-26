@@ -7,7 +7,7 @@ import numpy as np
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 import logging
-from training.utils.risk_backtest import RiskAwareBacktester
+from training.backtesting.risk_aware_backtester import RiskAwareBacktester
 from risk.risk_manager import RiskManager, RiskConfig
 import random
 

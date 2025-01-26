@@ -149,19 +149,63 @@ class MomentumPPOAgent(PPOAgent):
         # Get action from parent class
         action = super().get_action(augmented_state.reshape(-1), deterministic)
         
-        # Apply momentum-based action modification
+        # Calculate trend strength
+        if len(state.shape) == 3:
+            close_prices = state[..., 3]
+            trend_strength = (close_prices[:, -1] - close_prices[:, -10]) / close_prices[:, -10]
+        else:
+            close_prices = state[:, 3]
+            trend_strength = (close_prices[-1] - close_prices[-10]) / close_prices[-10]
+        
+        # Apply momentum-based action modification with trend strength
         if len(momentum_features.shape) > 1:
             momentum = momentum_features[:, 0]
-            action = np.where(momentum < -self.momentum_threshold, np.minimum(action, 0),
-                            np.where(momentum > self.momentum_threshold, np.maximum(action, 0), action))
-        else:
-            if momentum_features[0] < -self.momentum_threshold:
-                # Strong downward momentum: reduce long positions
-                action = np.minimum(action, 0)
-            elif momentum_features[0] > self.momentum_threshold:
-                # Strong upward momentum: reduce short positions
-                action = np.maximum(action, 0)
+            trend = momentum_features[:, 2]
             
+            # Calculate trend-based bias
+            trend_bias = np.sign(trend_strength) * np.abs(trend_strength) * 2.0  # Stronger trend bias
+            
+            # Combine momentum and trend signals
+            momentum_signal = np.where(
+                momentum < -self.momentum_threshold,
+                np.minimum(action + trend_bias, 0),  # Stronger downward bias
+                np.where(
+                    momentum > self.momentum_threshold,
+                    np.maximum(action + trend_bias, 0),  # Stronger upward bias
+                    action + trend_bias * 0.5  # Weaker trend bias when momentum is weak
+                )
+            )
+            
+            # Scale action based on trend strength
+            action = momentum_signal * (1.0 + np.abs(trend_strength))
+        else:
+            momentum = momentum_features[0]
+            trend = momentum_features[2]
+            
+            # Calculate trend-based bias
+            trend_bias = np.sign(trend_strength) * np.abs(trend_strength) * 2.0  # Stronger trend bias
+            
+            # Combine momentum and trend signals
+            if momentum < -self.momentum_threshold:
+                # Strong downward momentum: reduce long positions
+                action = np.minimum(action + trend_bias, 0)  # Stronger downward bias
+            elif momentum > self.momentum_threshold:
+                # Strong upward momentum: reduce short positions
+                action = np.maximum(action + trend_bias, 0)  # Stronger upward bias
+            else:
+                # Weak momentum: use trend bias with reduced strength
+                action = action + trend_bias * 0.5
+            
+            # Scale action based on trend strength
+            action = action * (1.0 + np.abs(trend_strength))
+            
+            # If there's a strong trend, make sure we're following it
+            if abs(trend_strength) > 0.1:  # Strong trend threshold
+                action = np.sign(trend_strength) * max(abs(action), 0.5)  # Ensure minimum trend-following position size
+        
+        # Ensure action stays within bounds
+        action = np.clip(action, -1.0, 1.0)
+        
         return action
     
     def train_step(self, state: np.ndarray, action: np.ndarray, 

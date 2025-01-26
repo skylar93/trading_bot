@@ -36,3 +36,32 @@
 - Configuration
   * Use consistent parameter names in test configs
   * Match parameter names with environment variables 
+
+[Documentation Standards]
+- Python Docstrings:
+  - All classes must have docstrings with Features/Implementation Notes
+  - Methods must document Recent Changes
+  - Include concrete examples in class docstrings
+  - Document exact formulas used (e.g., PnL calculation)
+
+- Changelog:
+  - Update CHANGELOG.md with every significant change
+  - Include both user-facing and technical details
+  - Link to relevant issue/PR numbers
+
+- Test Documentation:
+  - Document test cases and expected results
+  - Include edge cases and their handling
+  - Explain numerical tolerances used
+
+[Automated Checks]
+- Pre-commit hooks should verify:
+  - Docstring presence and format
+  - CHANGELOG.md updates
+  - Test documentation completeness
+
+[Version Control]
+- Commit messages must reference:
+  - Changed formulas/algorithms
+  - Updated test cases
+  - Documentation updates 

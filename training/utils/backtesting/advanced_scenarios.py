@@ -182,7 +182,7 @@ class ScenarioTester:
         if self.env is None:
             self.env = TradingEnvironment(
                 df=data,
-                initial_balance=10000.0,
+                initial_capital=10000.0,
                 trading_fee=0.001,
                 window_size=20,
             )

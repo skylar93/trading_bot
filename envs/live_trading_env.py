@@ -116,6 +116,9 @@ class LiveTradingEnvironment(gym.Env):
     def _initialize_state(self):
         """Initialize environment state"""
         try:
+            # Store current price if it exists
+            current_price = getattr(self, '_last_price', 50000.0)
+            
             # Reset account state
             self.balance = float(self.initial_balance)
             self.position = 0.0
@@ -128,7 +131,7 @@ class LiveTradingEnvironment(gym.Env):
             
             # Reset tracking variables
             self._last_portfolio_value = float(self.initial_balance)
-            self._last_price = 50000.0  # Initial price for test mode
+            self._last_price = current_price  # Preserve the last price
             
             # Reset rate limiting
             self.last_api_call = datetime.min
@@ -674,11 +677,15 @@ class LiveTradingEnvironment(gym.Env):
             # Get initial observation
             observation = await self._get_observation()
             
+            # Calculate current portfolio value with current price
+            current_price = self._last_price if self.test_mode else self.websocket.get_latest_price()
+            current_portfolio_value = float(self.balance + (self.position * current_price if self.position else 0))
+            
             # Get initial info with exact values
             info = {
                 'balance': float(self.balance),
-                'position': 0.0,  # Always start with no position
-                'portfolio_value': float(self.initial_balance)
+                'position': float(self.position),
+                'portfolio_value': current_portfolio_value
             }
             
             return observation, info

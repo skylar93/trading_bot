@@ -4,6 +4,7 @@ import pandas as pd
 from typing import Dict, List, Tuple, Optional
 from gymnasium import spaces
 from dataclasses import dataclass
+from risk.risk_manager import RiskConfig
 
 
 @dataclass
@@ -36,31 +37,36 @@ class TradingEnvironment(gym.Env):
 
     def __init__(
         self,
-        df: pd.DataFrame,
-        initial_balance: float = 10000.0,
+        data: pd.DataFrame,
+        window_size: int = 20,
+        initial_capital: float = 10000.0,
         trading_fee: float = 0.001,
-        window_size: int = 30,
         max_position_size: float = 1.0,
+        risk_config: Optional[RiskConfig] = None,
     ):
         """
+        Initialize the trading environment.
+        
         Args:
-            df: DataFrame with OHLCV and feature data
-            initial_balance: Initial account balance
-            trading_fee: Trading fee as a fraction
-            window_size: Number of time steps to include in state
-            max_position_size: Maximum position size as a fraction of balance
+            data (pd.DataFrame): Historical price data
+            window_size (int): Size of observation window
+            initial_capital (float): Initial account capital
+            trading_fee (float): Trading fee as fraction
+            max_position_size (float): Maximum position size as fraction of capital
+            risk_config (RiskConfig, optional): Risk management configuration
         """
         super(TradingEnvironment, self).__init__()
 
-        self.df = df
-        self.initial_balance = initial_balance
-        self.trading_fee = trading_fee
+        self.data = data
         self.window_size = window_size
+        self.initial_capital = initial_capital
+        self.trading_fee = trading_fee
         self.max_position_size = max_position_size
+        self.risk_config = risk_config
 
         # Get feature columns (excluding datetime and instrument)
         self.feature_columns = [
-            col for col in df.columns if col not in ["datetime", "instrument"]
+            col for col in data.columns if col not in ["datetime", "instrument"]
         ]
 
         # Action space: -1 (sell/short) to 1 (buy/long)
@@ -96,18 +102,20 @@ class TradingEnvironment(gym.Env):
 
         # Reset internal state
         self.current_step = self.window_size
-        self.balance = self.initial_balance
+        self.balance = self.initial_capital
         self.position = None
         self.position_history = []
         self.total_trades = 0
         self.profitable_trades = 0
+        self.portfolio_values = [self.initial_capital]
+        self.returns = []
 
         # Get initial observation
         observation = self._get_observation()
         info = {
             "balance": self.balance,
             "position": self.position,
-            "current_price": self.df["$close"].iloc[self.current_step],
+            "current_price": self.data["$close"].iloc[self.current_step],
         }
 
         return observation, info
@@ -116,7 +124,7 @@ class TradingEnvironment(gym.Env):
         """Get current observation (state)"""
         # Get window of feature data
         obs = (
-            self.df[self.feature_columns]
+            self.data[self.feature_columns]
             .iloc[self.current_step - self.window_size : self.current_step]
             .values
         )
@@ -136,14 +144,14 @@ class TradingEnvironment(gym.Env):
     def _calculate_reward(self, action: float) -> float:
         """Calculate reward for the current step"""
         # Get current price
-        current_price = self.df["$close"].iloc[self.current_step]
+        current_price = self.data["$close"].iloc[self.current_step]
 
         # Calculate profit/loss if we have a position
         reward = 0.0
         if self.position is not None:
             reward = (
                 self.position.calculate_pnl(current_price)
-                / self.initial_balance
+                / self.initial_capital
             )
 
         # Penalize for trading fees
@@ -164,8 +172,8 @@ class TradingEnvironment(gym.Env):
         )
 
         # Process the action
-        current_price = self.df["$close"].iloc[self.current_step]
-        current_time = self.df.index[self.current_step]
+        current_price = self.data["$close"].iloc[self.current_step]
+        current_time = self.data.index[self.current_step]
         self.current_price = current_price  # Store for later use
 
         # Close existing position if action is in opposite direction
@@ -199,7 +207,7 @@ class TradingEnvironment(gym.Env):
         self.current_step += 1
 
         # Check if episode is done
-        done = self.current_step >= len(self.df) - 1
+        done = self.current_step >= len(self.data) - 1
         truncated = False  # For gymnasium compatibility
 
         # Calculate reward (change in portfolio value)

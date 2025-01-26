@@ -7,7 +7,13 @@ import logging
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from training.advanced_backtest import ScenarioBacktester
+from training.backtesting.base_backtester import BaseBacktester
+from training.backtesting.scenario import (
+    generate_flash_crash_data,
+    generate_low_liquidity_data,
+    calculate_flash_crash_metrics,
+    calculate_low_liquidity_metrics
+)
 from agents.strategies.single.ppo_agent import PPOAgent
 
 logger = logging.getLogger(__name__)
@@ -20,9 +26,9 @@ class MockAgent:
         return np.random.uniform(-1, 1)
 
 
-class TestScenarioBacktester(unittest.TestCase):
+class TestScenarioBacktesting(unittest.TestCase):
     def setUp(self):
-        self.backtester = ScenarioBacktester()
+        self.backtester = BaseBacktester(initial_capital=10000.0)
         self.backtester.logger = logging.getLogger(
             self.backtester.__class__.__name__
         )
@@ -30,7 +36,7 @@ class TestScenarioBacktester(unittest.TestCase):
 
     def test_flash_crash_data_generation(self):
         """Test flash crash data generation"""
-        data = self.backtester.generate_flash_crash_data(
+        data = generate_flash_crash_data(
             length=1000, crash_at=500, crash_size=0.15
         )
 
@@ -49,7 +55,7 @@ class TestScenarioBacktester(unittest.TestCase):
 
     def test_low_liquidity_data_generation(self):
         """Test low liquidity data generation"""
-        data = self.backtester.generate_low_liquidity_data(
+        data = generate_low_liquidity_data(
             length=1000, low_liq_start=300, low_liq_length=100
         )
 
@@ -62,7 +68,13 @@ class TestScenarioBacktester(unittest.TestCase):
 
     def test_flash_crash_scenario(self):
         """Test full flash crash scenario backtest"""
-        results = self.backtester.run_flash_crash_scenario(self.agent)
+        results = self.backtester.run_scenario(
+            strategy=self.agent,
+            scenario_type="flash_crash",
+            length=1000,
+            crash_at=500,
+            crash_size=0.15
+        )
 
         self.assertIn("scenario_metrics", results)
         self.assertIn("max_drawdown_idx", results["scenario_metrics"])
@@ -71,7 +83,13 @@ class TestScenarioBacktester(unittest.TestCase):
 
     def test_low_liquidity_scenario(self):
         """Test full low liquidity scenario backtest"""
-        results = self.backtester.run_low_liquidity_scenario(self.agent)
+        results = self.backtester.run_scenario(
+            strategy=self.agent,
+            scenario_type="low_liquidity",
+            length=1000,
+            low_liq_start=300,
+            low_liq_length=100
+        )
 
         self.assertIn("scenario_metrics", results)
         self.assertIn("avg_trade_cost", results["scenario_metrics"])

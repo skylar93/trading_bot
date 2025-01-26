@@ -41,8 +41,8 @@ class TestAdvancedScenarios(unittest.TestCase):
 
         # Create basic environment and agent
         self.env = TradingEnvironment(
-            df=self.sample_data,
-            initial_balance=10000.0,
+            data=self.sample_data,
+            initial_capital=10000.0,
             trading_fee=0.001,
             window_size=20,
         )
