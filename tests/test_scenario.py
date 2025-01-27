@@ -9,7 +9,11 @@ from training.backtesting.scenario import (
     generate_flash_crash_data,
     generate_low_liquidity_data,
     calculate_scenario_metrics,
-    generate_flash_crash_data_deterministic
+    generate_flash_crash_data_deterministic,
+    calculate_flash_crash_metrics,
+    calculate_low_liquidity_metrics,
+    apply_flash_crash_to_real_data,
+    apply_low_liquidity_to_real_data
 )
 from training.backtesting.risk_aware_backtester import RiskAwareBacktester
 
@@ -204,6 +208,87 @@ class TestScenarios(unittest.TestCase):
                 "Position sizes should be reduced proportionally to volume reduction"
             )
 
+    def test_flash_crash_metrics(self):
+        """Test enhanced flash crash metrics calculation"""
+        # Generate test data
+        crash_params = {
+            "length": 1000,
+            "crash_at": 500,
+            "crash_size": 0.3,
+            "base_price": 100.0
+        }
+        data = generate_flash_crash_data_deterministic(**crash_params)
+        
+        # Create mock results
+        mock_results = {
+            "portfolio_values": [100.0] * 500 + [70.0] * 100 + [85.0] * 400,  # Simplified portfolio curve
+            "trades": [
+                {"timestamp": data.index[490], "amount": -1.0},  # Good sell before crash
+                {"timestamp": data.index[510], "amount": -0.5},  # Good sell during crash
+                {"timestamp": data.index[600], "amount": 1.0},   # Good buy during recovery
+            ],
+            "timestamps": list(data.index),
+            "prices": {
+                "$high": data["$high"].values,
+                "$low": data["$low"].values,
+                "$close": data["$close"].values
+            }
+        }
+        
+        metrics = calculate_flash_crash_metrics(mock_results)
+        
+        # Test new metrics
+        self.assertIn("recovery_speed", metrics)
+        self.assertIn("recovery_percentage", metrics)
+        self.assertIn("drawdown_depth", metrics)
+        self.assertIn("crash_trade_efficacy", metrics)
+        
+        # Verify metric values
+        self.assertTrue(0 <= metrics["crash_trade_efficacy"] <= 1, "Trade efficacy should be normalized")
+        self.assertTrue(metrics["drawdown_depth"] > 25, "Should detect significant drawdown")
+        self.assertTrue(metrics["recovery_percentage"] > 0, "Recovery percentage should be positive")
+
+    def test_low_liquidity_metrics(self):
+        """Test enhanced low liquidity metrics calculation"""
+        # Generate test data
+        liq_params = {
+            "length": 1000,
+            "low_liq_start": 300,
+            "low_liq_length": 100,
+            "base_price": 100.0,
+            "base_volume": 1000.0,
+            "volume_reduction": 0.8
+        }
+        data = generate_low_liquidity_data(**liq_params)
+        
+        # Create mock results with failed trades and execution delays
+        mock_results = {
+            "trades": [
+                {"timestamp": data.index[310], "amount": 1.0, "filled": True, "execution_delay": 2},
+                {"timestamp": data.index[320], "amount": 0.5, "filled": False},
+                {"timestamp": data.index[330], "amount": -1.0, "filled": True, "execution_delay": 3},
+                {"timestamp": data.index[350], "amount": 0.8, "filled": True, "execution_delay": 1},
+            ],
+            "timestamps": list(data.index),
+            "prices": {
+                "$high": data["$high"].values,
+                "$low": data["$low"].values
+            }
+        }
+        
+        metrics = calculate_low_liquidity_metrics(mock_results)
+        
+        # Test new metrics
+        self.assertIn("fill_rate", metrics)
+        self.assertIn("avg_spread", metrics)
+        self.assertIn("execution_delay", metrics)
+        
+        # Verify metric values
+        self.assertTrue(0 <= metrics["fill_rate"] <= 100, "Fill rate should be a percentage")
+        self.assertEqual(metrics["fill_rate"], 75.0, "Expected 3/4 trades filled = 75%")
+        self.assertTrue(metrics["avg_spread"] > 0, "Should detect non-zero spreads")
+        self.assertTrue(1 < metrics["execution_delay"] < 3, "Average delay should be between 1-3")
+
 class DummyStrategy:
     """A strategy that takes smaller positions and is more responsive to drawdowns"""
     def __init__(self):
@@ -392,4 +477,287 @@ def test_risk_limits_in_low_liquidity():
     
     if low_liq_trades:
         avg_trade_size = np.mean([abs(t["amount"]) for t in low_liq_trades])
-        assert avg_trade_size < backtester.max_position * 0.5, "Position sizes should be reduced in low liquidity" 
+        assert avg_trade_size < backtester.max_position * 0.5, "Position sizes should be reduced in low liquidity"
+
+class TestScenarioGeneration(unittest.TestCase):
+    """Test scenario data generation functions"""
+    
+    def test_flash_crash_data_shape(self):
+        """Test flash crash data has correct shape and columns"""
+        length = 1000
+        data = generate_flash_crash_data_deterministic(length=length)
+        
+        self.assertEqual(data.shape, (length, 5), "Data should have correct shape")
+        self.assertTrue(all(col in data.columns for col in ["$open", "$high", "$low", "$close", "$volume"]),
+                       "Data should have all OHLCV columns")
+    
+    def test_flash_crash_characteristics(self):
+        """Test flash crash data exhibits expected characteristics"""
+        crash_params = {
+            "length": 1000,
+            "crash_at": 500,
+            "crash_size": 0.3,
+            "base_price": 100.0
+        }
+        
+        data = generate_flash_crash_data_deterministic(**crash_params)
+        
+        # Test crash magnitude
+        pre_crash_price = data["$close"].iloc[crash_params["crash_at"] - 1]
+        crash_price = data["$close"].iloc[crash_params["crash_at"]]
+        actual_drop = (pre_crash_price - crash_price) / pre_crash_price
+        
+        self.assertGreaterEqual(actual_drop, crash_params["crash_size"],
+                               "Price should drop by at least the specified crash size")
+        
+        # Test increased volatility during crash
+        normal_volatility = data["$close"].iloc[:crash_params["crash_at"]].pct_change().std()
+        crash_volatility = data["$close"].iloc[crash_params["crash_at"]:crash_params["crash_at"]+10].pct_change().std()
+        
+        self.assertGreater(crash_volatility, normal_volatility * 2,
+                          "Volatility should increase significantly during crash")
+        
+        # Test volume spikes during crash
+        normal_volume = data["$volume"].iloc[:crash_params["crash_at"]].mean()
+        crash_volume = data["$volume"].iloc[crash_params["crash_at"]].mean()
+        
+        self.assertGreater(crash_volume, normal_volume * 2,
+                          "Volume should spike during crash")
+    
+    def test_low_liquidity_data_shape(self):
+        """Test low liquidity data has correct shape and columns"""
+        length = 1000
+        data = generate_low_liquidity_data(length=length)
+        
+        self.assertEqual(data.shape, (length, 5), "Data should have correct shape")
+        self.assertTrue(all(col in data.columns for col in ["$open", "$high", "$low", "$close", "$volume"]),
+                       "Data should have all OHLCV columns")
+    
+    def test_low_liquidity_characteristics(self):
+        """Test low liquidity data exhibits expected characteristics"""
+        liq_params = {
+            "length": 1000,
+            "low_liq_start": 300,
+            "low_liq_length": 100,
+            "base_volume": 1000.0,
+            "volume_reduction": 0.8
+        }
+        
+        data = generate_low_liquidity_data(**liq_params)
+        
+        # Test volume reduction
+        normal_volume = data["$volume"].iloc[:liq_params["low_liq_start"]].mean()
+        low_liq_volume = data["$volume"].iloc[
+            liq_params["low_liq_start"]:
+            liq_params["low_liq_start"] + liq_params["low_liq_length"]
+        ].mean()
+        
+        expected_reduction = normal_volume * (1 - liq_params["volume_reduction"])
+        actual_reduction = (normal_volume - low_liq_volume) / normal_volume
+        
+        self.assertGreaterEqual(actual_reduction, liq_params["volume_reduction"] * 0.9,
+                               "Volume should be reduced by approximately the specified amount")
+        
+        # Test increased spreads during low liquidity
+        normal_spread = (data["$high"] - data["$low"]).iloc[:liq_params["low_liq_start"]].mean()
+        low_liq_spread = (data["$high"] - data["$low"]).iloc[
+            liq_params["low_liq_start"]:
+            liq_params["low_liq_start"] + liq_params["low_liq_length"]
+        ].mean()
+        
+        self.assertGreater(low_liq_spread, normal_spread,
+                          "Spreads should widen during low liquidity")
+        
+        # Test increased volatility during low liquidity
+        normal_volatility = data["$close"].iloc[:liq_params["low_liq_start"]].pct_change().std()
+        low_liq_volatility = data["$close"].iloc[
+            liq_params["low_liq_start"]:
+            liq_params["low_liq_start"] + liq_params["low_liq_length"]
+        ].pct_change().std()
+        
+        self.assertGreater(low_liq_volatility, normal_volatility,
+                          "Volatility should increase during low liquidity")
+
+    def test_scenario_metrics_calculation(self):
+        """Test scenario metrics calculation"""
+        # Generate flash crash data
+        crash_data = generate_flash_crash_data_deterministic(
+            length=1000,
+            crash_at=500,
+            crash_size=0.3
+        )
+        
+        # Create mock results
+        mock_results = {
+            "portfolio_values": [100.0] * 500 + [70.0] * 100 + [85.0] * 400,
+            "trades": [
+                {"timestamp": crash_data.index[490], "amount": -1.0},
+                {"timestamp": crash_data.index[510], "amount": -0.5},
+                {"timestamp": crash_data.index[600], "amount": 1.0},
+            ],
+            "timestamps": list(crash_data.index),
+            "prices": {
+                "$high": crash_data["$high"].values,
+                "$low": crash_data["$low"].values,
+                "$close": crash_data["$close"].values
+            }
+        }
+        
+        # Test flash crash metrics
+        flash_metrics = calculate_flash_crash_metrics(mock_results)
+        self.assertGreater(flash_metrics["drawdown_depth"], 25,
+                          "Should detect significant drawdown")
+        self.assertTrue(0 <= flash_metrics["crash_trade_efficacy"] <= 1,
+                       "Trade efficacy should be normalized")
+        
+        # Generate low liquidity data
+        liq_data = generate_low_liquidity_data(
+            length=1000,
+            low_liq_start=300,
+            volume_reduction=0.8
+        )
+        
+        # Create mock results for low liquidity
+        mock_results = {
+            "trades": [
+                {"timestamp": liq_data.index[310], "amount": 1.0, "filled": True},
+                {"timestamp": liq_data.index[320], "amount": 0.5, "filled": False},
+                {"timestamp": liq_data.index[330], "amount": -1.0, "filled": True},
+            ],
+            "timestamps": list(liq_data.index),
+            "prices": {
+                "$high": liq_data["$high"].values,
+                "$low": liq_data["$low"].values
+            }
+        }
+        
+        # Test low liquidity metrics
+        liq_metrics = calculate_low_liquidity_metrics(mock_results)
+        self.assertLess(liq_metrics["fill_rate"], 100,
+                       "Should detect some unfilled orders")
+        self.assertGreater(liq_metrics["avg_spread"], 0,
+                          "Should detect non-zero spreads")
+
+class TestScenarioApplication(unittest.TestCase):
+    """Test applying scenarios to real market data"""
+    
+    def setUp(self):
+        """Create sample market data for testing"""
+        length = 1000
+        timestamps = pd.date_range(
+            start="2024-01-01", periods=length, freq="5min"
+        )
+        
+        # Generate sample price data with slight upward trend
+        returns = np.random.normal(0.0001, 0.001, length)
+        prices = 100 * np.exp(np.cumsum(returns))
+        
+        # Generate sample volume data
+        volumes = np.random.uniform(100000, 200000, length)
+        
+        # Create sample OHLCV data
+        self.sample_data = pd.DataFrame(
+            {
+                "$open": prices,
+                "$high": prices * 1.001,
+                "$low": prices * 0.999,
+                "$close": prices,
+                "$volume": volumes
+            },
+            index=timestamps
+        )
+    
+    def test_apply_flash_crash(self):
+        """Test applying flash crash to existing data"""
+        crash_params = {
+            "crash_at": 500,
+            "crash_size": 0.3,
+            "crash_duration": 5,
+            "recovery_duration": 10
+        }
+        
+        # Apply flash crash
+        modified_data = apply_flash_crash_to_real_data(
+            self.sample_data,
+            **crash_params
+        )
+        
+        # Verify data structure
+        self.assertEqual(len(modified_data), len(self.sample_data),
+                        "Data length should remain unchanged")
+        self.assertTrue(all(col in modified_data.columns for col in self.sample_data.columns),
+                       "All columns should be preserved")
+        
+        # Verify crash characteristics
+        pre_crash_price = modified_data["$close"].iloc[crash_params["crash_at"] - 1]
+        crash_price = modified_data["$close"].iloc[crash_params["crash_at"]]
+        actual_drop = (pre_crash_price - crash_price) / pre_crash_price
+        
+        self.assertGreaterEqual(actual_drop, crash_params["crash_size"],
+                               "Price should drop by at least the specified crash size")
+        
+        # Verify volume spike
+        normal_volume = modified_data["$volume"].iloc[:crash_params["crash_at"]].mean()
+        crash_volume = modified_data["$volume"].iloc[crash_params["crash_at"]]
+        
+        self.assertGreater(crash_volume, normal_volume * 2,
+                          "Volume should spike during crash")
+        
+        # Verify recovery phase
+        recovery_start = crash_params["crash_at"] + crash_params["crash_duration"]
+        recovery_price = modified_data["$close"].iloc[recovery_start]
+        
+        self.assertGreater(recovery_price, crash_price,
+                          "Price should start recovering after crash")
+    
+    def test_apply_low_liquidity(self):
+        """Test applying low liquidity to existing data"""
+        liq_params = {
+            "low_liq_start": 300,
+            "low_liq_length": 100,
+            "volume_reduction": 0.8,
+            "spread_multiplier": 3.0
+        }
+        
+        # Apply low liquidity
+        modified_data = apply_low_liquidity_to_real_data(
+            self.sample_data,
+            **liq_params
+        )
+        
+        # Verify data structure
+        self.assertEqual(len(modified_data), len(self.sample_data),
+                        "Data length should remain unchanged")
+        self.assertTrue(all(col in modified_data.columns for col in self.sample_data.columns),
+                       "All columns should be preserved")
+        
+        # Verify volume reduction
+        normal_volume = modified_data["$volume"].iloc[:liq_params["low_liq_start"]].mean()
+        low_liq_volume = modified_data["$volume"].iloc[
+            liq_params["low_liq_start"]:
+            liq_params["low_liq_start"] + liq_params["low_liq_length"]
+        ].mean()
+        
+        actual_reduction = (normal_volume - low_liq_volume) / normal_volume
+        self.assertGreaterEqual(actual_reduction, liq_params["volume_reduction"] * 0.9,
+                               "Volume should be reduced by approximately the specified amount")
+        
+        # Verify increased spreads
+        normal_spread = ((modified_data["$high"] - modified_data["$low"]) / modified_data["$close"]).iloc[:liq_params["low_liq_start"]].mean()
+        low_liq_spread = ((modified_data["$high"] - modified_data["$low"]) / modified_data["$close"]).iloc[
+            liq_params["low_liq_start"]:
+            liq_params["low_liq_start"] + liq_params["low_liq_length"]
+        ].mean()
+        
+        self.assertGreater(low_liq_spread, normal_spread * 2,
+                          "Spreads should widen significantly during low liquidity")
+        
+        # Verify increased volatility
+        normal_volatility = modified_data["$close"].iloc[:liq_params["low_liq_start"]].pct_change().std()
+        low_liq_volatility = modified_data["$close"].iloc[
+            liq_params["low_liq_start"]:
+            liq_params["low_liq_start"] + liq_params["low_liq_length"]
+        ].pct_change().std()
+        
+        self.assertGreater(low_liq_volatility, normal_volatility,
+                          "Volatility should increase during low liquidity") 

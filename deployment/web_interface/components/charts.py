@@ -119,7 +119,7 @@ def create_portfolio_chart(portfolio_values: List[float]) -> Optional[go.Figure]
         # Create DataFrame with index
         df = pd.DataFrame({
             'portfolio_value': portfolio_values,
-            'timestamp': pd.date_range(end=pd.Timestamp.now(), periods=len(portfolio_values), freq='1H')
+            'timestamp': pd.date_range(end=pd.Timestamp.now(), periods=len(portfolio_values), freq='1h')
         })
         
         # Create figure

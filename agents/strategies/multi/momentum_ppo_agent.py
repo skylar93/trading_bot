@@ -206,6 +206,12 @@ class MomentumPPOAgent(PPOAgent):
         # Ensure action stays within bounds
         action = np.clip(action, -1.0, 1.0)
         
+        # Ensure action is a numpy array with shape (1,)
+        if isinstance(action, (float, np.float32, np.float64)):
+            action = np.array([action], dtype=np.float32)
+        elif isinstance(action, np.ndarray) and action.shape != (1,):
+            action = action.reshape(1)
+            
         return action
     
     def train_step(self, state: np.ndarray, action: np.ndarray, 

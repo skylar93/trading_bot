@@ -9,32 +9,9 @@ from typing import Dict, List, Optional, Any
 import logging
 from training.backtesting.risk_aware_backtester import RiskAwareBacktester
 from risk.risk_manager import RiskManager, RiskConfig
-import random
+from agents.strategies.single.dummy_agent import DummyAgent
 
 logger = logging.getLogger(__name__)
-
-class DummyAgent:
-    """Dummy agent for testing that makes small random trades"""
-    
-    def __init__(self):
-        self.step_count = -1  # Start at -1 so first increment gives 0
-        self.logger = logging.getLogger(self.__class__.__name__)
-        
-    def get_action(self, state: Dict[str, Any]) -> float:
-        """Generate small random actions for testing"""
-        self.step_count += 1
-        
-        # First action should be non-zero but small for consistency test
-        if self.step_count == 0:
-            return 0.5
-            
-        # Trade every 5 steps with small magnitude
-        if self.step_count % 5 == 0:
-            action = 0.5 if (self.step_count // 5) % 2 == 0 else -0.5
-            self.logger.info(f"DummyAgent taking action: {action}")
-            return action
-            
-        return 0.0
 
 class BacktestManager:
     """Manage backtest execution and results"""
@@ -133,13 +110,13 @@ class BacktestManager:
             backtester = RiskAwareBacktester(
                 data=data,
                 risk_config=self.risk_config,
-                initial_balance=self.settings.get("initial_balance", 10000.0),
+                initial_capital=self.settings.get("initial_balance", 10000.0),
                 trading_fee=self.settings.get("trading_fee", 0.001)
             )
             
             # Run backtest
             results = backtester.run(
-                agent=self.agent,
+                strategy=self.agent,
                 window_size=20,
                 verbose=True
             )

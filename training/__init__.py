@@ -1,0 +1,3 @@
+"""
+Trading bot training package
+""" 

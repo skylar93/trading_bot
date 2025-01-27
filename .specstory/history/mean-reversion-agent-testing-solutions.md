@@ -520,6 +520,68 @@ _**Assistant**_
 
 ---
 
+_**User**_
+
+이것 좀 고쳐줘... 
+
+---
+
+_**Assistant**_
+
+로그를 보니 `RiskAwareBacktester` 클래스의 `__init__` 메서드에 `initial_balance` 파라미터가 없어서 발생하는 에러네요.
+
+먼저 `RiskAwareBacktester` 파일을 확인해보겠습니다:
+
+---
+
+_**Assistant**_
+
+
+
+---
+
+_**Assistant**_
+
+
+
+---
+
+_**Assistant**_
+
+
+
+---
+
+_**Assistant**_
+
+
+
+---
+
+_**Assistant**_
+
+
+
+문제가 파악됐습니다. `RiskAwareBacktester` 클래스는 `initial_balance` 대신 `initial_capital`을 파라미터로 받고 있네요. 
+
+`backtest.py` 파일을 수정하겠습니다:
+
+---
+
+_**Assistant**_
+
+```
+undefined
+```
+
+---
+
+_**Assistant**_
+
+
+
+---
+
 
 
 ---
