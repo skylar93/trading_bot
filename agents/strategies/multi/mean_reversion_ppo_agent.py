@@ -5,6 +5,7 @@ from typing import Dict, Any, Optional, Tuple
 import logging
 from agents.strategies.single.ppo_agent import PPOAgent
 from gymnasium import spaces
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,7 @@ class MeanReversionPPOAgent(PPOAgent):
     def _calculate_rsi(self, prices: np.ndarray) -> float:
         """
         Calculate RSI using traditional approach with Wilder's smoothing.
+        Handles NaN values safely.
         
         Args:
             prices: Array of price values
@@ -89,6 +91,9 @@ class MeanReversionPPOAgent(PPOAgent):
         Returns:
             RSI value between 0 and 100
         """
+        # Handle NaN values in prices
+        prices = np.nan_to_num(prices, nan=np.nanmean(prices) if np.any(~np.isnan(prices)) else 0.0)
+        
         if len(prices) < self.rsi_window + 1:
             return 50.0  # Return neutral RSI for insufficient data
         
@@ -113,10 +118,18 @@ class MeanReversionPPOAgent(PPOAgent):
         rs = avg_gain / avg_loss
         rsi = 100.0 - (100.0 / (1.0 + rs))
         
+        # Ensure result is valid
+        rsi = np.nan_to_num(rsi, nan=50.0)
         return float(np.clip(rsi, 0.0, 100.0))
     
     def _calculate_bollinger_bands(self, prices: np.ndarray) -> Tuple[float, float]:
-        """Calculate Bollinger Bands for a price series."""
+        """
+        Calculate Bollinger Bands for a price series.
+        Handles NaN values safely.
+        """
+        # Handle NaN values in prices
+        prices = np.nan_to_num(prices, nan=np.nanmean(prices) if np.any(~np.isnan(prices)) else 0.0)
+        
         if len(prices) < self.bb_window:
             return prices[-1], prices[-1]  # Return current price as both bands if insufficient data
             
@@ -127,7 +140,9 @@ class MeanReversionPPOAgent(PPOAgent):
         upper = mean + self.bb_std * std
         lower = mean - self.bb_std * std
         
-        # Ensure bands don't cross
+        # Ensure bands don't cross and handle any NaN results
+        upper = np.nan_to_num(upper, nan=mean)
+        lower = np.nan_to_num(lower, nan=mean)
         upper = max(upper, mean)
         lower = min(lower, mean)
         
@@ -136,6 +151,7 @@ class MeanReversionPPOAgent(PPOAgent):
     def _calculate_reversion_features(self, state: np.ndarray) -> np.ndarray:
         """
         Calculate mean reversion specific features from the state.
+        Handles NaN values safely.
         
         Args:
             state: Raw state observation
@@ -143,6 +159,9 @@ class MeanReversionPPOAgent(PPOAgent):
         Returns:
             Mean reversion features as numpy array
         """
+        # Handle NaN values in state
+        state = np.nan_to_num(state, nan=0.0, posinf=9999, neginf=-9999)
+        
         if len(state.shape) == 1:
             state = state.reshape(1, -1)
         
@@ -176,7 +195,9 @@ class MeanReversionPPOAgent(PPOAgent):
                 bb_upper_dist = (bb_upper - current_price) / current_price
                 bb_lower_dist = (current_price - bb_lower) / current_price
             
-            return np.column_stack([rsi, bb_upper_dist, bb_lower_dist]) if len(state.shape) > 2 else np.array([rsi, bb_upper_dist, bb_lower_dist])
+            # Handle any NaN values in the final features
+            features = np.column_stack([rsi, bb_upper_dist, bb_lower_dist]) if len(state.shape) > 2 else np.array([rsi, bb_upper_dist, bb_lower_dist])
+            return np.nan_to_num(features, nan=0.0, posinf=1.0, neginf=-1.0)
         else:
             shape = (state.shape[0], 3) if len(state.shape) > 2 else (3,)
             return np.zeros(shape, dtype=np.float32)
@@ -186,12 +207,16 @@ class MeanReversionPPOAgent(PPOAgent):
         Get action from policy network with mean reversion considerations.
         
         Args:
-            state: Current state observation
-            deterministic: Whether to use deterministic action selection
+            state: Current state observation (can be numpy array or pandas DataFrame)
+            deterministic: Whether to use deterministic action
             
         Returns:
             Selected action as numpy array
         """
+        # Convert DataFrame to numpy if needed
+        if isinstance(state, pd.DataFrame):
+            state = state.to_numpy()
+            
         reversion_features = self._calculate_reversion_features(state)
         
         if len(state.shape) == 3:  # (batch, window, features)
@@ -205,13 +230,29 @@ class MeanReversionPPOAgent(PPOAgent):
         # Get base action from policy network
         base_action = super().get_action(augmented_state.reshape(-1), deterministic)
         
-        # Calculate trend strength
+        # Calculate trend strength safely
         if len(state.shape) == 3:
             close_prices = state[..., 3]
-            trend_strength = (close_prices[:, -1] - close_prices[:, -10]) / close_prices[:, -10]
+            if close_prices.shape[1] < 10:
+                trend_strength = np.zeros(close_prices.shape[0])
+            else:
+                denominator = close_prices[:, -10]
+                # Handle zero/nan/inf denominators
+                safe_mask = (denominator != 0) & ~np.isnan(denominator) & ~np.isinf(denominator)
+                trend_strength = np.zeros(close_prices.shape[0])
+                trend_strength[safe_mask] = (close_prices[safe_mask, -1] - denominator[safe_mask]) / denominator[safe_mask]
+                trend_strength = np.nan_to_num(trend_strength, nan=0.0, posinf=0.0, neginf=0.0)
         else:
             close_prices = state[:, 3]
-            trend_strength = (close_prices[-1] - close_prices[-10]) / close_prices[-10]
+            if len(close_prices) < 10:
+                trend_strength = 0.0
+            else:
+                denominator = close_prices[-10]
+                if denominator == 0 or np.isnan(denominator) or np.isinf(denominator):
+                    trend_strength = 0.0
+                else:
+                    trend_strength = (close_prices[-1] - denominator) / denominator
+                    trend_strength = np.nan_to_num(trend_strength, nan=0.0, posinf=0.0, neginf=0.0)
         
         # Apply mean reversion based action modification
         if len(reversion_features.shape) > 1:
@@ -247,7 +288,8 @@ class MeanReversionPPOAgent(PPOAgent):
             bb_signal = np.maximum(bb_upper_dist, bb_lower_dist)
             action *= (2.0 + bb_signal)  # Stronger scaling by BB distance
             
-            # Ensure action stays within bounds
+            # Ensure action stays within bounds and handle any NaN/inf values
+            action = np.nan_to_num(action, nan=0.0, posinf=1.0, neginf=-1.0)
             action = np.clip(action, -1.0, 1.0)
         else:
             rsi = reversion_features[0]
@@ -275,12 +317,17 @@ class MeanReversionPPOAgent(PPOAgent):
             bb_signal = max(bb_upper_dist, bb_lower_dist)
             action *= (2.0 + bb_signal)  # Stronger scaling by BB distance
             
-            # Ensure action stays within bounds
+            # Ensure action stays within bounds and handle any NaN/inf values
+            action = np.nan_to_num(action, nan=0.0, posinf=1.0, neginf=-1.0)
             action = np.clip(action, -1.0, 1.0)
             
             # If there's a strong trend, make sure we're taking the opposite position
             if abs(trend_strength) > 0.1:  # Strong trend threshold
                 action = -np.sign(trend_strength) * max(abs(action), 0.5)  # Ensure minimum counter-trend position size
+        
+        # Final defensive clamp to ensure no NaN/inf values escape
+        action = np.nan_to_num(action, nan=0.0, posinf=1.0, neginf=-1.0)
+        action = np.clip(action, -1.0, 1.0)
         
         return action
     

@@ -9,6 +9,7 @@ import logging
 from agents.base.base_agent import BaseAgent
 from agents.models.architectures.mlp import PolicyNetwork
 from agents.models.architectures.value_mlp import ValueNetwork
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ class PPOAgent(BaseAgent):
         n_epochs: int = 10,
         target_kl: float = 0.015,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
+        **kwargs,
     ):
         """
         PPO Agent with shared experience learning capability
@@ -49,6 +51,7 @@ class PPOAgent(BaseAgent):
             n_epochs: Number of epochs to train on each batch
             target_kl: Target KL divergence
             device: Device to use for tensor operations
+            **kwargs: Additional keyword arguments that will be ignored
         """
         # Get spaces from env if provided
         if env is not None:
@@ -60,11 +63,27 @@ class PPOAgent(BaseAgent):
                 "Must provide either env or both observation_space and action_space"
             )
 
+        # Log any unused kwargs
+        if kwargs:
+            logger.warning(f"Ignoring unused config keys in PPOAgent: {list(kwargs.keys())}")
+
         super().__init__(observation_space, action_space)
+
+        # Store hyperparameters as instance attributes
+        self.learning_rate = learning_rate
+        self.gamma = gamma
+        self.gae_lambda = gae_lambda
+        self.clip_epsilon = clip_epsilon
+        self.c1 = c1
+        self.c2 = c2
+        self.c3 = c3
+        self.batch_size = batch_size
+        self.n_epochs = n_epochs
+        self.target_kl = target_kl
+        self.device = device
 
         self.observation_space = observation_space
         self.action_space = action_space
-        self.device = device
 
         # Initialize networks
         self.network = PolicyNetwork(
@@ -80,10 +99,10 @@ class PPOAgent(BaseAgent):
         # Initialize optimizer
         self.optimizer = optim.Adam(
             [
-                {"params": self.network.parameters(), "lr": learning_rate},
+                {"params": self.network.parameters(), "lr": self.learning_rate},
                 {
                     "params": self.value_network.parameters(),
-                    "lr": learning_rate,
+                    "lr": self.learning_rate,
                 },
             ]
         )
@@ -92,19 +111,8 @@ class PPOAgent(BaseAgent):
         self.scheduler = CosineAnnealingLR(
             self.optimizer, 
             T_max=n_epochs,
-            eta_min=learning_rate * 0.1
+            eta_min=self.learning_rate * 0.1
         )
-
-        # Store hyperparameters
-        self.gamma = gamma
-        self.gae_lambda = gae_lambda
-        self.clip_epsilon = clip_epsilon
-        self.c1 = c1
-        self.c2 = c2
-        self.c3 = c3
-        self.batch_size = batch_size
-        self.n_epochs = n_epochs
-        self.target_kl = target_kl
 
         # Initialize action standard deviation
         self.action_std = torch.ones(1).to(device)
@@ -119,7 +127,10 @@ class PPOAgent(BaseAgent):
         logger.info(f"Initialized PPO agent on device: {device}")
 
     def _normalize_state(self, state: np.ndarray) -> np.ndarray:
-        """Normalize state using running statistics"""
+        """Normalize state using running statistics and handle NaN values"""
+        # Handle NaN and inf values first
+        state = np.nan_to_num(state, nan=0.0, posinf=9999, neginf=-9999)
+        
         # Ensure state is 2D for proper normalization
         original_shape = state.shape
         if len(state.shape) == 3:
@@ -154,6 +165,9 @@ class PPOAgent(BaseAgent):
         # Normalize
         normalized = (state - self.state_mean) / self.state_std
 
+        # Handle any remaining NaN/inf values after normalization
+        normalized = np.nan_to_num(normalized, nan=0.0, posinf=1.0, neginf=-1.0)
+
         # Restore original shape if needed
         if len(original_shape) == 3:
             normalized = normalized.reshape(original_shape)
@@ -166,13 +180,17 @@ class PPOAgent(BaseAgent):
         """Get action from policy network
 
         Args:
-            state: Current state observation
+            state: Current state observation (can be numpy array or pandas DataFrame)
             deterministic: Whether to use deterministic action
 
         Returns:
             Action as numpy array with shape (1,)
         """
         with torch.no_grad():
+            # Convert DataFrame to numpy if needed
+            if isinstance(state, pd.DataFrame):
+                state = state.to_numpy()
+            
             # Flatten and normalize state
             if len(state.shape) > 1:
                 state = state.reshape(-1)
@@ -192,6 +210,10 @@ class PPOAgent(BaseAgent):
             # Ensure action is a numpy array with shape (1,)
             action = action.clamp(-1, 1).cpu().numpy()
             return action.reshape(1)
+
+    def predict(self, state: np.ndarray, deterministic: bool = False) -> np.ndarray:
+        """Alias for get_action to maintain compatibility with stable-baselines3 style API"""
+        return self.get_action(state, deterministic)
 
     def train(
         self,

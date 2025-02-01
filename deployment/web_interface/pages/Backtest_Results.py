@@ -112,10 +112,10 @@ def main():
                 ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
             )
             
-            # Strategy selection
-            strategy = st.selectbox(
-                "Strategy",
-                ["Random Strategy"]  # Only DummyAgent for now
+            # Agent (Strategy) selection
+            agent_name = st.selectbox(
+                "Select Agent (Strategy)",
+                ["Dummy", "MeanReversion", "Momentum", "PPO"]
             )
             
             # Scenario selection - using internal strings directly
@@ -171,7 +171,7 @@ def main():
                 "start_date": start_date,
                 "end_date": end_date,
                 "trading_pair": trading_pair,
-                "strategy": strategy,
+                "agent_name": agent_name,
                 "initial_balance": initial_balance,
                 "max_position_size": max_position_size,
                 "stop_loss": stop_loss,

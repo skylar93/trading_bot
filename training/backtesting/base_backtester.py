@@ -166,7 +166,8 @@ class BaseBacktester:
                         'amount': 0,
                         'fee': 0,
                         'success': False,
-                        'reason': risk_check['reason']
+                        'reason': risk_check['reason'],
+                        'action': action
                     }
                     continue
                     
@@ -187,7 +188,8 @@ class BaseBacktester:
                         'amount': 0,
                         'fee': 0,
                         'success': False,
-                        'reason': 'insufficient_funds'
+                        'reason': 'insufficient_funds',
+                        'action': action
                     }
                     continue
                 
@@ -206,7 +208,8 @@ class BaseBacktester:
                     'value': trade_value,
                     'type': trade_type,
                     'fee': trade_fee,
-                    'success': True
+                    'success': True,
+                    'action': action
                 }
                 self.trades.append(trade)
                 
@@ -234,7 +237,8 @@ class BaseBacktester:
                     'amount': 0,
                     'fee': 0,
                     'success': True,
-                    'reason': 'trade size too small'
+                    'reason': 'trade size too small',
+                    'action': action
                 }
         
         # Update history
@@ -284,7 +288,8 @@ class BaseBacktester:
                 'price': 0,
                 'fee': 0,
                 'success': False,
-                'reason': 'price not available'
+                'reason': 'price not available',
+                'action': action
             }
             
         current_price = price_data[asset]
@@ -301,7 +306,8 @@ class BaseBacktester:
                 'amount': 0,
                 'fee': 0,
                 'success': True,
-                'reason': 'trade size too small'
+                'reason': 'trade size too small',
+                'action': action
             }
             
         # Current position
@@ -319,7 +325,8 @@ class BaseBacktester:
                     'amount': 0,
                     'fee': 0,
                     'success': True,
-                    'reason': 'insufficient_funds'
+                    'reason': 'insufficient_funds',
+                    'action': action
                 }
                 
             # Calculate target position
@@ -355,7 +362,8 @@ class BaseBacktester:
                     'amount': 0,
                     'fee': 0,
                     'success': False,
-                    'reason': risk_check['reason']
+                    'reason': risk_check['reason'],
+                    'action': action
                 }
                 
             # Adjust trade size if needed
@@ -374,7 +382,8 @@ class BaseBacktester:
                 'amount': 0,
                 'fee': 0,
                 'success': True,
-                'reason': 'trade size too small'
+                'reason': 'trade size too small',
+                'action': action
             }
             
         # Final check for buying power
@@ -386,7 +395,8 @@ class BaseBacktester:
                 'amount': 0,
                 'fee': 0,
                 'success': True,
-                'reason': 'insufficient_funds'
+                'reason': 'insufficient_funds',
+                'action': action
             }
         
         # Determine trade type
@@ -401,7 +411,8 @@ class BaseBacktester:
             'value': trade_value,
             'type': trade_type,
             'fee': trade_fee,
-            'success': True
+            'success': True,
+            'action': action
         }
         self.trades.append(trade)
         

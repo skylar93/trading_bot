@@ -169,6 +169,7 @@ async def test_portfolio_value(live_env):
     # Portfolio value should increase with price
     new_portfolio_value = float(live_env.portfolio_value)
     assert new_portfolio_value > portfolio_before_price_change  # Portfolio value should increase
+    assert new_portfolio_value > 9980.0  # Should maintain reasonable value after fees/slippage
     assert abs(new_portfolio_value - portfolio_before_price_change) > 1.0  # Should be a significant change
 
 if __name__ == "__main__":

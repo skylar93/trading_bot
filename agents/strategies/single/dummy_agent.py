@@ -4,6 +4,7 @@ Dummy agent for testing that makes small random trades
 
 import logging
 from typing import Dict, Any
+import numpy as np
 
 class DummyAgent:
     """Dummy agent for testing that makes small random trades"""
@@ -26,4 +27,9 @@ class DummyAgent:
             self.logger.info(f"DummyAgent taking action: {action}")
             return action
             
-        return 0.0 
+        return 0.0
+        
+    def predict(self, state: Any) -> np.ndarray:
+        """Alias for get_action to maintain compatibility with other agents"""
+        action = self.get_action(state)
+        return np.array([action]) 

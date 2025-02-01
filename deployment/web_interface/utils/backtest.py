@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Any
 import logging
 from training.backtesting.risk_aware_backtester import RiskAwareBacktester
 from risk.risk_manager import RiskManager, RiskConfig
-from agents.strategies.single.dummy_agent import DummyAgent
+from agents.strategies.agent_factory import create_agent
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +32,11 @@ class BacktestManager:
         )
         self.logger.info("Risk config initialized: %s", vars(self.risk_config))
         
-        self.agent = DummyAgent()
-        self.logger.info("DummyAgent initialized")
+        # Create agent using factory
+        agent_name = settings.get("agent_name", "Dummy")
+        agent_config = settings.get("agent_config", {})
+        self.agent = create_agent(agent_name, config=agent_config)
+        self.logger.info(f"{agent_name} agent initialized")
         
     def load_market_data(self) -> Optional[pd.DataFrame]:
         """Load market data for backtesting

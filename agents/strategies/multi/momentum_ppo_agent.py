@@ -5,6 +5,7 @@ from typing import Dict, Any, Optional, Tuple
 import logging
 from agents.strategies.single.ppo_agent import PPOAgent
 from gymnasium import spaces
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -128,12 +129,16 @@ class MomentumPPOAgent(PPOAgent):
         Get action from policy network with momentum considerations.
         
         Args:
-            state: Current state observation
+            state: Current state observation (can be numpy array or pandas DataFrame)
             deterministic: Whether to use deterministic action selection
             
         Returns:
             Selected action as numpy array
         """
+        # Convert DataFrame to numpy if needed
+        if isinstance(state, pd.DataFrame):
+            state = state.to_numpy()
+            
         # Calculate momentum features
         momentum_features = self._calculate_momentum_features(state)
         
@@ -149,13 +154,29 @@ class MomentumPPOAgent(PPOAgent):
         # Get action from parent class
         action = super().get_action(augmented_state.reshape(-1), deterministic)
         
-        # Calculate trend strength
+        # Calculate trend strength safely
         if len(state.shape) == 3:
             close_prices = state[..., 3]
-            trend_strength = (close_prices[:, -1] - close_prices[:, -10]) / close_prices[:, -10]
+            if close_prices.shape[1] < 10:
+                trend_strength = np.zeros(close_prices.shape[0])
+            else:
+                denominator = close_prices[:, -10]
+                # Handle zero/nan/inf denominators
+                safe_mask = (denominator != 0) & ~np.isnan(denominator) & ~np.isinf(denominator)
+                trend_strength = np.zeros(close_prices.shape[0])
+                trend_strength[safe_mask] = (close_prices[safe_mask, -1] - denominator[safe_mask]) / denominator[safe_mask]
+                trend_strength = np.nan_to_num(trend_strength, nan=0.0, posinf=0.0, neginf=0.0)
         else:
             close_prices = state[:, 3]
-            trend_strength = (close_prices[-1] - close_prices[-10]) / close_prices[-10]
+            if len(close_prices) < 10:
+                trend_strength = 0.0
+            else:
+                denominator = close_prices[-10]
+                if denominator == 0 or np.isnan(denominator) or np.isinf(denominator):
+                    trend_strength = 0.0
+                else:
+                    trend_strength = (close_prices[-1] - denominator) / denominator
+                    trend_strength = np.nan_to_num(trend_strength, nan=0.0, posinf=0.0, neginf=0.0)
         
         # Apply momentum-based action modification with trend strength
         if len(momentum_features.shape) > 1:
@@ -178,6 +199,10 @@ class MomentumPPOAgent(PPOAgent):
             
             # Scale action based on trend strength
             action = momentum_signal * (1.0 + np.abs(trend_strength))
+            
+            # Handle any NaN/inf values and clip
+            action = np.nan_to_num(action, nan=0.0, posinf=1.0, neginf=-1.0)
+            action = np.clip(action, -1.0, 1.0)
         else:
             momentum = momentum_features[0]
             trend = momentum_features[2]
@@ -199,18 +224,23 @@ class MomentumPPOAgent(PPOAgent):
             # Scale action based on trend strength
             action = action * (1.0 + np.abs(trend_strength))
             
+            # Handle any NaN/inf values and clip
+            action = np.nan_to_num(action, nan=0.0, posinf=1.0, neginf=-1.0)
+            action = np.clip(action, -1.0, 1.0)
+            
             # If there's a strong trend, make sure we're following it
             if abs(trend_strength) > 0.1:  # Strong trend threshold
                 action = np.sign(trend_strength) * max(abs(action), 0.5)  # Ensure minimum trend-following position size
-        
-        # Ensure action stays within bounds
-        action = np.clip(action, -1.0, 1.0)
         
         # Ensure action is a numpy array with shape (1,)
         if isinstance(action, (float, np.float32, np.float64)):
             action = np.array([action], dtype=np.float32)
         elif isinstance(action, np.ndarray) and action.shape != (1,):
             action = action.reshape(1)
+        
+        # Final defensive clamp to ensure no NaN/inf values escape
+        action = np.nan_to_num(action, nan=0.0, posinf=1.0, neginf=-1.0)
+        action = np.clip(action, -1.0, 1.0)
             
         return action
     
