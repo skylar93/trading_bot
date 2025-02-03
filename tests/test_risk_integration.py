@@ -1,9 +1,13 @@
-"""Tests for risk management integration with BaseBacktester"""
+"""
+Risk Manager Integration Tests: checks partial clamping, daily trade limits, 
+drawdown, min trade sizes, etc., using execute_trade(...) 
+with a RiskAwareBacktester or a BaseBacktester + risk_config.
+Tests for risk management integration with BaseBacktester
+"""
 
 import pytest
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
 from training.backtesting.base_backtester import BaseBacktester
 from training.backtesting.risk_manager import RiskConfig
 from training.backtesting.risk_aware_backtester import RiskAwareBacktester

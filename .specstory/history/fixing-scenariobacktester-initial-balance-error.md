@@ -353,7 +353,101 @@ Let me check the example in the docstring of backtest.py since it shows initial_
 _**Assistant**_
 
 ```
-undefined
+"""
+Single-Asset Backtesting System
+==============================
+
+This module implements a basic backtesting system for single-asset trading strategies.
+Focused on simplicity and clarity, it serves as a foundation for more complex backtesting systems.
+
+File Structure:
+--------------
+- Class: Backtester
+  - Core backtesting engine for single-asset trading
+  - Handles trade execution and performance tracking
+  - Calculates key trading metrics
+
+Key Components:
+--------------
+1. Trade Execution
+   - Position sizing based on action (-1 to 1)
+   - Transaction cost consideration
+   - Balance and position tracking
+
+2. Performance Tracking
+   - Portfolio value history
+   - Trade history logging
+   - Performance metrics calculation
+   - Peak value tracking for drawdown
+
+3. Strategy Integration
+   - Window-based strategy execution
+   - Action validation and processing
+   - Trade result accumulation
+
+Dependencies:
+------------
+- numpy: Numerical computations and metrics
+- pandas: Data handling and time series operations
+- logging: Debug and transaction logging
+- datetime: Timestamp handling
+- typing: Type hints for better code clarity
+
+Implementation Notes:
+-------------------
+1. Data Requirements
+   - OHLCV columns must be prefixed with '$'
+   - Required columns: $open, $high, $low, $close, $volume
+   - DataFrame index serves as timestamp
+
+2. Position Management
+   - Single position tracking (no multi-asset support)
+   - Dust position cleanup (< 1e-4)
+   - Balance updates include transaction fees
+
+3. Performance Metrics
+   - Sharpe Ratio (annualized, risk-free rate = 0)
+   - Sortino Ratio (downside deviation)
+   - Maximum Drawdown
+   - Win Rate calculation
+
+Example Usage:
+-------------
+```python
+# Prepare OHLCV data
+data = pd.DataFrame({
+    '$open': [...],
+    '$high': [...],
+    '$low': [...],
+    '$close': [...],
+    '$volume': [...]
+})
+
+# Initialize backtester
+backtester = Backtester(
+    data=data,
+    initial_capital=10000.0,
+    trading_fee=0.001  # 0.1% fee
+)
+
+# Create strategy (must implement get_action method)
+class SimpleStrategy:
+    def get_action(self, window_data):
+        # Return value between -1 and 1
+        return 0.5  # Example: always buy with 50% size
+
+# Run backtest
+results = backtester.run(
+    strategy=SimpleStrategy(),
+    window_size=20,
+    verbose=True
+)
+
+# Access results
+print(f"Final Value: {results['portfolio_values'][-1]}")
+print(f"Sharpe Ratio: {results['metrics']['sharpe_ratio']}")
+```
+// ... existing code ...
 ```
 
 ---
@@ -361,6 +455,359 @@ undefined
 _**Assistant**_
 
 
+
+
+
+
+
+Let me check if there are any other test files that might be using ScenarioBacktester:
+
+---
+
+_**Assistant**_
+
+
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+Let me check if there are any other files that might be using ScenarioBacktester:
+
+---
+
+_**Assistant**_
+
+
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+Let me check the test_advanced_scenarios.py file since it showed up in the initial_balance search:
+
+---
+
+_**Assistant**_
+
+
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+Let me check the ScenarioGenerator and ScenarioTester classes:
+
+---
+
+_**Assistant**_
+
+
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+I see that in the ScenarioTester class, it's using initial_balance when creating a new TradingEnvironment. Let me fix that:
+
+---
+
+_**Assistant**_
+
+```
+    def test_scenario(
+        self, data: pd.DataFrame, scenario_type: str = "normal"
+    ) -> Dict[str, Any]:
+        """Test strategy under specific scenario
+
+        Args:
+            data: Market data
+            scenario_type: Type of scenario to test
+
+        Returns:
+            Dictionary with test results
+        """
+        # Create environment if not provided
+        if self.env is None:
+            self.env = TradingEnvironment(
+                df=data,
+                initial_capital=10000.0,
+                trading_fee=0.001,
+                window_size=20,
+            )
+// ... existing code ...
+```
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+
+
+
+
+Let me also update test_advanced_scenarios.py to use initial_capital:
+
+---
+
+_**Assistant**_
+
+```
+        # Create basic environment and agent
+        self.env = TradingEnvironment(
+            df=self.sample_data,
+            initial_capital=10000.0,
+            trading_fee=0.001,
+            window_size=20,
+        )
+// ... existing code ...
+```
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+Now let's run the tests again to see if we've fixed all the issues:
+
+---
+
+_**Assistant**_
+
+```
+python -m pytest tests/test_advanced_backtest.py tests/test_advanced_scenarios.py -v
+```
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+I see we have a new issue. The TradingEnvironment class is still expecting `initial_balance` instead of `initial_capital`. Let me check the TradingEnvironment class:
+
+---
+
+_**Assistant**_
+
+
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+
+
+
+
+I see that we need to update the TradingEnvironment class to use initial_capital instead of initial_balance. Let me make that change:
+
+---
+
+_**Assistant**_
+
+```
+    def __init__(
+        self,
+        df: Optional[pd.DataFrame] = None,
+        initial_capital: float = 10000.0,
+        trading_fee: float = 0.001,
+        window_size: int = 20,
+        max_position_size: float = 1.0,
+    ):
+        """Initialize environment
+
+        Args:
+            df: DataFrame with OHLCV data (optional)
+            initial_capital: Initial account capital
+            trading_fee: Trading fee as fraction of trade value
+            window_size: Number of time steps to include in state
+            max_position_size: Maximum position size as fraction of balance
+        """
+        super().__init__()
+
+        # Initialize data
+        if df is not None:
+            # Convert column names if needed
+            rename_map = {
+                "open": "$open",
+                "high": "$high",
+                "low": "$low",
+                "close": "$close",
+                "volume": "$volume",
+            }
+            self.df = df.rename(
+                columns={
+                    k: v for k, v in rename_map.items() if k in df.columns
+                }
+            )
+
+            # Verify required columns
+            required_columns = ["$open", "$high", "$low", "$close", "$volume"]
+            missing_cols = [
+                col for col in required_columns if col not in self.df.columns
+            ]
+            if missing_cols:
+                raise ValueError(f"Missing required columns: {missing_cols}")
+        else:
+            # Create empty DataFrame with required columns
+            self.df = pd.DataFrame(
+                columns=["$open", "$high", "$low", "$close", "$volume"]
+            )
+
+        self.initial_capital = initial_capital
+        self.trading_fee = trading_fee
+        self.window_size = window_size
+        self.max_position_size = max_position_size
+
+        # Calculate number of features
+        self.n_features = 5  # OHLCV features
+
+        # Set up spaces
+        self.observation_space = gym.spaces.Box(
+            low=-np.inf,
+            high=np.inf,
+            shape=(self.window_size, self.n_features),  # 2D observation space
+            dtype=np.float32,
+        )
+
+        self.action_space = gym.spaces.Box(
+            low=-1, high=1, shape=(1,), dtype=np.float32
+        )
+
+        # Initialize state
+        self.reset()
+
+        logger.info(
+            f"Initialized TradingEnvironment with window_size={window_size}, "
+            f"initial_capital={initial_capital}, trading_fee={trading_fee}"
+        )
+
+    def reset(
+        self, seed: Optional[int] = None, options: Optional[dict] = None
+    ) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """Reset environment
+
+        Args:
+            seed: Random seed for reproducibility
+            options: Additional options for reset
+
+        Returns:
+            Tuple of (observation, info)
+        """
+        super().reset(seed=seed)
+
+        self.current_step = (
+            self.window_size if len(self.df) > self.window_size else 0
+        )
+        self.balance = self.initial_capital
+        self.position = 0
+        self.trades = []
+
+        observation = self._get_observation()
+        info = self._get_info()
+
+        return observation, info
+// ... existing code ...
+```
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+
+
+
+
+Now let's run the tests again to see if we've fixed all the issues:
+
+---
+
+_**Assistant**_
+
+```
+python -m pytest tests/test_advanced_backtest.py tests/test_advanced_scenarios.py -v
+```
+
+---
+
+_**Assistant**_
+
+
+
+Great! All tests are now passing. Here's what we did to fix the issues:
+
+1. First, we fixed the `ScenarioBacktester` class to use `initial_capital` instead of `initial_balance` in its constructor and when calling the parent class.
+
+2. Then we found that the `TradingEnvironment` class was still using `initial_balance`, so we updated it to use `initial_capital` consistently:
+   - Changed the parameter name in `__init__`
+   - Updated the docstring
+   - Changed the instance variable name from `initial_balance` to `initial_capital`
+   - Updated the logging message
+   - Updated the `reset` method to use `initial_capital`
+
+3. We also updated all the test files to use `initial_capital` instead of `initial_balance`:
+   - Updated `test_advanced_backtest.py`
+   - Updated `test_advanced_scenarios.py`
+   - Updated `advanced_scenarios.py` where it creates a new `TradingEnvironment`
+
+All tests are now passing, which means:
+- The flash crash data generation works correctly
+- The low liquidity data generation works correctly
+- Both scenario backtests run successfully
+- The advanced scenarios tests all pass
+- The parameter naming is now consistent across the codebase, using `initial_capital` instead of `initial_balance`
 
 ---
 

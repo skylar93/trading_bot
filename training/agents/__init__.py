@@ -1,3 +1,0 @@
-"""
-Trading agents package
-""" 

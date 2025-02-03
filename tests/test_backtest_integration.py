@@ -1,4 +1,8 @@
 """
+Integration Test with Agents: uses a BacktestManager(settings) 
+with multiple agent names (Dummy, MeanReversion, etc.), checks 
+logs for errors, ensures valid trades and final portfolio. 
+Tests the agent-backtest pipeline from the manager’s perspective.
 Comprehensive Integration Tests for Backtesting with Different Agents
 ---------------------------------------------------------------------
 

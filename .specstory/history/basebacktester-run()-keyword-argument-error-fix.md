@@ -354,6 +354,70 @@ Python이 디렉토리를 패키지로 인식하게 하려면 `__init__.py` 파�
 
 ---
 
+_**Assistant**_
+
+```
+"""
+Trading agents package
+"""
+```
+
+---
+
+_**Assistant**_
+
+
+
+---
+
+_**Assistant**_
+
+```
+"""
+Trading bot training package
+"""
+```
+
+---
+
+_**Assistant**_
+
+
+
+이제 다시 Streamlit 앱을 실행해보겠습니다:
+
+---
+
+_**Assistant**_
+
+```
+streamlit run deployment/web_interface/app.py
+```
+
+---
+
+_**Assistant**_
+
+
+
+이제 모든 것이 정상적으로 작동하는 것 같습니다! 
+
+1. `__init__.py` 파일들을 추가하여 Python 패키지 구조를 만들었습니다.
+2. `DummyAgent`를 `training/agents/dummy_agent.py`로 이동했습니다.
+3. 백테스트가 성공적으로 실행되고 있습니다:
+   - 737개의 데이터 포인트를 로드
+   - 144개의 거래 실행
+   - 최종 포트폴리오 가치: 10005.42 (초기 자본 10000에서 약간의 이익)
+
+파일 구조가 이제 더 깔끔하고 논리적으로 정리되었습니다:
+- 코어 백테스팅 로직: `training/backtesting/`
+- 에이전트 구현체: `training/agents/`
+- UI 관련 로직: `deployment/web_interface/`
+
+다른 개선이 필요한 부분이 있다면 알려주세요.
+
+---
+
 
 
 ---

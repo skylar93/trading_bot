@@ -1,6 +1,10 @@
+'''
+BaseBacktester Unit Tests: verifies single‐asset vs multi‐asset, 
+fees, partial sells, basic metrics, etc. We call update(...) directly.
+'''
+
 import pytest
 import pandas as pd
-import numpy as np
 from training.backtesting.base_backtester import BaseBacktester
 
 def test_single_asset_mode():
@@ -193,4 +197,90 @@ def test_buy_sell_sequence():
     # Get returns
     returns = backtester.get_returns()
     assert len(returns) == len(backtester.portfolio_history)
-    assert isinstance(returns, pd.Series) 
+    assert isinstance(returns, pd.Series)
+
+def test_metrics_calculation():
+    """
+    Test that the backtester calculates cost/revenue/profit for each trade,
+    and that overall metrics (win rate, final balance, etc.) are non-zero
+    when there are winning and losing trades.
+    """
+    backtester = BaseBacktester(
+        initial_capital=10000.0,
+        trading_fee=0.001,  # 0.1% fee
+        max_position=1.0
+    )
+
+    # Day 1: Buy half position at price=100
+    t1 = pd.Timestamp("2025-01-01")
+    backtester.update(
+        timestamp=t1,
+        prices={"default": 100.0},
+        actions={"default": 0.5}  # 50% position
+    )
+
+    # Day 2: Price rises to 120, buy more (making cost higher),
+    # so that partial sells later can realize different PnLs
+    t2 = pd.Timestamp("2025-01-02")
+    backtester.update(
+        timestamp=t2,
+        prices={"default": 120.0},
+        actions={"default": 0.3}  # further +30% => bigger position
+    )
+
+    # Day 3: Price at 110, let's do a partial sell (some profit realized, but price is down from 120)
+    t3 = pd.Timestamp("2025-01-03")
+    backtester.update(
+        timestamp=t3,
+        prices={"default": 110.0},
+        actions={"default": -0.2}  # reduce position by 20% => partial close
+    )
+
+    # Day 4: Price rises to 130, sell everything => big profit
+    t4 = pd.Timestamp("2025-01-04")
+    backtester.update(
+        timestamp=t4,
+        prices={"default": 130.0},
+        actions={"default": 0.0}  # fully close position
+    )
+
+    # Day 5: Price is 90, intentionally buy 80% => big position
+    # Next day price falls => losing trade
+    t5 = pd.Timestamp("2025-01-05")
+    backtester.update(
+        timestamp=t5,
+        prices={"default": 90.0},
+        actions={"default": 0.8}  # 80% position
+    )
+
+    # Day 6: Price drops to 70 => sell all => losing trade
+    t6 = pd.Timestamp("2025-01-06")
+    backtester.update(
+        timestamp=t6,
+        prices={"default": 70.0},
+        actions={"default": 0.0}  # close (loss)
+    )
+
+    # 1) Check each recorded trade for cost/revenue/profit
+    for i, trade in enumerate(backtester.trades, start=1):
+        assert "cost" in trade, f"Trade #{i} missing 'cost'"
+        assert "revenue" in trade, f"Trade #{i} missing 'revenue'"
+        assert "profit" in trade, f"Trade #{i} missing 'profit'"
+
+    # 2) Check the final metrics
+    metrics = backtester._calculate_metrics()
+
+    # We expect:
+    # - total_trades > 0
+    # - some trades were winning, some losing => non-zero 'win_rate' if at least one winner
+    # - final_balance different from initial
+    assert metrics["total_trades"] > 0, "No trades recorded"
+    assert metrics["win_rate"] > 0, "Expected some winning trades => win_rate should be > 0"
+    # We also expect the final balance could be > or < initial depending on net PnL
+    assert metrics["final_balance"] != 10000.0, "Final balance unchanged => no realized PnL?"
+
+    # Optionally check that final_portfolio_value is also not the same as initial
+    assert metrics["final_portfolio_value"] != 10000.0, "No net change in portfolio value?"
+
+    # 3) Check Sharpe ratio is non-zero (we have both winning and losing trades)
+    assert metrics["sharpe_ratio"] != 0, "Sharpe ratio unexpectedly zero" 

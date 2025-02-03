@@ -1841,7 +1841,70 @@ _**Assistant**_
 _**Assistant**_
 
 ```
-undefined
+"""
+Scenario Data Generation Module
+=============================
+
+This module provides functions to generate various market scenario data
+for backtesting purposes, such as flash crashes and low liquidity conditions.
+
+There are two main ways to create scenario data:
+
+1. Generate Synthetic Data (Complete OHLCV Generation):
+   - Creates entirely artificial data with specified characteristics
+   - Useful for controlled testing environments
+   Example:
+   ```python
+   # Generate complete synthetic flash crash data
+   data = generate_flash_crash_data(
+       length=1000,
+       crash_size=0.3,  # 30% drop
+       crash_at=500     # Crash occurs at index 500
+   )
+   
+   # Generate synthetic low liquidity data
+   data = generate_low_liquidity_data(
+       length=1000,
+       volume_reduction=0.8,  # 80% volume reduction
+       low_liq_start=300     # Low liquidity starts at index 300
+   )
+   ```
+
+2. Modify Existing Market Data (Scenario Application):
+   - Takes real market data and applies scenario characteristics
+   - Maintains original market patterns outside scenario period
+   - More realistic for production testing
+   Example:
+   ```python
+   # Apply flash crash to real market data
+   modified_data = apply_flash_crash_to_real_data(
+       base_data=real_market_data,
+       crash_size=0.3,
+       crash_at=500
+   )
+   
+   # Apply low liquidity to real market data
+   modified_data = apply_low_liquidity_to_real_data(
+       base_data=real_market_data,
+       volume_reduction=0.8,
+       low_liq_start=300
+   )
+   ```
+
+Choose the appropriate method based on your needs:
+- Use synthetic data generation for controlled testing and edge cases
+- Use scenario application for more realistic backtesting with actual market patterns
+"""
+
+import pandas as pd
+import numpy as np
+from typing import Optional, Dict, Any
+from datetime import datetime
+import logging
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+// ... existing code ...
 ```
 
 ---
@@ -1849,6 +1912,20 @@ undefined
 _**Assistant**_
 
 
+
+모듈 docstring에 두 가지 시나리오 생성 방법을 명확하게 설명하고 예제 코드와 함께 추가했습니다:
+
+1. 합성 데이터 생성 (Complete OHLCV Generation):
+   - 완전한 인공 데이터 생성
+   - 특성을 정확히 제어 가능
+   - 테스트 환경에 적합
+
+2. 실제 데이터 수정 (Scenario Application):
+   - 실제 시장 데이터에 시나리오 적용
+   - 시나리오 구간 외의 원래 패턴 유지
+   - 실제 환경에 더 적합
+
+각 방법의 장단점과 사용 예제를 포함했고, 사용자가 자신의 필요에 맞는 방법을 선택할 수 있도록 가이드라인도 제공했습니다. 이렇게 하면 다른 개발자들이 모듈을 사용할 때 두 가지 방법을 쉽게 이해하고 선택할 수 있을 것 같습니다.
 
 ---
 

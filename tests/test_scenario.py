@@ -1,4 +1,11 @@
-"""Tests for scenario-based backtesting"""
+"""
+Scenario Tests: checks scenario-based data generation 
+(flash crash, low liquidity) and runs them with a BaseBacktester or 
+scenario-based approach. Also tests scenario metrics. 
+Replaces older advanced scenario test files.
+
+Tests for scenario-based backtesting
+"""
 
 import unittest
 import numpy as np
@@ -89,6 +96,7 @@ class TestScenarios(unittest.TestCase):
             results["metrics"]["max_drawdown"] > 0.1,  # Significant drawdown during crash
             "Drawdown should be significant during crash"
         )
+
 
     def test_low_liquidity_scenario(self):
         """Test low liquidity scenario generation and backtesting"""
@@ -243,6 +251,7 @@ class TestScenarios(unittest.TestCase):
         self.assertIn("drawdown_depth", metrics)
         self.assertIn("crash_trade_efficacy", metrics)
         
+        
         # Verify metric values
         self.assertTrue(0 <= metrics["crash_trade_efficacy"] <= 1, "Trade efficacy should be normalized")
         self.assertTrue(metrics["drawdown_depth"] > 25, "Should detect significant drawdown")
@@ -282,6 +291,7 @@ class TestScenarios(unittest.TestCase):
         self.assertIn("fill_rate", metrics)
         self.assertIn("avg_spread", metrics)
         self.assertIn("execution_delay", metrics)
+
         
         # Verify metric values
         self.assertTrue(0 <= metrics["fill_rate"] <= 100, "Fill rate should be a percentage")

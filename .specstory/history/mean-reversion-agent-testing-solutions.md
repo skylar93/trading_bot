@@ -571,7 +571,62 @@ _**Assistant**_
 _**Assistant**_
 
 ```
-undefined
+    def run_backtest(self, data: pd.DataFrame) -> Dict[str, Any]:
+        """Run backtest with the current agent"""
+        try:
+            self.logger.info("Starting backtest with data shape: %s", data.shape)
+            
+            # Initialize backtester with risk config
+            backtester = RiskAwareBacktester(
+                data=data,
+                risk_config=self.risk_config,
+                initial_capital=self.settings.get("initial_balance", 10000.0),  # Changed from initial_balance to initial_capital
+                trading_fee=self.settings.get("trading_fee", 0.001)
+            )
+            
+            # Run backtest
+            results = backtester.run(
+                agent=self.agent,
+                window_size=20,
+                verbose=True
+            )
+            
+            # Process results to ensure all required metrics
+            if "metrics" not in results:
+                results["metrics"] = {}
+            
+            # Update portfolio values with timestamps
+            portfolio_values = results.get("portfolio_values", [])
+            if portfolio_values:
+                # Create timestamps for each portfolio value
+                timestamps = pd.date_range(
+                    start=data.index[0],
+                    end=data.index[-1],
+                    periods=len(portfolio_values)
+                )
+                results["portfolio_history"] = [
+                    {"timestamp": ts, "value": val}
+                    for ts, val in zip(timestamps, portfolio_values)
+                ]
+            
+            # Update metrics
+            results["metrics"].update(self._process_results(results))
+            
+            # Log final results
+            self.logger.info("Backtest completed")
+            self.logger.info("Final portfolio value: %.2f", results.get("portfolio_values", [])[-1])
+            self.logger.info("Total trades: %d", len(results.get("trades", [])))
+            
+            return results
+            
+        except Exception as e:
+            self.logger.error(f"Error running backtest: {str(e)}", exc_info=True)
+            return {
+                "error": str(e),
+                "portfolio_values": [],
+                "trades": [],
+                "metrics": self._process_results({"trades": [], "portfolio_values": []})
+            }
 ```
 
 ---
@@ -579,6 +634,15 @@ undefined
 _**Assistant**_
 
 
+
+이제 `initial_balance` 대신 `initial_capital`을 사용하도록 수정했습니다. 이 변경으로 `RiskAwareBacktester` 초기화 시 발생하던 에러가 해결될 것입니다.
+
+변경 사항 요약:
+1. `RiskAwareBacktester` 초기화 시 `initial_balance` 대신 `initial_capital` 파라미터를 사용하도록 수정
+2. 기존의 설정값은 그대로 유지하면서 파라미터 이름만 변경
+3. 기본값 10000.0도 그대로 유지
+
+이제 백테스트가 정상적으로 실행될 것입니다.
 
 ---
 

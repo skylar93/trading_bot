@@ -1,7 +1,11 @@
-import pytest
+'''
+Backtest Execution Tests: ensures that BaseBacktester.run(...) 
+with a dummy strategy can produce trades, compute metrics, and handle basic scenarios. 
+Not testing advanced risk or scenario logic here.
+'''
+
 import pandas as pd
 import numpy as np
-from datetime import datetime
 from training.backtesting.base_backtester import BaseBacktester
 from training.backtesting.risk_aware_backtester import RiskAwareBacktester
 from risk.risk_manager import RiskConfig
@@ -84,29 +88,6 @@ def test_backtest_execution():
     results = backtester.run(strategy)
     assert len(results["trades"]) > 0, "Should execute some trades"
 
-def test_risk_management_integration():
-    """Test risk management integration"""
-    settings = create_test_settings()
-    data = create_test_data()
-    strategy = DummyStrategy()
-    risk_config = RiskConfig(
-        max_position_size=settings["max_position"],
-        stop_loss_pct=settings["stop_loss"],
-        max_drawdown_pct=settings["max_drawdown"]
-    )
-    
-    backtester = RiskAwareBacktester(
-        data=data,
-        initial_capital=settings["initial_capital"],
-        trading_fee=settings["trading_fee"],
-        max_position=settings["max_position"],
-        risk_config=risk_config
-    )
-    
-    results = backtester.run(strategy)
-    assert "metrics" in results
-    assert "max_drawdown" in results["metrics"]  # Verify risk metrics are included
-
 def test_metrics_calculation():
     """Test that metrics are correctly calculated"""
     settings = create_test_settings()
@@ -126,17 +107,3 @@ def test_metrics_calculation():
     assert "total_return" in metrics
     assert "sharpe_ratio" in metrics
     assert "max_drawdown" in metrics
-
-def test_trade_execution_logging():
-    """Test trade execution and PnL calculation accuracy.
-    
-    Verifies:
-    1. PnL calculation matches formula
-    2. Trade details properly logged
-    3. Position tracking accurate
-    
-    Expected Results:
-    - PnL within 0.01 of expected
-    - All trade details logged
-    - Zero positions cleaned up
-    """ 
