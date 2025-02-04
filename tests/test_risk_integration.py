@@ -227,7 +227,7 @@ def test_leverage_limits():
     # Should either be rejected or adjusted down
     if result2['success']:
         # If adjusted, check leverage limit
-        position_value = abs(backtester.positions['default'] * price)
+        position_value = abs(backtester.positions['default']['units'] * price)
         current_leverage = position_value / backtester.get_portfolio_value({'default': price})
         print(f"Current leverage: {current_leverage:.2f}x")  # Debug print
         assert current_leverage <= 1.5
@@ -257,7 +257,7 @@ def test_minimum_trade_size():
         asset='default'
     )
     assert result['success'] is False
-    assert "minimum" in result['reason'].lower()
+    assert "minimum" in result['reason'].lower() or result['reason'] == "trade_size_too_small"
 
 def test_risk_reset():
     """Test risk manager state reset"""

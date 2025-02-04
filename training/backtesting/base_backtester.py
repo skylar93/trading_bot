@@ -18,6 +18,7 @@ class BaseBacktester:
     - Position size limits
     - Basic risk management
     - Performance metrics calculation
+    - Cost basis tracking and profit realization
     
     Implementation Notes:
     - For single-asset mode, uses 'default' as the asset key
@@ -25,6 +26,7 @@ class BaseBacktester:
     - All prices and position data stored in dictionaries for consistency
     - Handles transaction fees for accurate PnL calculation
     - Implements peak value tracking for drawdown calculation
+    - Tracks cost basis per position for accurate profit calculation
     """
     
     REQUIRED_COLUMNS = {"$open", "$high", "$low", "$close", "$volume"}
@@ -76,20 +78,19 @@ class BaseBacktester:
         Clears all positions, trades, and history.
         
         For single-asset mode:
-        - Initializes positions with {'default': 0.0}
+        - Initializes positions with {'default': {'units': 0.0, 'avg_price': 0.0, 'cost_basis': 0.0}}
         
         For multi-asset mode:
         - Initializes empty positions dictionary
         """
         self.cash = self.initial_capital
-        self.positions: Dict[str, float] = {}  # Empty dict for both modes
+        self.positions: Dict[str, Dict[str, float]] = {}  # positions[symbol] = {"units": float, "avg_price": float, "cost_basis": float}
         self.trades: List[Dict] = []
         self.portfolio_history: List[float] = [self.initial_capital]
-        self.cash_history: List[float] = [self.initial_capital]  # Track cash balance history
-        self.peak_value = self.initial_capital  # For drawdown calculation
-        self.current_timestamp = None  # Track current timestamp
+        self.cash_history: List[float] = [self.initial_capital]
+        self.peak_value = self.initial_capital
+        self.current_timestamp = None
         
-        # Reset risk manager if exists
         if self.risk_manager:
             self.risk_manager.reset()
 
@@ -124,121 +125,26 @@ class BaseBacktester:
             if symbol not in prices:
                 continue
                 
-            # Calculate target position
-            current_price = prices[symbol]
-            portfolio_value = self.get_portfolio_value(prices)
-            
-            # For action == 0, fully close the position
-            if abs(action) < 1e-6:
-                target_position = 0
-            else:
-                # Calculate maximum trade value considering fees
-                max_trade_value = self.cash / (1 + self.trading_fee) if action > 0 else portfolio_value
-                max_position_value = max_trade_value * self.max_position
-                target_position_value = action * max_position_value
-                target_position = target_position_value / current_price
-            
-            # Current position
-            current_position = self.positions.get(symbol, 0.0)
-            
-            # Calculate trade size
-            trade_amount = target_position - current_position
-            trade_value = abs(trade_amount * current_price)
-            trade_fee = trade_value * self.trading_fee
-            
-            # Check with risk manager if available
-            if self.risk_manager and abs(trade_amount) > 1e-6:
-                risk_check = self.risk_manager.check_trade(
-                    timestamp=timestamp,
-                    portfolio_value=portfolio_value,
-                    trade_size=trade_amount,
-                    price=current_price,
-                    positions=self.positions,
-                    asset=symbol
-                )
-                
-                if not risk_check['allowed']:
-                    results[symbol] = {
-                        'timestamp': timestamp,
-                        'symbol': symbol,
-                        'price': current_price,
-                        'amount': 0,
-                        'fee': 0,
-                        'success': False,
-                        'reason': risk_check['reason'],
-                        'action': action
-                    }
-                    continue
-                    
-                # Adjust trade size if needed
-                if risk_check['adjusted_size'] != trade_amount:
-                    trade_amount = risk_check['adjusted_size']
-                    trade_value = abs(trade_amount * current_price)
-                    trade_fee = trade_value * self.trading_fee
-            
-            if abs(trade_amount) > 1e-6:  # Minimum trade threshold
-                # Check if we have enough cash for buying
-                if trade_amount > 0 and trade_value + trade_fee > self.cash:
-                    # Insufficient funds
-                    results[symbol] = {
-                        'timestamp': timestamp,
-                        'symbol': symbol,
-                        'price': current_price,
-                        'amount': 0,
-                        'fee': 0,
-                        'success': False,
-                        'reason': 'insufficient_funds',
-                        'action': action
-                    }
-                    continue
-                
-                # Determine trade type based on position change
-                if target_position > current_position:
-                    trade_type = 'buy'  # Increasing position
-                else:
-                    trade_type = 'sell'  # Decreasing position
-                
-                # Record trade
-                trade = {
-                    'timestamp': timestamp,
-                    'symbol': symbol,
-                    'price': current_price,
-                    'amount': trade_amount,
-                    'value': trade_value,
-                    'type': trade_type,
-                    'fee': trade_fee,
-                    'success': True,
-                    'action': action
+            # Initialize position dictionary if it doesn't exist
+            if symbol not in self.positions:
+                self.positions[symbol] = {
+                    "units": 0.0,
+                    "avg_price": 0.0,
+                    "cost_basis": 0.0
                 }
-                self.trades.append(trade)
-                
-                # Update position and cash
-                self.positions[symbol] = current_position + trade_amount
-                self.cash -= (trade_value + trade_fee) if trade_amount > 0 else -(trade_value - trade_fee)
-                
-                # Remove position if close to zero
-                if abs(self.positions[symbol]) < 1e-6:
-                    del self.positions[symbol]
-                    
-                # Update risk manager if available
-                if self.risk_manager:
-                    self.risk_manager.update_after_trade(timestamp)
-                    
-                results[symbol] = trade
-                total_fees += trade_fee
-                
-            else:
-                # Skip trade
-                results[symbol] = {
-                    'timestamp': timestamp,
-                    'symbol': symbol,
-                    'price': current_price,
-                    'amount': 0,
-                    'fee': 0,
-                    'success': True,
-                    'reason': 'trade size too small',
-                    'action': action
-                }
+            
+            # Execute trade using execute_trade method which handles cost basis tracking
+            price_data = {symbol: prices[symbol]}
+            trade_result = self.execute_trade(
+                timestamp=timestamp,
+                action=action,
+                price_data=price_data,
+                asset=symbol
+            )
+            
+            results[symbol] = trade_result
+            if trade_result['success']:
+                total_fees += trade_result['fee']
         
         # Update history
         new_portfolio_value = self.get_portfolio_value(prices)
@@ -272,78 +178,71 @@ class BaseBacktester:
             asset (str): Asset identifier (default for single-asset)
             
         Returns:
-            Dict[str, Any]: Trade execution results
+            Dict[str, Any]: Trade execution results with cost, revenue, and profit
             
         Notes:
             - For single-asset mode, use asset='default'
             - For multi-asset mode, specify the asset symbol
             - price_data should contain the asset key
+            - Tracks cost basis and calculates realized profits on sells
         """
+        # Initialize trade result with default values
+        trade = {
+            "timestamp": timestamp,
+            "symbol": asset,
+            "amount": 0.0,
+            "price": 0.0,
+            "fee": 0.0,
+            "cost": 0.0,
+            "revenue": 0.0,
+            "profit": 0.0,
+            "success": False,
+            "reason": "",
+            "action": action,
+            "type": "none",
+            "value": 0.0,
+        }
+
         if asset not in price_data:
-            return {
-                'timestamp': timestamp,
-                'symbol': asset,
-                'amount': 0,
-                'price': 0,
-                'fee': 0,
-                'success': False,
-                'reason': 'price not available',
-                'action': action
-            }
-            
+            trade["reason"] = "price_not_available"
+            self.trades.append(trade)
+            return trade
+
         current_price = price_data[asset]
-        
-        # Update portfolio value first to get current drawdown
+        trade["price"] = current_price
+        trade["success"] = True  # Will be set False if blocked
+
+        # Ensure positions[symbol] exists as dict
+        if asset not in self.positions:
+            self.positions[asset] = {"units": 0.0, "avg_price": 0.0, "cost_basis": 0.0}
+
+        pos_dict = self.positions[asset]
+        old_units = pos_dict["units"]
+        cost_basis = pos_dict["cost_basis"]
+
+        # Skip very small actions
+        if abs(action) < 1e-8:
+            trade["reason"] = "trade_size_too_small"
+            self.trades.append(trade)
+            return trade
+
+        # Calculate target position and trade amount
         portfolio_value = self.get_portfolio_value(price_data)
         
-        # Skip very small actions
-        if abs(action) < 1e-6:
-            return {
-                'timestamp': timestamp,
-                'symbol': asset,
-                'price': current_price,
-                'amount': 0,
-                'fee': 0,
-                'success': True,
-                'reason': 'trade size too small',
-                'action': action
-            }
-            
-        # Current position
-        current_position = self.positions.get(asset, 0.0)
-        
-        # For buys, check if we have enough cash
-        if action > 0:
-            # Calculate maximum affordable position
+        if action > 0:  # BUY
             max_trade_value = self.cash / (1 + self.trading_fee)
-            if max_trade_value < 1e-6:  # Not enough cash for meaningful trade
-                return {
-                    'timestamp': timestamp,
-                    'symbol': asset,
-                    'price': current_price,
-                    'amount': 0,
-                    'fee': 0,
-                    'success': True,
-                    'reason': 'insufficient_funds',
-                    'action': action
-                }
-                
-            # Calculate target position
             max_position_value = max_trade_value * self.max_position
             target_position_value = action * max_position_value
-            target_position = target_position_value / current_price
-            
-        # For sells, calculate target position directly
-        else:
-            target_position = current_position * (1 + action)  # action is negative
-            
-        # Calculate trade size
-        trade_amount = target_position - current_position
-        trade_value = abs(trade_amount * current_price)
-        trade_fee = trade_value * self.trading_fee
-        
-        # Check with risk manager if available
-        if self.risk_manager and abs(trade_amount) > 1e-6:
+            trade_amount = target_position_value / current_price if current_price > 1e-8 else 0.0
+            trade["type"] = "buy"
+        else:  # SELL
+            current_position_value = old_units * current_price
+            target_position_value = (1 + action) * current_position_value  # action is negative
+            trade_amount = (target_position_value - current_position_value) / current_price
+            trade["type"] = "sell"
+
+        # Check with risk manager if available BEFORE executing trade
+        if self.risk_manager and abs(trade_amount) > 1e-8:
             risk_check = self.risk_manager.check_trade(
                 timestamp=timestamp,
                 portfolio_value=portfolio_value,
@@ -354,79 +253,86 @@ class BaseBacktester:
             )
             
             if not risk_check['allowed']:
-                return {
-                    'timestamp': timestamp,
-                    'symbol': asset,
-                    'price': current_price,
-                    'amount': 0,
-                    'fee': 0,
-                    'success': False,
-                    'reason': risk_check['reason'],
-                    'action': action
-                }
-                
-            # Adjust trade size if needed
-            if risk_check['adjusted_size'] != trade_amount:
+                trade["success"] = False
+                trade["reason"] = risk_check['reason']
+                self.trades.append(trade)
+                return trade
+
+            # Use adjusted size from risk manager if different
+            if abs(risk_check['adjusted_size'] - trade_amount) > 1e-8:
                 trade_amount = risk_check['adjusted_size']
-                trade_value = abs(trade_amount * current_price)
-                trade_fee = trade_value * self.trading_fee
-        
-        # Check minimum trade size (0.1% of portfolio or $1, whichever is larger)
-        min_trade_value = max(portfolio_value * 0.001, 1.0)
-        if trade_value < min_trade_value:
-            return {
-                'timestamp': timestamp,
-                'symbol': asset,
-                'price': current_price,
-                'amount': 0,
-                'fee': 0,
-                'success': True,
-                'reason': 'trade size too small',
-                'action': action
+
+        trade_value = abs(trade_amount * current_price)
+        trade_fee = trade_value * self.trading_fee
+
+        # Check if we have enough cash for buying
+        if trade_amount > 0 and (trade_value + trade_fee) > self.cash:
+            trade["success"] = False
+            trade["reason"] = "insufficient_funds"
+            self.trades.append(trade)
+            return trade
+
+        # Check minimum trade size
+        if abs(trade_amount) < 1e-8:
+            trade["reason"] = "trade_size_too_small"
+            self.trades.append(trade)
+            return trade
+
+        # Fill out trade fields
+        trade["amount"] = trade_amount
+        trade["value"] = trade_value
+        trade["fee"] = trade_fee
+
+        # Handle BUY - increase cost basis, no realized profit
+        if trade_amount > 0:
+            cost_this_buy = trade_value + trade_fee
+            trade["cost"] = cost_this_buy
+            trade["revenue"] = 0.0
+            trade["profit"] = 0.0
+
+            new_units = old_units + trade_amount
+            new_cost_basis = cost_basis + cost_this_buy
+            avg_price = new_cost_basis / new_units if new_units > 1e-8 else 0.0
+
+            self.positions[asset] = {
+                "units": new_units,
+                "avg_price": avg_price,
+                "cost_basis": new_cost_basis,
             }
-            
-        # Final check for buying power
-        if trade_amount > 0 and trade_value + trade_fee > self.cash:
-            return {
-                'timestamp': timestamp,
-                'symbol': asset,
-                'price': current_price,
-                'amount': 0,
-                'fee': 0,
-                'success': True,
-                'reason': 'insufficient_funds',
-                'action': action
-            }
-        
-        # Determine trade type
-        trade_type = 'buy' if trade_amount > 0 else 'sell'
-        
-        # Record trade
-        trade = {
-            'timestamp': timestamp,
-            'symbol': asset,
-            'price': current_price,
-            'amount': trade_amount,
-            'value': trade_value,
-            'type': trade_type,
-            'fee': trade_fee,
-            'success': True,
-            'action': action
-        }
+
+            self.cash -= cost_this_buy
+
+        else:  # Handle SELL - realize partial or full profit
+            sell_amount = abs(trade_amount)
+            fraction = sell_amount / old_units if abs(old_units) > 1e-8 else 1.0
+            cost_portion = cost_basis * fraction
+            revenue = trade_value
+            realized_profit = revenue - cost_portion - trade_fee
+
+            trade["cost"] = cost_portion
+            trade["revenue"] = revenue
+            trade["profit"] = realized_profit
+
+            new_units = old_units - sell_amount
+            if new_units > 1e-8:
+                new_cost_basis = cost_basis - cost_portion
+                self.positions[asset] = {
+                    "units": new_units,
+                    "avg_price": pos_dict["avg_price"],
+                    "cost_basis": new_cost_basis,
+                }
+            else:
+                del self.positions[asset]
+
+            self.cash += (revenue - trade_fee)
+
+        trade["success"] = True
         self.trades.append(trade)
         
-        # Update position and cash
-        self.positions[asset] = current_position + trade_amount
-        self.cash -= (trade_value + trade_fee) if trade_amount > 0 else -(trade_value - trade_fee)
-        
-        # Remove position if close to zero
-        if abs(self.positions[asset]) < 1e-6:
-            del self.positions[asset]
-            
         # Update risk manager if available
         if self.risk_manager:
             self.risk_manager.update_after_trade(timestamp)
-        
+            
         return trade
     
     def get_portfolio_value(self, prices: Dict[str, float]) -> float:
@@ -440,8 +346,9 @@ class BaseBacktester:
             float: Total portfolio value
         """
         position_value = sum(
-            self.positions.get(asset, 0) * price
+            self.positions[asset]["units"] * price
             for asset, price in prices.items()
+            if asset in self.positions
         )
         portfolio_value = self.cash + position_value
         

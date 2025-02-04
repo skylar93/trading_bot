@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any
 import logging
 from training.backtesting.risk_aware_backtester import RiskAwareBacktester
-from risk.risk_manager import RiskManager, RiskConfig
+from training.backtesting.risk_manager import RiskManager, RiskConfig
 from agents.strategies.agent_factory import create_agent
 
 logger = logging.getLogger(__name__)

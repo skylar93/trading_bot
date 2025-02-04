@@ -4,7 +4,7 @@ import pandas as pd
 from typing import Dict, List, Tuple, Optional
 from gymnasium import spaces
 from dataclasses import dataclass
-from risk.risk_manager import RiskConfig
+from training.backtesting.risk_manager import RiskConfig
 
 
 @dataclass

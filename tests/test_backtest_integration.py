@@ -22,7 +22,7 @@ import re
 
 from agents.strategies.agent_factory import create_agent
 from deployment.web_interface.utils.backtest import BacktestManager
-from risk.risk_manager import RiskConfig
+from training.backtesting.risk_manager import RiskConfig
 
 #####################
 # TEST DATA HELPERS #

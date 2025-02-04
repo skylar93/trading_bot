@@ -31,7 +31,7 @@ def test_single_asset_mode():
     )
     
     assert result['trades']['default']['success']
-    assert backtester.positions['default'] > 0
+    assert backtester.positions['default']['units'] > 0
     assert len(backtester.trades) == 1
     assert backtester.portfolio_history[-1] < 10000.0  # Should be less due to fees
 
@@ -92,7 +92,7 @@ def test_trading_fees():
     assert result['trades']['default']['fee'] == pytest.approx(expected_fee, rel=1e-2)
     
     # Verify position
-    assert backtester.positions['default'] == pytest.approx(expected_position_units, rel=1e-2)
+    assert backtester.positions['default']['units'] == pytest.approx(expected_position_units, rel=1e-2)
     
     # Verify cash balance
     assert backtester.cash == pytest.approx(expected_cash, rel=1e-2)
@@ -118,7 +118,7 @@ def test_position_limits():
     )
     
     # Should be limited to 50%
-    position_value = backtester.positions['default'] * 100.0
+    position_value = backtester.positions['default']['units'] * 100.0
     assert position_value == pytest.approx(5000.0, rel=1e-2)
 
 def test_insufficient_funds():
