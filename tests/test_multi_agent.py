@@ -2,7 +2,6 @@ import pytest
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
-import torch
 
 from agents.strategies.multi.multi_agent_manager import MultiAgentManager
 from agents.strategies.multi.momentum_ppo_agent import MomentumPPOAgent
@@ -34,18 +33,39 @@ class DummyMultiAgentEnv(gym.Env):
     def reset(self, seed=None):
         super().reset(seed=seed)
         
-        # Generate random OHLCV data
-        self.data = np.random.randn(60, 5).astype(np.float32)
-        # Ensure close is within high/low
-        self.data[:, 3] = (self.data[:, 1] + self.data[:, 2]) / 2
+        # Generate artificial trend data instead of random
+        # Create a linear trend from 1.0 to 2.0 over 60 timesteps
+        trend = np.linspace(1.0, 2.0, 60)
+        
+        # Add some noise to make it more realistic
+        noise = np.random.randn(60) * 0.1
+        close_prices = trend + noise
+        
+        # Generate OHLCV data with the trending close prices
+        self.data = np.zeros((60, 5), dtype=np.float32)
+        self.data[:, 3] = close_prices  # Close prices follow the trend
+        self.data[:, 0] = close_prices - np.random.rand(60) * 0.1  # Open slightly lower
+        self.data[:, 1] = close_prices + np.random.rand(60) * 0.1  # High slightly higher
+        self.data[:, 2] = close_prices - np.random.rand(60) * 0.1  # Low slightly lower
+        self.data[:, 4] = np.random.rand(60) * 1000  # Random volume
         
         return self.data, {}
     
     def step(self, actions):
-        # Generate next state
+        # Generate next state with trend continuation
         self.data = np.roll(self.data, -1, axis=0)
-        self.data[-1] = np.random.randn(5)
-        self.data[-1, 3] = (self.data[-1, 1] + self.data[-1, 2]) / 2
+        last_close = self.data[-2, 3]
+        trend_increment = 1.0 / 60  # Same trend as in reset
+        
+        # New close price continues the trend
+        new_close = last_close + trend_increment + np.random.randn() * 0.1
+        self.data[-1] = [
+            new_close - np.random.rand() * 0.1,  # Open
+            new_close + np.random.rand() * 0.1,  # High
+            new_close - np.random.rand() * 0.1,  # Low
+            new_close,  # Close
+            np.random.rand() * 1000  # Volume
+        ]
         
         # Calculate rewards (simplified)
         rewards = {}

@@ -142,24 +142,33 @@ def test_insufficient_funds():
     assert result['trades']['default'].get('reason') == 'insufficient_funds'
 
 def test_buy_sell_sequence():
-    """Test a sequence of buy and sell trades across multiple assets"""
+    """
+    Test a sequence of buy and sell trades across multiple assets,
+    verifying that positions are tracked correctly and closed properly.
+    """
     backtester = BaseBacktester(
         initial_capital=10000.0,
         trading_fee=0.001,
         max_position=1.0
     )
     
-    # Buy sequence
-    timestamps = [pd.Timestamp(f"2024-01-0{i}") for i in range(1, 4)]
-    prices = [
-        {"BTC": 100.0, "ETH": 50.0},  # Day 1
-        {"BTC": 110.0, "ETH": 45.0},  # Day 2
-        {"BTC": 90.0, "ETH": 55.0},   # Day 3
+    # Create test data
+    timestamps = [
+        pd.Timestamp("2024-01-01"),
+        pd.Timestamp("2024-01-02"),
+        pd.Timestamp("2024-01-03")
     ]
+    
+    prices = [
+        {"BTC": 100.0, "ETH": 50.0},
+        {"BTC": 110.0, "ETH": 45.0},
+        {"BTC": 105.0, "ETH": 48.0}
+    ]
+    
     actions = [
         {"BTC": 0.5, "ETH": 0.3},     # Buy both
         {"BTC": -0.2, "ETH": 0.2},    # Reduce BTC, increase ETH
-        {"BTC": 0.0, "ETH": 0.0},     # Sell all
+        {"BTC": -1.0, "ETH": -1.0},   # Sell all (changed from 0.0 to -1.0)
     ]
     
     portfolio_values = []
