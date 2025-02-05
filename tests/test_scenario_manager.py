@@ -10,7 +10,7 @@ from training.backtesting.scenario_manager import ScenarioManager
 @pytest.fixture
 def sample_data():
     """Create sample OHLCV data for testing."""
-    timestamps = pd.date_range(start="2024-01-01", periods=100, freq="1H")
+    timestamps = pd.date_range(start="2024-01-01", periods=100, freq="1h")
     data = pd.DataFrame({
         "$open": np.linspace(100, 120, 100),
         "$high": np.linspace(101, 121, 100),

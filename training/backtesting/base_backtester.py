@@ -206,6 +206,7 @@ class BaseBacktester:
         if asset not in price_data:
             trade["reason"] = "price_not_available"
             self.trades.append(trade)
+            self.logger.debug(f"[TRADE_SKIP] {asset}: price_not_available")
             return trade
 
         current_price = price_data[asset]
@@ -224,6 +225,7 @@ class BaseBacktester:
         if abs(action) < 1e-8:
             trade["reason"] = "trade_size_too_small"
             self.trades.append(trade)
+            self.logger.debug(f"[TRADE_SKIP] {asset}: action too small ({action:.8f})")
             return trade
 
         # Calculate target position and trade amount
@@ -235,11 +237,24 @@ class BaseBacktester:
             target_position_value = action * max_position_value
             trade_amount = target_position_value / current_price if current_price > 1e-8 else 0.0
             trade["type"] = "buy"
+
+            self.logger.debug(
+                f"[BUY_CALC] {asset}: action={action:.3f}, old_units={old_units:.6f}, "
+                f"max_trade_val=${max_trade_value:.2f}, max_pos_val=${max_position_value:.2f}, "
+                f"target_pos_val=${target_position_value:.2f}, trade_amount={trade_amount:.6f}, "
+                f"price=${current_price:.2f}, cash=${self.cash:.2f}"
+            )
+
         else:  # SELL
             current_position_value = old_units * current_price
             target_position_value = (1 + action) * current_position_value  # action is negative
             trade_amount = (target_position_value - current_position_value) / current_price
             trade["type"] = "sell"
+            self.logger.debug(
+                f"[SELL_CALC] {asset}: action={action:.3f}, old_units={old_units:.6f}, "
+                f"current_pos_val=${current_position_value:.2f}, target_pos_val=${target_position_value:.2f}, "
+                f"trade_amount={trade_amount:.6f}, price=${current_price:.2f}"
+            )
 
         # Check with risk manager if available BEFORE executing trade
         if self.risk_manager and abs(trade_amount) > 1e-8:
@@ -253,6 +268,7 @@ class BaseBacktester:
             )
             
             if not risk_check['allowed']:
+                self.logger.debug(f"[RISK_FAIL] reason={risk_check['reason']}")
                 trade["success"] = False
                 trade["reason"] = risk_check['reason']
                 self.trades.append(trade)
@@ -264,17 +280,24 @@ class BaseBacktester:
 
         trade_value = abs(trade_amount * current_price)
         trade_fee = trade_value * self.trading_fee
+        self.logger.debug(
+            f"[TRADE_VALUE] {asset}: trade_value=${trade_value:.2f}, fee=${trade_fee:.2f}"
+        )
 
         # Check if we have enough cash for buying
         if trade_amount > 0 and (trade_value + trade_fee) > self.cash:
             trade["success"] = False
             trade["reason"] = "insufficient_funds"
             self.trades.append(trade)
+            self.logger.debug(
+                f"[TRADE_SKIP] {asset}: insufficient_funds => need ${(trade_value + trade_fee):.2f}, have ${self.cash:.2f}"
+            )
             return trade
 
         # Check minimum trade size
         if abs(trade_amount) < 1e-8:
             trade["reason"] = "trade_size_too_small"
+            self.logger.debug(f"[TRADE_SKIP] {asset}: trade_amount too small ({trade_amount:.8f})")
             self.trades.append(trade)
             return trade
 
@@ -328,6 +351,12 @@ class BaseBacktester:
 
         trade["success"] = True
         self.trades.append(trade)
+
+        self.logger.debug(
+            f"[TRADE_COMPLETE] {asset}: {trade['type'].upper()}, amount={trade_amount:.6f}, "
+            f"price=${current_price:.2f}, value=${trade_value:.2f}, fee=${trade_fee:.2f}, "
+            f"new_units={new_units:.6f}, cash=${self.cash:.2f}"
+        )
         
         # Update risk manager if available
         if self.risk_manager:

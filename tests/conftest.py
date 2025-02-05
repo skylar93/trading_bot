@@ -95,7 +95,7 @@ def mlflow_test_context(request):
 @pytest.fixture
 def sample_data():
     """Generate sample price data for testing"""
-    dates = pd.date_range("2024-01-01", periods=100, freq="H")
+    dates = pd.date_range("2024-01-01", periods=100, freq="h")
     df = pd.DataFrame(
         {
             "$open": np.random.randn(100) * 100 + 1000,

@@ -74,6 +74,7 @@ class MeanReversionPPOAgent(PPOAgent):
         self.oversold_threshold = config.get("oversold_threshold", 30)
         self.overbought_threshold = config.get("overbought_threshold", 70)
         self.strategy = "mean_reversion"  # Add strategy attribute
+        self.EPS = 1e-8  # Add epsilon constant for safe division
         
         logger.info(
             f"Initialized MeanReversionPPOAgent with RSI window={self.rsi_window}, "
@@ -182,8 +183,8 @@ class MeanReversionPPOAgent(PPOAgent):
                     current_price = prices[-1]
                     
                     rsi_values.append(rsi)
-                    bb_upper_values.append((bb_upper - current_price) / current_price)
-                    bb_lower_values.append((current_price - bb_lower) / current_price)
+                    bb_upper_values.append((bb_upper - current_price) / max(current_price, self.EPS))
+                    bb_lower_values.append((current_price - bb_lower) / max(current_price, self.EPS))
                 
                 rsi = np.array(rsi_values)
                 bb_upper_dist = np.array(bb_upper_values)
@@ -192,8 +193,8 @@ class MeanReversionPPOAgent(PPOAgent):
                 rsi = self._calculate_rsi(close_prices)
                 bb_upper, bb_lower = self._calculate_bollinger_bands(close_prices)
                 current_price = close_prices[-1]
-                bb_upper_dist = (bb_upper - current_price) / current_price
-                bb_lower_dist = (current_price - bb_lower) / current_price
+                bb_upper_dist = (bb_upper - current_price) / max(current_price, self.EPS)
+                bb_lower_dist = (current_price - bb_lower) / max(current_price, self.EPS)
             
             # Handle any NaN values in the final features
             features = np.column_stack([rsi, bb_upper_dist, bb_lower_dist]) if len(state.shape) > 2 else np.array([rsi, bb_upper_dist, bb_lower_dist])
