@@ -47,8 +47,8 @@ def sample_env_data():
 def trading_env(sample_env_data):
     """Create trading environment instance"""
     return TradingEnvironment(
-        df=sample_env_data,
-        initial_balance=10000.0,
+        data=sample_env_data,
+        initial_capital=10000.0,
         trading_fee=0.001,
         window_size=10,
         max_position_size=1.0,
@@ -58,7 +58,7 @@ def trading_env(sample_env_data):
 class TestTradingEnvironment:
     def test_initialization(self, trading_env):
         """Test environment initialization"""
-        assert trading_env.initial_balance == 10000.0
+        assert trading_env.initial_capital == 10000.0
         assert trading_env.trading_fee == 0.001
         assert trading_env.window_size == 10
         assert trading_env.max_position_size == 1.0
@@ -75,7 +75,7 @@ class TestTradingEnvironment:
 
         assert isinstance(obs, np.ndarray)
         assert isinstance(info, dict)
-        assert trading_env.balance == trading_env.initial_balance
+        assert trading_env.balance == trading_env.initial_capital
         assert trading_env.position is None
         assert len(trading_env.position_history) == 0
 

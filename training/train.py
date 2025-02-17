@@ -6,8 +6,6 @@ import numpy as np
 import torch
 from data.utils.data_loader import DataLoader
 from agents.strategies.single.ppo_agent import PPOAgent
-from training.utils.visualization import TradingVisualizer
-from training.evaluation import TradingMetrics
 from envs.trading_env import TradingEnvironment
 from envs.wrap_env import make_env
 from training.utils.unified_mlflow_manager import MLflowManager
@@ -70,7 +68,7 @@ def create_env(env_config: Dict[str, Any]) -> TradingEnvironment:
         Trading environment instance
     """
     # Get data from config
-    data = env_config.get("df", None)
+    data = env_config.get("data", None)
     if data is None:
         raise ValueError("No data provided in env_config")
 
@@ -101,11 +99,11 @@ def create_env(env_config: Dict[str, Any]) -> TradingEnvironment:
 
     # Create environment with config parameters
     env = TradingEnvironment(
-        df=data,
-        initial_balance=env_config.get("initial_balance", 10000.0),
+        data=data,
+        initial_capital=env_config.get("initial_capital", 10000.0),
         trading_fee=env_config.get("trading_fee", 0.001),
         window_size=env_config.get("window_size", 20),
-        max_position_size=env_config.get("max_position_size", 1.0),
+        max_position=env_config.get("max_position_size", 1.0),
     )
 
     # Apply wrappers if specified in config
@@ -122,65 +120,18 @@ def train_agent(
     val_data: pd.DataFrame,
     config: Dict[str, Any] = None,
 ) -> PPOAgent:
-    """Train a PPO agent
+    """Train an agent on the given data
 
     Args:
         train_data: Training data
         val_data: Validation data
-        config: Configuration dictionary
+        config: Training configuration
 
     Returns:
-        Trained PPO agent
+        Trained agent
     """
-    # Use default config if none provided
     if config is None:
-        config = {
-            "env": {
-                "initial_balance": 10000.0,
-                "trading_fee": 0.001,
-                "window_size": 20,
-            },
-            "model": {
-                "learning_rate": 3e-4,
-                "gamma": 0.99,
-                "gae_lambda": 0.95,
-                "clip_epsilon": 0.2,
-                "c1": 1.0,
-                "c2": 0.01,
-                "batch_size": 64,
-                "n_epochs": 10,
-            },
-            "training": {"total_timesteps": 10000},
-        }
-
-    # Convert flat config to nested if needed
-    if not isinstance(config.get("env"), dict):
-        env_config = config.get("env", {})
-        if isinstance(env_config, dict):
-            # Already nested
-            pass
-        else:
-            # Convert flat to nested
-            config = {
-                "env": {
-                    "initial_balance": config.get("initial_balance", 10000.0),
-                    "trading_fee": config.get("trading_fee", 0.001),
-                    "window_size": config.get("window_size", 20),
-                },
-                "model": {
-                    "learning_rate": config.get("learning_rate", 3e-4),
-                    "gamma": config.get("gamma", 0.99),
-                    "gae_lambda": config.get("gae_lambda", 0.95),
-                    "clip_epsilon": config.get("clip_epsilon", 0.2),
-                    "c1": config.get("c1", 1.0),
-                    "c2": config.get("c2", 0.01),
-                    "batch_size": config.get("batch_size", 64),
-                    "n_epochs": config.get("n_epochs", 10),
-                },
-                "training": {
-                    "total_timesteps": config.get("total_timesteps", 10000)
-                },
-            }
+        config = {}
 
     # Ensure all required config sections exist
     for section in ["env", "model", "training"]:
@@ -188,7 +139,7 @@ def train_agent(
             config[section] = {}
 
     # Set default values for required parameters
-    config["env"].setdefault("initial_balance", 10000.0)
+    config["env"].setdefault("initial_capital", 10000.0)
     config["env"].setdefault("trading_fee", 0.001)
     config["env"].setdefault("window_size", 20)
 
@@ -205,15 +156,15 @@ def train_agent(
 
     # Create environments
     train_env = TradingEnvironment(
-        df=train_data,
-        initial_balance=config["env"]["initial_balance"],
+        data=train_data,
+        initial_capital=config["env"]["initial_capital"],
         trading_fee=config["env"]["trading_fee"],
         window_size=config["env"]["window_size"],
     )
 
     val_env = TradingEnvironment(
-        df=val_data,
-        initial_balance=config["env"]["initial_balance"],
+        data=val_data,
+        initial_capital=config["env"]["initial_capital"],
         trading_fee=config["env"]["trading_fee"],
         window_size=config["env"]["window_size"],
     )
@@ -581,7 +532,7 @@ class Trainer:
                 state, _ = self.env.reset()
                 done = False
                 episode_reward = 0
-                portfolio_value = self.env.initial_balance
+                portfolio_value = self.env.initial_capital
 
                 while not done:
                     # Get action from agent

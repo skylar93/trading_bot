@@ -18,7 +18,7 @@ def create_default_config(config_path):
     """Create default config file"""
     config = {
         "env": {
-            "initial_balance": 10000,
+            "initial_capital": 10000,
             "trading_fee": 0.001,
             "window_size": 20,
         },

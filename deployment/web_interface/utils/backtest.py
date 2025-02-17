@@ -7,34 +7,11 @@ import numpy as np
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 import logging
-from training.utils.risk_backtest import RiskAwareBacktester
-from risk.risk_manager import RiskManager, RiskConfig
-import random
+from training.backtesting.risk_aware_backtester import RiskAwareBacktester
+from training.backtesting.risk_manager import RiskManager, RiskConfig
+from agents.strategies.agent_factory import create_agent
 
 logger = logging.getLogger(__name__)
-
-class DummyAgent:
-    """Dummy agent for testing that makes small random trades"""
-    
-    def __init__(self):
-        self.step_count = -1  # Start at -1 so first increment gives 0
-        self.logger = logging.getLogger(self.__class__.__name__)
-        
-    def get_action(self, state: Dict[str, Any]) -> float:
-        """Generate small random actions for testing"""
-        self.step_count += 1
-        
-        # First action should be non-zero but small for consistency test
-        if self.step_count == 0:
-            return 0.5
-            
-        # Trade every 5 steps with small magnitude
-        if self.step_count % 5 == 0:
-            action = 0.5 if (self.step_count // 5) % 2 == 0 else -0.5
-            self.logger.info(f"DummyAgent taking action: {action}")
-            return action
-            
-        return 0.0
 
 class BacktestManager:
     """Manage backtest execution and results"""
@@ -55,8 +32,11 @@ class BacktestManager:
         )
         self.logger.info("Risk config initialized: %s", vars(self.risk_config))
         
-        self.agent = DummyAgent()
-        self.logger.info("DummyAgent initialized")
+        # Create agent using factory
+        agent_name = settings.get("agent_name", "Dummy")
+        agent_config = settings.get("agent_config", {})
+        self.agent = create_agent(agent_name, config=agent_config)
+        self.logger.info(f"{agent_name} agent initialized")
         
     def load_market_data(self) -> Optional[pd.DataFrame]:
         """Load market data for backtesting
@@ -133,13 +113,13 @@ class BacktestManager:
             backtester = RiskAwareBacktester(
                 data=data,
                 risk_config=self.risk_config,
-                initial_balance=self.settings.get("initial_balance", 10000.0),
+                initial_capital=self.settings.get("initial_balance", 10000.0),
                 trading_fee=self.settings.get("trading_fee", 0.001)
             )
             
             # Run backtest
             results = backtester.run(
-                agent=self.agent,
+                strategy=self.agent,
                 window_size=20,
                 verbose=True
             )

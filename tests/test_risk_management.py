@@ -4,7 +4,7 @@ import unittest
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from risk.risk_manager import RiskManager, RiskConfig
+from training.backtesting.risk_manager import RiskManager, RiskConfig
 
 
 class TestRiskManager(unittest.TestCase):

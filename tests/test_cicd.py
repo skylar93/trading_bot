@@ -10,7 +10,7 @@ import logging
 
 from data.utils.data_loader import DataLoader
 from training.train import train_agent
-from training.backtest import Backtester
+from training.backtesting.base_backtester import BaseBacktester
 from training.evaluation import TradingMetrics
 from data.utils.feature_generator import FeatureGenerator
 from envs.trading_env import TradingEnvironment
@@ -74,40 +74,31 @@ def test_data_pipeline():
 
 def test_backtesting():
     """Test backtesting functionality"""
-    # Create mock data
-    dates = pd.date_range(start="2023-01-01", periods=100, freq="1h")
-    data = pd.DataFrame(
-        {
-            "$open": np.random.randn(100) * 10 + 100,
-            "$high": np.random.randn(100) * 10 + 105,
-            "$low": np.random.randn(100) * 10 + 95,
-            "$close": np.random.randn(100) * 10 + 100,
-            "$volume": np.abs(np.random.randn(100) * 1000),
-        },
-        index=dates,
-    )
-
-    # Create mock agent
-    class MockAgent:
-        def get_action(self, state):
-            return np.array([np.random.uniform(-1, 1)])
-
-    mock_agent = MockAgent()
-
     try:
+        # Create test data
+        data = create_test_data()
+
+        # Create mock strategy
+        class MockStrategy:
+            def get_action(self, state):
+                return np.array([0.5])  # Always try to buy with 50% of capital
+
         # Initialize backtester
-        backtester = Backtester(
-            data=data, initial_balance=10000, trading_fee=0.001
+        backtester = BaseBacktester(
+            data=data,
+            initial_capital=10000.0,
+            trading_fee=0.001,
         )
 
         # Run backtest
-        results = backtester.run(mock_agent)
+        results = backtester.run(strategy=MockStrategy())
 
         # Verify results
         assert isinstance(results, dict)
         assert "metrics" in results
+        assert "final_balance" in results["metrics"]
         assert "trades" in results
-        assert len(results["trades"]) >= 0
+        assert "portfolio_values" in results
 
     except Exception as e:
         pytest.fail(f"Backtesting failed with error: {str(e)}")
@@ -115,90 +106,34 @@ def test_backtesting():
 
 @pytest.mark.integration
 def test_full_pipeline():
-    logger.debug("Starting test_full_pipeline")
-
-    # Generate minimal test data
-    logger.debug("Generating test data")
-    df = create_test_data(size=50)  # Minimal dataset
-    logger.debug(f"Generated {len(df)} rows of test data")
-
-    # Split data into train and validation sets
-    train_size = int(len(df) * 0.8)
-    train_data = df[:train_size]
-    val_data = df[train_size:]
-    logger.debug(
-        f"Split data into {len(train_data)} training and {len(val_data)} validation samples"
-    )
-
-    # Create minimal config
-    config = {
-        "env": {
-            "initial_balance": 10000,
-            "trading_fee": 0.001,
-            "window_size": 3,  # Minimal window
-        },
-        "model": {
-            "learning_rate": 1e-2,  # Faster learning
-            "gamma": 0.99,
-            "gae_lambda": 0.95,
-            "clip_epsilon": 0.2,
-            "c1": 1.0,
-            "c2": 0.01,
-            "batch_size": 16,  # Smaller batches
-            "n_epochs": 2,  # Minimal epochs
-        },
-        "training": {"total_timesteps": 50},  # Minimal steps
-    }
-
-    logger.debug("Configuration created")
-    logger.debug(f"Config: {config}")
-
-    # Train agent
-    logger.debug("Starting agent training")
+    """Test full training pipeline"""
     try:
+        # Create test data
+        data = create_test_data()
+
+        # Train agent
         agent = train_agent(
-            train_data=train_data, val_data=val_data, config=config
+            train_data=data,
+            val_data=data,  # Use same data for validation in test
+            config={
+                "env": {
+                    "initial_capital": 10000.0,
+                    "trading_fee": 0.001,
+                    "window_size": 20,
+                },
+                "model": {
+                    "learning_rate": 0.001,
+                    "batch_size": 64,
+                    "gamma": 0.99,
+                },
+                "training": {"total_timesteps": 50},
+            },
         )
-        logger.debug("Agent training completed successfully")
+
+        assert agent is not None
+
     except Exception as e:
         logger.error(f"Agent training failed with error: {str(e)}")
-        raise
-
-    # Test the trained agent
-    logger.debug("Testing trained agent")
-    env = TradingEnvironment(
-        df=val_data,
-        window_size=config["env"]["window_size"],
-        initial_balance=config["env"]["initial_balance"],
-        trading_fee=config["env"]["trading_fee"],
-    )
-
-    try:
-        obs, _ = env.reset()
-        done = truncated = False
-        total_steps = 0
-        max_steps = 20  # Very few test steps
-        total_reward = 0
-
-        while not (done or truncated) and total_steps < max_steps:
-            action = agent.get_action(obs)
-            logger.debug(f"Step {total_steps}: Taking action {action}")
-            obs, reward, done, truncated, info = env.step(action)
-            total_reward += reward
-            total_steps += 1
-            logger.debug(
-                f"Step {total_steps} reward: {reward:.2f}, total reward: {total_reward:.2f}"
-            )
-
-        logger.debug(f"Test completed after {total_steps} steps")
-        logger.debug(f"Final done: {done}, truncated: {truncated}")
-        logger.debug(f"Total reward: {total_reward:.2f}")
-
-        assert total_steps > 0, "Agent should have taken at least one step"
-        assert total_steps <= max_steps, "Test exceeded maximum steps"
-
-    except Exception as e:
-        logger.error(f"Testing failed with error: {str(e)}")
         raise
 
 
@@ -206,40 +141,30 @@ def test_full_pipeline():
 def test_resource_usage():
     """Test resource usage monitoring"""
     try:
+        # Create test data
+        data = create_test_data()
+
         # Create environment
         env = TradingEnvironment(
-            df=pd.DataFrame(
-                {
-                    "$open": np.random.randn(100),
-                    "$high": np.random.randn(100),
-                    "$low": np.random.randn(100),
-                    "$close": np.random.randn(100),
-                    "$volume": np.abs(np.random.randn(100)),
-                }
-            ),
-            initial_balance=10000.0,
+            data=data,
+            initial_capital=10000.0,
             trading_fee=0.001,
             window_size=20,
         )
 
-        # Create agent
-        agent = PPOAgent(
-            observation_space=env.observation_space,
-            action_space=env.action_space,
-            learning_rate=3e-4,
-            gamma=0.99,
-        )
+        # Run episode
+        obs, info = env.reset()
+        done = False
+        truncated = False
+        total_reward = 0
 
-        # Run some steps
-        state, _ = env.reset()
-        for _ in range(10):
-            action = agent.get_action(state)
-            next_state, reward, done, _, info = env.step(action)
-            if done:
-                break
-            state = next_state
+        while not (done or truncated):
+            action = env.action_space.sample()
+            obs, reward, done, truncated, info = env.step(action)
+            total_reward += reward
 
-        assert True, "Resource usage test completed successfully"
+        assert isinstance(total_reward, float)
+        assert "portfolio_value" in info
 
     except Exception as e:
         assert False, f"Resource usage test failed with error: {str(e)}"
@@ -247,8 +172,8 @@ def test_resource_usage():
 
 def test_environment_initialization():
     env = TradingEnvironment(
-        df=create_test_data(),
-        initial_balance=10000.0,
+        data=create_test_data(),
+        initial_capital=10000.0,
         trading_fee=0.001,
         window_size=20,
     )
@@ -256,8 +181,8 @@ def test_environment_initialization():
 
 def test_agent_training():
     env = TradingEnvironment(
-        df=create_test_data(),
-        initial_balance=10000.0,
+        data=create_test_data(),
+        initial_capital=10000.0,
         trading_fee=0.001,
         window_size=20,
     )

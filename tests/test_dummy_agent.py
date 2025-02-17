@@ -2,7 +2,7 @@ import pytest
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from deployment.web_interface.utils.backtest import DummyAgent
+from agents.strategies.single.dummy_agent import DummyAgent
 from deployment.web_interface.utils.data_stream import DataStream
 
 def create_test_data(periods: int = 100) -> pd.DataFrame:

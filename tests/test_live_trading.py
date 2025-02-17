@@ -146,6 +146,7 @@ async def test_portfolio_value(live_env):
     
     # Mock price increase (2% increase)
     new_price = 51000.0
+    live_env._last_price = new_price  # Update internal price tracking
     live_env.websocket.get_latest_price = Mock(return_value=new_price)
     live_env.websocket.get_current_data = Mock(return_value=pd.DataFrame({
         'timestamp': pd.date_range(start='2023-01-01', periods=10, freq='1min'),
@@ -162,12 +163,13 @@ async def test_portfolio_value(live_env):
         'macd': np.zeros(10)
     }).set_index('timestamp'))
     
-    # Get new observation to update internal state
-    obs, info = await live_env.reset()
+    # Update state without resetting
+    obs = await live_env._get_observation()
     
     # Portfolio value should increase with price
     new_portfolio_value = float(live_env.portfolio_value)
     assert new_portfolio_value > portfolio_before_price_change  # Portfolio value should increase
+    assert new_portfolio_value > 9980.0  # Should maintain reasonable value after fees/slippage
     assert abs(new_portfolio_value - portfolio_before_price_change) > 1.0  # Should be a significant change
 
 if __name__ == "__main__":

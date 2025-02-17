@@ -1,6 +1,6 @@
 ## SpecStory
 
-## RiskAwareBacktester Code Issues and Solutions (1/6/2025, 11:08:46 PM)
+## RiskAwareBacktester Code Issues and Solutions (1/6/2025, 9:08:46 AM)
 
 _**User**_
 

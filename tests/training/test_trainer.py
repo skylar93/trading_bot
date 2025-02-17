@@ -66,7 +66,8 @@ def mock_env():
             self.action_space = spaces.Box(
                 low=-1, high=1, shape=(1,), dtype=np.float32
             )
-            self.initial_balance = 10000.0
+            self.initial_capital = 10000.0
+            self.capital = self.initial_capital
             self.returns = []
             self.steps = 0
             self.max_steps = 100  # End episode after 100 steps
@@ -74,6 +75,7 @@ def mock_env():
         def reset(self):
             self.returns = []
             self.steps = 0
+            self.capital = self.initial_capital
             return np.zeros((10, 5)), {}
 
         def step(self, action):
@@ -89,7 +91,7 @@ def mock_env():
                 done,
                 False,
                 {
-                    "portfolio_value": self.initial_balance
+                    "capital": self.initial_capital
                     * (1 + sum(self.returns))
                 },
             )
@@ -143,14 +145,14 @@ def test_trainer_initialization(mlflow_test_context, mock_env, mock_agent):
 def test_environment_creation(sample_data, config):
     """Test environment creation"""
     env = TradingEnvironment(
-        df=sample_data,
-        initial_balance=config["env"]["initial_balance"],
+        data=sample_data,
+        initial_capital=config["env"]["initial_balance"],
         trading_fee=config["env"]["trading_fee"],
         window_size=config["env"]["window_size"],
     )
 
     assert isinstance(env, TradingEnvironment)
-    assert env.initial_balance == 10000.0
+    assert env.initial_capital == 10000.0
     assert env.trading_fee == 0.001
     assert env.window_size == 20
 
@@ -167,7 +169,7 @@ def test_training_pipeline(mock_env):
     config = {
         "env": {
             "window_size": 10,
-            "initial_balance": 10000.0,
+            "initial_capital": 10000.0,
             "trading_fee": 0.001,
         },
         "model": {"learning_rate": 0.001, "batch_size": 32, "gamma": 0.99},
