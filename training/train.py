@@ -6,7 +6,6 @@ import numpy as np
 import torch
 from data.utils.data_loader import DataLoader
 from agents.strategies.single.ppo_agent import PPOAgent
-from training.evaluation import TradingMetrics
 from envs.trading_env import TradingEnvironment
 from envs.wrap_env import make_env
 from training.utils.unified_mlflow_manager import MLflowManager
