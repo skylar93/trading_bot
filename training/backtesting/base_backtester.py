@@ -27,8 +27,12 @@ class BaseBacktester:
     - Handles transaction fees for accurate PnL calculation
     - Implements peak value tracking for drawdown calculation
     - Tracks cost basis per position for accurate profit calculation
-    """
     
+    Now configured for FRACTIONAL HOLDING:
+    - action in [0,1] => fraction of total portfolio to hold in the asset
+    - No short selling (units never go below 0)
+    """
+
     REQUIRED_COLUMNS = {"$open", "$high", "$low", "$close", "$volume"}
     
     def __init__(
@@ -45,7 +49,8 @@ class BaseBacktester:
         Args:
             initial_capital (float): Starting capital for the portfolio
             trading_fee (float): Fee per trade as a fraction of trade value (default: 0.1%)
-            max_position (float): Maximum allowed position size as a fraction of portfolio value
+            max_position (float): (Optional) Maximum fraction to allow holding. 
+                                  For example, 1.0 means up to 100% of portfolio in coin.
             data (pd.DataFrame, optional): OHLCV data with columns: $open, $high, $low, $close, $volume
             risk_config (RiskConfig, optional): Risk management configuration
             
@@ -84,7 +89,7 @@ class BaseBacktester:
         - Initializes empty positions dictionary
         """
         self.cash = self.initial_capital
-        self.positions: Dict[str, Dict[str, float]] = {}  # positions[symbol] = {"units": float, "avg_price": float, "cost_basis": float}
+        self.positions: Dict[str, Dict[str, float]] = {}
         self.trades: List[Dict] = []
         self.portfolio_history: List[float] = [self.initial_capital]
         self.cash_history: List[float] = [self.initial_capital]
@@ -101,19 +106,21 @@ class BaseBacktester:
         actions: Dict[str, float],
     ) -> Dict[str, Any]:
         """
-        Update portfolio state based on current prices and desired actions.
+        Update portfolio state based on current prices and desired fractional actions in [0,1].
         
         Args:
             timestamp (pd.Timestamp): Current timestamp
             prices (Dict[str, float]): Current prices for each asset
-            actions (Dict[str, float]): Desired position sizes for each asset (-1 to 1)
+            actions (Dict[str, float]): Desired fraction [0,1] for each asset 
             
         Returns:
             Dict[str, Any]: Dictionary containing execution results
             
         Notes:
         - For single-asset mode, use {'default': price} and {'default': action}
-        - For multi-asset mode, use {'BTC': price1, 'ETH': price2} format
+        - For multi-asset mode, use e.g. {'BTC': fraction1, 'ETH': fraction2}
+        - This is FRACTIONAL HOLDING. 
+          e.g. action=0.3 => want 30% of total portfolio in 'asset'
         """
         self.current_timestamp = timestamp
         initial_portfolio_value = self.get_portfolio_value(prices)
@@ -121,11 +128,11 @@ class BaseBacktester:
         results = {}
         
         # Execute trades
-        for symbol, action in actions.items():
+        for symbol, fraction in actions.items():
             if symbol not in prices:
                 continue
                 
-            # Initialize position dictionary if it doesn't exist
+            # Ensure position record
             if symbol not in self.positions:
                 self.positions[symbol] = {
                     "units": 0.0,
@@ -133,11 +140,10 @@ class BaseBacktester:
                     "cost_basis": 0.0
                 }
             
-            # Execute trade using execute_trade method which handles cost basis tracking
             price_data = {symbol: prices[symbol]}
             trade_result = self.execute_trade(
                 timestamp=timestamp,
-                action=action,
+                action=fraction,  # in [0,1]
                 price_data=price_data,
                 asset=symbol
             )
@@ -157,7 +163,10 @@ class BaseBacktester:
             'portfolio_value': new_portfolio_value,
             'cash': self.cash,
             'positions': self.positions.copy(),
-            'returns': (new_portfolio_value - initial_portfolio_value) / initial_portfolio_value,
+            'returns': (
+                (new_portfolio_value - initial_portfolio_value) / initial_portfolio_value
+                if initial_portfolio_value > 1e-12 else 0.0
+            ),
             'total_fees': total_fees
         }
     
@@ -169,24 +178,18 @@ class BaseBacktester:
         asset: str = "default"
     ) -> Dict[str, Any]:
         """
-        Execute a single trade for one asset.
+        Fractional Holding version:
+        action in [0,1] => fraction of total portfolio to hold in this asset.
         
-        Args:
-            timestamp (pd.Timestamp): Current timestamp
-            action (float): Desired position size (-1 to 1)
-            price_data (Dict[str, float]): Price data for the asset
-            asset (str): Asset identifier (default for single-asset)
-            
-        Returns:
-            Dict[str, Any]: Trade execution results with cost, revenue, and profit
-            
-        Notes:
-            - For single-asset mode, use asset='default'
-            - For multi-asset mode, specify the asset symbol
-            - price_data should contain the asset key
-            - Tracks cost basis and calculates realized profits on sells
+        Steps:
+          1) clamp action in [0,1]
+          2) portfolio_value = self.cash + (old_units * current_price)
+          3) target_coin_value = action * portfolio_value
+          4) diff_value = target_coin_value - current_coin_value
+          5) trade_amount = diff_value / current_price
+          6) if diff_value>0 => buy, else => sell
+          7) risk manager check, cost basis update, fee, etc.
         """
-        # Initialize trade result with default values
         trade = {
             "timestamp": timestamp,
             "symbol": asset,
@@ -211,53 +214,49 @@ class BaseBacktester:
 
         current_price = price_data[asset]
         trade["price"] = current_price
-        trade["success"] = True  # Will be set False if blocked
-
-        # Ensure positions[symbol] exists as dict
+        
+        # clamp action in [0,1]
+        if action < 0.0:
+            action = 0.0
+        elif action > 1.0:
+            action = 1.0
+        
         if asset not in self.positions:
-            self.positions[asset] = {"units": 0.0, "avg_price": 0.0, "cost_basis": 0.0}
+            self.positions[asset] = {
+                "units": 0.0,
+                "avg_price": 0.0,
+                "cost_basis": 0.0
+            }
 
         pos_dict = self.positions[asset]
         old_units = pos_dict["units"]
-        cost_basis = pos_dict["cost_basis"]
+        old_cost_basis = pos_dict["cost_basis"]
 
-        # Skip very small actions
-        if abs(action) < 1e-8:
+        # current coin value
+        current_coin_value = old_units * current_price
+        # total portfolio
+        portfolio_value = self.cash + current_coin_value
+        
+        # desired coin value
+        target_coin_value = action * portfolio_value
+        
+        diff_value = target_coin_value - current_coin_value
+        if abs(diff_value) < 1e-12:
             trade["reason"] = "trade_size_too_small"
             self.trades.append(trade)
-            self.logger.debug(f"[TRADE_SKIP] {asset}: action too small ({action:.8f})")
             return trade
 
-        # Calculate target position and trade amount
-        portfolio_value = self.get_portfolio_value(price_data)
-        
-        if action > 0:  # BUY
-            max_trade_value = self.cash / (1 + self.trading_fee)
-            max_position_value = max_trade_value * self.max_position
-            target_position_value = action * max_position_value
-            trade_amount = target_position_value / current_price if current_price > 1e-8 else 0.0
-            trade["type"] = "buy"
+        trade_amount = diff_value / current_price if abs(current_price) > 1e-12 else 0.0
+        if abs(trade_amount) < 1e-12:
+            trade["reason"] = "trade_size_too_small"
+            self.trades.append(trade)
+            return trade
 
-            self.logger.debug(
-                f"[BUY_CALC] {asset}: action={action:.3f}, old_units={old_units:.6f}, "
-                f"max_trade_val=${max_trade_value:.2f}, max_pos_val=${max_position_value:.2f}, "
-                f"target_pos_val=${target_position_value:.2f}, trade_amount={trade_amount:.6f}, "
-                f"price=${current_price:.2f}, cash=${self.cash:.2f}"
-            )
+        trade_value = abs(diff_value)
+        fee = trade_value * self.trading_fee
 
-        else:  # SELL
-            current_position_value = old_units * current_price
-            target_position_value = (1 + action) * current_position_value  # action is negative
-            trade_amount = (target_position_value - current_position_value) / current_price
-            trade["type"] = "sell"
-            self.logger.debug(
-                f"[SELL_CALC] {asset}: action={action:.3f}, old_units={old_units:.6f}, "
-                f"current_pos_val=${current_position_value:.2f}, target_pos_val=${target_position_value:.2f}, "
-                f"trade_amount={trade_amount:.6f}, price=${current_price:.2f}"
-            )
-
-        # Check with risk manager if available BEFORE executing trade
-        if self.risk_manager and abs(trade_amount) > 1e-8:
+        # Risk Manager check
+        if self.risk_manager and abs(trade_amount) > 1e-12:
             risk_check = self.risk_manager.check_trade(
                 timestamp=timestamp,
                 portfolio_value=portfolio_value,
@@ -266,113 +265,102 @@ class BaseBacktester:
                 positions=self.positions,
                 asset=asset
             )
-            
             if not risk_check['allowed']:
-                self.logger.debug(f"[RISK_FAIL] reason={risk_check['reason']}")
                 trade["success"] = False
                 trade["reason"] = risk_check['reason']
                 self.trades.append(trade)
                 return trade
 
-            # Use adjusted size from risk manager if different
-            if abs(risk_check['adjusted_size'] - trade_amount) > 1e-8:
+            # if size adjusted
+            if abs(risk_check['adjusted_size'] - trade_amount) > 1e-12:
                 trade_amount = risk_check['adjusted_size']
+                diff_value = trade_amount * current_price
+                trade_value = abs(diff_value)
+                fee = trade_value*self.trading_fee
 
-        trade_value = abs(trade_amount * current_price)
-        trade_fee = trade_value * self.trading_fee
-        self.logger.debug(
-            f"[TRADE_VALUE] {asset}: trade_value=${trade_value:.2f}, fee=${trade_fee:.2f}"
-        )
-
-        # Check if we have enough cash for buying
-        if trade_amount > 0 and (trade_value + trade_fee) > self.cash:
-            trade["success"] = False
-            trade["reason"] = "insufficient_funds"
-            self.trades.append(trade)
-            self.logger.debug(
-                f"[TRADE_SKIP] {asset}: insufficient_funds => need ${(trade_value + trade_fee):.2f}, have ${self.cash:.2f}"
-            )
-            return trade
-
-        # Check minimum trade size
-        if abs(trade_amount) < 1e-8:
-            trade["reason"] = "trade_size_too_small"
-            self.logger.debug(f"[TRADE_SKIP] {asset}: trade_amount too small ({trade_amount:.8f})")
-            self.trades.append(trade)
-            return trade
-
-        # Fill out trade fields
-        trade["amount"] = trade_amount
-        trade["value"] = trade_value
-        trade["fee"] = trade_fee
-
-        # Handle BUY - increase cost basis, no realized profit
-        if trade_amount > 0:
-            cost_this_buy = trade_value + trade_fee
-            trade["cost"] = cost_this_buy
-            trade["revenue"] = 0.0
-            trade["profit"] = 0.0
-
+        # BUY
+        if diff_value > 0:
+            trade["type"] = "buy"
+            total_cost = trade_value + fee
+            if total_cost > self.cash + 1e-12:
+                trade["reason"] = "insufficient_funds"
+                self.trades.append(trade)
+                return trade
+            
             new_units = old_units + trade_amount
-            new_cost_basis = cost_basis + cost_this_buy
-            avg_price = new_cost_basis / new_units if new_units > 1e-8 else 0.0
-
+            new_cost_basis = old_cost_basis + total_cost
+            avg_price = new_cost_basis/new_units if new_units>1e-12 else 0.0
+            
             self.positions[asset] = {
                 "units": new_units,
                 "avg_price": avg_price,
                 "cost_basis": new_cost_basis,
             }
+            self.cash -= total_cost
 
-            self.cash -= cost_this_buy
+            trade["type"] = "buy"
+            trade["amount"] = trade_amount
+            trade["value"] = trade_value
+            trade["fee"] = fee
+            trade["cost"] = total_cost
+            trade["revenue"] = 0.0
+            trade["profit"] = 0.0
+            trade["success"] = True
 
-        else:  # Handle SELL - realize partial or full profit
+        else:
+            # SELL
+            trade["type"] = "sell"
             sell_amount = abs(trade_amount)
-            fraction = sell_amount / old_units if abs(old_units) > 1e-8 else 1.0
-            cost_portion = cost_basis * fraction
-            revenue = trade_value
-            realized_profit = revenue - cost_portion - trade_fee
+            if sell_amount> old_units+1e-12:
+                # can't sell more than we hold => clip
+                sell_amount = old_units
+                diff_value = sell_amount*current_price
+                trade_value = abs(diff_value)
+                fee = trade_value*self.trading_fee
 
-            trade["cost"] = cost_portion
-            trade["revenue"] = revenue
-            trade["profit"] = realized_profit
+            fraction = sell_amount/old_units if old_units>1e-12 else 1.0
+            cost_portion = old_cost_basis*fraction
+            revenue = trade_value
+            realized_profit = revenue - cost_portion - fee
 
             new_units = old_units - sell_amount
-            if new_units > 1e-8:
-                new_cost_basis = cost_basis - cost_portion
+            if new_units>1e-12:
+                new_cost_basis = old_cost_basis - cost_portion
                 self.positions[asset] = {
                     "units": new_units,
                     "avg_price": pos_dict["avg_price"],
                     "cost_basis": new_cost_basis,
                 }
             else:
+                # fully closed
                 del self.positions[asset]
 
-            self.cash += (revenue - trade_fee)
+            self.cash += (revenue - fee)
 
-        trade["success"] = True
-        self.trades.append(trade)
-
-        self.logger.debug(
-            f"[TRADE_COMPLETE] {asset}: {trade['type'].upper()}, amount={trade_amount:.6f}, "
-            f"price=${current_price:.2f}, value=${trade_value:.2f}, fee=${trade_fee:.2f}, "
-            f"new_units={new_units:.6f}, cash=${self.cash:.2f}"
-        )
+            trade["amount"] = -sell_amount
+            trade["value"] = revenue
+            trade["fee"] = fee
+            trade["cost"] = cost_portion
+            trade["revenue"] = revenue
+            trade["profit"] = realized_profit
+            trade["success"] = True
         
-        # Update risk manager if available
-        if self.risk_manager:
+        self.trades.append(trade)
+        self.logger.debug(
+            f"[FRAC_EXECUTE] {asset}: action={action:.3f}, diff_value={diff_value:.2f}, "
+            f"amount={trade['amount']:.6f}, cost={trade['cost']:.2f}, fee={fee:.2f}, "
+            f"cash={self.cash:.2f}"
+        )
+
+        # risk manager post-update
+        if self.risk_manager and trade["success"]:
             self.risk_manager.update_after_trade(timestamp)
-            
+
         return trade
     
     def get_portfolio_value(self, prices: Dict[str, float]) -> float:
         """
         Calculate total portfolio value including cash and all positions.
-        
-        Args:
-            prices (Dict[str, float]): Current prices for each asset
-            
-        Returns:
-            float: Total portfolio value
         """
         position_value = sum(
             self.positions[asset]["units"] * price
@@ -381,7 +369,6 @@ class BaseBacktester:
         )
         portfolio_value = self.cash + position_value
         
-        # Update risk manager's peak value tracking
         if self.risk_manager:
             current_drawdown = self.risk_manager.update_drawdown(portfolio_value)
             self.logger.debug(
@@ -389,7 +376,6 @@ class BaseBacktester:
                 f"Peak value: {self.risk_manager.peak_value:.2f}, "
                 f"Drawdown: {current_drawdown:.2%}"
             )
-            
         return portfolio_value
 
     def run(
@@ -399,19 +385,8 @@ class BaseBacktester:
         verbose: bool = False,
     ) -> Dict[str, Any]:
         """
-        Run backtest for single-asset strategy.
-        
-        Args:
-            strategy: Strategy object with get_action method
-            window_size (int): Size of the data window for strategy
-            verbose (bool): Whether to print progress
-            
-        Returns:
-            Dict containing:
-            - metrics: Performance metrics
-            - trades: List of all trades
-            - portfolio_values: History of portfolio values
-            - timestamps: List of timestamps
+        Run backtest for single-asset strategy (Fractional Holding).
+        strategy.get_action() => fraction in [0,1].
         """
         if self.data is None:
             raise ValueError("No data provided for backtesting")
@@ -422,36 +397,31 @@ class BaseBacktester:
                 current_data = self.data.iloc[i].copy()
                 timestamp = current_data.name
 
-                # Get strategy action
+                # 1) get fraction in [0,1]
                 try:
-                    action = strategy.get_action(window_data)
-                    if not isinstance(action, (int, float, np.ndarray)):
-                        self.logger.warning(
-                            f"Invalid action type: {type(action)}, expected float"
-                        )
-                        continue
-                    action = float(action)  # Ensure action is float
+                    raw_action = strategy.get_action(window_data)
+                    # clamp
+                    action = float(np.clip(raw_action, 0.0, 1.0))
                 except Exception as e:
                     self.logger.error(
                         f"Error getting action from strategy: {str(e)}"
                     )
                     continue
 
-                # Execute trade
-                price_data = {
-                    'default': current_data['$close']  # For single-asset mode
-                }
+                # 2) do trade
+                price_data = {"default": current_data["$close"]}
                 trade_result = self.execute_trade(
                     timestamp=timestamp,
                     action=action,
-                    price_data=price_data
+                    price_data=price_data,
+                    asset="default"
                 )
 
-                # Update portfolio value even if trade was skipped
-                if 'portfolio_value' not in trade_result:
-                    portfolio_value = self.get_portfolio_value(price_data)
-                    self.portfolio_history.append(portfolio_value)
-                    self.peak_value = max(self.peak_value, portfolio_value)
+                # 3) if we didn't store portfolio_value in trade_result, update manually
+                if "portfolio_value" not in trade_result:
+                    pv = self.get_portfolio_value(price_data)
+                    self.portfolio_history.append(pv)
+                    self.peak_value = max(self.peak_value, pv)
 
                 if verbose and i % 100 == 0:
                     self.logger.info(f"Progress: {i}/{len(self.data)}")
@@ -460,20 +430,14 @@ class BaseBacktester:
             self.logger.error(f"Error during backtest: {str(e)}")
             raise
 
-        # Calculate metrics
+        # final metrics
         metrics = self._calculate_metrics()
 
-        # Ensure portfolio values match the data length
+        # align length
         expected_length = len(self.data) - window_size + 1
         if len(self.portfolio_history) < expected_length:
-            last_value = (
-                self.portfolio_history[-1]
-                if self.portfolio_history
-                else self.initial_capital
-            )
-            self.portfolio_history.extend(
-                [last_value] * (expected_length - len(self.portfolio_history))
-            )
+            last_value = self.portfolio_history[-1] if self.portfolio_history else self.initial_capital
+            self.portfolio_history.extend([last_value]*(expected_length - len(self.portfolio_history)))
         elif len(self.portfolio_history) > expected_length:
             self.portfolio_history = self.portfolio_history[:expected_length]
 
@@ -482,75 +446,70 @@ class BaseBacktester:
             "trades": self.trades,
             "portfolio_values": self.portfolio_history,
             "timestamps": self.data.index[window_size - 1 :].tolist(),
-        } 
+        }
 
     def _calculate_metrics(self) -> Dict[str, float]:
         """
         Calculate trading performance metrics.
-        
-        Returns:
-            Dict containing:
-            - total_return: Total return percentage
-            - sharpe_ratio: Annualized Sharpe ratio
-            - sortino_ratio: Annualized Sortino ratio
-            - max_drawdown: Maximum drawdown percentage
-            - total_trades: Number of trades
-            - win_rate: Percentage of profitable trades
-            - final_balance: Final cash balance
-            - final_portfolio_value: Final portfolio value
         """
         try:
             values = np.array(self.portfolio_history)
+            if len(values) < 2:
+                return {
+                    'total_return': 0,
+                    'sharpe_ratio': 0,
+                    'sortino_ratio': 0,
+                    'max_drawdown': 0,
+                    'total_trades': len(self.trades),
+                    'win_rate': 0,
+                    'final_balance': self.cash,
+                    'final_portfolio_value': self.cash,
+                }
+
             returns = np.diff(values) / values[:-1]
             
-            # Total return
             total_return = (values[-1] - values[0]) / values[0]
             
-            # Annualized Sharpe Ratio (assuming daily data)
-            excess_returns = returns  # Assuming 0 risk-free rate
-            sharpe_ratio = np.sqrt(252) * np.mean(excess_returns) / np.std(excess_returns) if len(returns) > 1 else 0
+            if len(returns) > 1 and np.std(returns)>0:
+                sharpe_ratio = np.sqrt(252) * np.mean(returns) / np.std(returns)
+            else:
+                sharpe_ratio = 0.0
             
-            # Sortino Ratio (using downside deviation)
-            downside_returns = excess_returns[excess_returns < 0]
-            sortino_ratio = np.sqrt(252) * np.mean(excess_returns) / np.std(downside_returns) if len(downside_returns) > 1 else 0
+            downside_returns = returns[returns < 0]
+            if len(downside_returns) > 0 and np.std(downside_returns)>0:
+                sortino_ratio = (
+                    np.sqrt(252) * np.mean(returns) / np.std(downside_returns)
+                )
+            else:
+                sortino_ratio = 0.0
             
-            # Maximum drawdown
+            # max drawdown
             peak = values[0]
-            max_drawdown = 0
+            max_dd = 0.0
+            for val in values[1:]:
+                if val>peak:
+                    peak=val
+                dd = (peak-val)/peak
+                max_dd = max(max_dd, dd)
             
-            for value in values[1:]:
-                if value > peak:
-                    peak = value
-                drawdown = (peak - value) / peak
-                max_drawdown = min(max_drawdown, -drawdown)  # Negative drawdown
-            
-            # Win rate
             profitable_trades = sum(
                 1
-                for trade in self.trades
-                if (
-                    'revenue' in trade
-                    and trade['revenue'] > trade.get('cost', 0)
-                )
-                or (
-                    'cost' in trade
-                    and trade['cost'] < trade.get('revenue', float('inf'))
-                )
+                for t in self.trades
+                if t["success"] and t["profit"] > 0
             )
             total_trades = len(self.trades)
-            win_rate = profitable_trades / total_trades if total_trades > 0 else 0
+            win_rate = (profitable_trades / total_trades) if total_trades>0 else 0.0
             
             return {
                 'total_return': total_return,
                 'sharpe_ratio': sharpe_ratio,
                 'sortino_ratio': sortino_ratio,
-                'max_drawdown': -max_drawdown,  # Return positive drawdown
+                'max_drawdown': max_dd,  # positive
                 'total_trades': total_trades,
                 'win_rate': win_rate,
                 'final_balance': self.cash,
-                'final_portfolio_value': values[-1] if len(values) > 0 else self.cash,
+                'final_portfolio_value': values[-1]
             }
-            
         except Exception as e:
             self.logger.error(f"Error calculating metrics: {str(e)}")
             return {
@@ -562,17 +521,13 @@ class BaseBacktester:
                 'win_rate': 0,
                 'final_balance': self.cash,
                 'final_portfolio_value': self.cash,
-            } 
+            }
 
     def get_returns(self) -> pd.Series:
         """
         Calculate returns series.
-        
-        Returns:
-            pd.Series: Historical returns with timestamps as index
         """
-        returns = pd.Series(self.portfolio_history)
-        returns = returns.pct_change()
+        returns = pd.Series(self.portfolio_history).pct_change()
         if self.current_timestamp is not None:
             returns.index = pd.date_range(
                 start=self.current_timestamp - pd.Timedelta(days=len(returns) - 1),
@@ -584,21 +539,14 @@ class BaseBacktester:
     def get_trade_history(self) -> pd.DataFrame:
         """
         Get trade history as DataFrame.
-        
-        Returns:
-            pd.DataFrame: All trades with details
         """
         if not self.trades:
             return pd.DataFrame()
-        
         return pd.DataFrame(self.trades)
     
     def get_position_history(self) -> pd.DataFrame:
         """
         Get position value history for each asset.
-        
-        Returns:
-            pd.DataFrame: Position values over time with timestamps as index
         """
         position_values = []
         if self.current_timestamp is not None:
@@ -609,13 +557,13 @@ class BaseBacktester:
             )
         else:
             timestamps = range(len(self.portfolio_history))
-            
+        
         for timestamp, portfolio_value in zip(timestamps, self.portfolio_history):
-            values = {'timestamp': timestamp, 'total': portfolio_value}
-            values.update(self.positions)
-            position_values.append(values)
+            row = {'timestamp': timestamp, 'total': portfolio_value}
+            row.update(self.positions)
+            position_values.append(row)
             
-        return pd.DataFrame(position_values).set_index('timestamp') 
+        return pd.DataFrame(position_values).set_index('timestamp')
 
     def run_scenario(
         self,
@@ -625,17 +573,8 @@ class BaseBacktester:
         verbose: bool = True,
         **scenario_params
     ) -> Dict[str, Any]:
-        """Run backtest with a specific scenario
-        
-        Args:
-            strategy: Trading strategy to test
-            scenario_type (str): Type of scenario ('flash_crash' or 'low_liquidity')
-            window_size (int): Lookback window size for strategy
-            verbose (bool): Whether to print progress
-            **scenario_params: Parameters for scenario generation
-            
-        Returns:
-            Dict[str, Any]: Results including scenario-specific metrics
+        """
+        Run backtest with a specific scenario (flash_crash, low_liquidity).
         """
         from .scenario import (
             generate_flash_crash_data,
@@ -654,13 +593,10 @@ class BaseBacktester:
         else:
             raise ValueError(f"Unknown scenario type: {scenario_type}")
         
-        # Run standard backtest
         results = self.run(strategy, window_size, verbose)
         
-        # Add scenario-specific metrics
         results["scenario_metrics"] = metric_fn(results)
         results["scenario_type"] = scenario_type
-        
         return results
 
     def plot_scenario_results(
@@ -668,12 +604,7 @@ class BaseBacktester:
         results: Dict,
         save_path: str = None
     ):
-        """Plot results with scenario-specific annotations
-        
-        Args:
-            results (Dict): Results from run_scenario
-            save_path (str, optional): Path to save plot
-        """
+        """Plot results with scenario-specific annotations."""
         from .scenario import plot_scenario_results
         plot_scenario_results(
             results=results,
@@ -686,12 +617,7 @@ class BaseBacktester:
         results: Dict,
         save_dir: str
     ):
-        """Save scenario-specific results and plots
-        
-        Args:
-            results (Dict): Results from run_scenario
-            save_dir (str): Directory to save results
-        """
+        """Save scenario-specific results and plots."""
         save_dir = Path(save_dir)
         save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -711,4 +637,13 @@ class BaseBacktester:
             save_path=str(save_dir / f"{results['scenario_type']}_plot.png")
         )
 
-        logger.info(f"Scenario results saved to {save_dir}") 
+        logger.info(f"Scenario results saved to {save_dir}")
+
+    def save_results(self, results: Dict, save_dir: Path):
+        """Helper to save backtest results (trades, portfolio, etc.) to CSV."""
+        save_dir.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(results["trades"]).to_csv(save_dir / "trades.csv", index=False)
+        pd.DataFrame({"portfolio_values": results["portfolio_values"]}).to_csv(save_dir / "portfolio.csv", index=False)
+        pd.DataFrame({"timestamps": results["timestamps"]}).to_csv(save_dir / "timestamps.csv", index=False)
+        pd.DataFrame([results["metrics"]]).to_csv(save_dir / "metrics.csv", index=False)
+        logger.info(f"Backtest results saved to {save_dir}")

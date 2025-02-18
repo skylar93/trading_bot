@@ -73,15 +73,15 @@ class TestScenarios(unittest.TestCase):
             def get_action(self, window_data):
                 """Always maintain full long position until crash"""
                 if len(window_data) < 2:
-                    return 1.0  # Start with full position
+                    return 0.99  # Start with full position
                     
                 current_price = window_data["$close"].iloc[-1]
                 prev_price = window_data["$close"].iloc[-2]
                 price_change = (current_price - prev_price) / prev_price
                 
                 if price_change < -0.1:  # If big drop detected
-                    return -1.0  # Exit position
-                return 1.0  # Otherwise maintain full position
+                    return 0.0  # Exit position
+                return 0.99  # Otherwise maintain full position
         
         # Run backtest with scenario data
         results = self.backtester.run_scenario(
@@ -351,15 +351,15 @@ def test_flash_crash_scenario():
         def get_action(self, window_data):
             """Always maintain full long position until crash"""
             if len(window_data) < 2:
-                return 1.0  # Start with full position
+                return 0.99  # Start with full position
                 
             current_price = window_data["$close"].iloc[-1]
             prev_price = window_data["$close"].iloc[-2]
             price_change = (current_price - prev_price) / prev_price
             
             if price_change < -0.1:  # If big drop detected
-                return -1.0  # Exit position
-            return 1.0  # Otherwise maintain full position
+                return 0.0  # Exit position
+            return 0.99  # Otherwise maintain full position
     
     results = backtester.run_scenario(
         strategy=CrashTestStrategy(),

@@ -2,9 +2,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.distributions import Normal, kl_divergence
+from torch.distributions import Normal
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, Any
 import logging
 from agents.base.base_agent import BaseAgent
 from agents.models.architectures.mlp import PolicyNetwork
@@ -202,14 +202,22 @@ class PPOAgent(BaseAgent):
             action_mean, action_std = self.network(state_tensor)
 
             if deterministic:
-                action = action_mean
+                raw_action = action_mean
             else:
                 dist = Normal(action_mean, action_std)
-                action = dist.sample()
+                raw_action = dist.sample()
 
             # Ensure action is a numpy array with shape (1,)
-            action = action.clamp(-1, 1).cpu().numpy()
-            return action.reshape(1)
+            # action = action.clamp(-1, 1).cpu().numpy()
+            # return action.reshape(1)
+            # 1) clamp raw_action in [-1,1]
+            raw_action = raw_action.clamp(-1.0, 1.0)
+
+            # 2) transform to [0,1]
+            fractional_action = (raw_action + 1.0) / 2.0
+
+            # Return numpy scalar
+            return fractional_action.cpu().numpy().reshape(1)
 
     def predict(self, state: np.ndarray, deterministic: bool = False) -> np.ndarray:
         """Alias for get_action to maintain compatibility with stable-baselines3 style API"""

@@ -61,45 +61,47 @@ def test_multi_asset_mode():
 def test_trading_fees():
     """Test proper handling of trading fees"""
     initial_capital = 10000.0
-    fee_rate = 0.01  # 1% fee
+    fee_rate = 0.01
     backtester = BaseBacktester(
         initial_capital=initial_capital,
-        trading_fee=fee_rate,  # 1% fee for clear impact
+        trading_fee=fee_rate,
         max_position=1.0
     )
     
-    # Buy with significant fee
     price = 100.0
     timestamp = pd.Timestamp('2023-01-01')
+    # 1) action=0.99
     result = backtester.update(
         timestamp=timestamp,
         prices={'default': price},
-        actions={'default': 1.0}  # Full position
+        actions={'default': 0.99}
     )
     
-    # Calculate expected values
-    # For a full position with 1% fee:
-    # If x is the trade value, then x + 0.01x = 10000
-    # 1.01x = 10000
-    # x = 10000/1.01
-    trade_value = initial_capital / (1 + fee_rate)
-    expected_fee = trade_value * fee_rate
-    expected_position_units = trade_value / price
-    expected_cash = initial_capital - trade_value - expected_fee  # Should be close to 0
-    expected_portfolio_value = (expected_position_units * price)  # Current position value
-    
-    # Verify fee calculation
+    # 2) test with leftover=1.0
+    # trade_value = ~9900
+    # fee = ~99
+    # leftover = 10000 - (9900 + 99) = 1
+    # 1) trade_value: 0.99 * 10000 = 9900
+    trade_value = initial_capital * 0.99
+
+    # 2) fee
+    expected_fee = trade_value * fee_rate  # ~99
+
+    # 3) leftover cash
+    expected_cash = initial_capital - trade_value - expected_fee  # = 1.0
+
+    # 4) units
+    expected_position_units = trade_value / price  # = 9900 / 100 => 99
+
+    # 5) portfolio_value
+    expected_portfolio_value = expected_position_units * price  # = 9900
+
     assert result['trades']['default']['fee'] == pytest.approx(expected_fee, rel=1e-2)
-    
-    # Verify position
     assert backtester.positions['default']['units'] == pytest.approx(expected_position_units, rel=1e-2)
-    
-    # Verify cash balance
-    assert backtester.cash == pytest.approx(expected_cash, rel=1e-2)
-    
-    # Verify portfolio value
+    # leftover = 1.0
+    assert backtester.cash == pytest.approx(expected_cash, rel=1e-2)  # 1.0
     assert backtester.portfolio_history[-1] == pytest.approx(expected_portfolio_value, rel=1e-2)
-    assert backtester.portfolio_history[-1] < initial_capital  # Should be less due to fees
+    assert backtester.portfolio_history[-1] < initial_capital
 
 def test_position_limits():
     """Test max position size limits"""
@@ -109,16 +111,16 @@ def test_position_limits():
         max_position=0.5  # 50% max position
     )
     
-    # Try to take full position
     timestamp = pd.Timestamp('2023-01-01')
+    # 수정: action=0.5 => 50% 코인
     result = backtester.update(
         timestamp=timestamp,
         prices={'default': 100.0},
-        actions={'default': 1.0}  # Try full position
+        actions={'default': 0.5}
     )
     
-    # Should be limited to 50%
     position_value = backtester.positions['default']['units'] * 100.0
+    # 이제 실제로 50% (대략 5000) 매수
     assert position_value == pytest.approx(5000.0, rel=1e-2)
 
 def test_insufficient_funds():
@@ -166,9 +168,9 @@ def test_buy_sell_sequence():
     ]
     
     actions = [
-        {"BTC": 0.5, "ETH": 0.3},     # Buy both
-        {"BTC": -0.2, "ETH": 0.2},    # Reduce BTC, increase ETH
-        {"BTC": -1.0, "ETH": -1.0},   # Sell all (changed from 0.0 to -1.0)
+        {"BTC": 0.5, "ETH": 0.3},  # Day1: 50% BTC, 30% ETH
+        {"BTC": 0.3, "ETH": 0.5},  # Day2: reduce BTC to 30%, increase ETH to 50%
+        {"BTC": 0.0, "ETH": 0.0},  # Day3: fully close both
     ]
     
     portfolio_values = []

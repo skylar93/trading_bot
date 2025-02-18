@@ -148,11 +148,12 @@ def test_drawdown_limits():
     )
     
     # Take initial position
+    # Day1: Buy position (action=0.99 instead of 1.0)
     timestamp = data.index[0]
     price = 100.0  # Use fixed price for predictable math
     result1 = backtester.execute_trade(
         timestamp=timestamp,
-        action=1.0,  # Full position
+        action=0.99,   
         price_data={'default': price},
         asset='default'
     )
