@@ -6,12 +6,10 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 import logging
-from utils.backtest import BacktestManager
+from utils.backtest import BacktestManager, logger  # Import the shared logger
 from components.charts import create_price_chart, create_portfolio_chart
 from components.metrics import display_trading_metrics
 from training.backtesting.scenario_manager import ScenarioManager
-
-logger = logging.getLogger(__name__)
 
 def display_scenario_metrics(scenario_type: str, metrics: dict):
     """Display scenario-specific metrics in a formatted way"""
@@ -166,6 +164,11 @@ def main():
             run_backtest = st.button("Run Backtest")
         
         if run_backtest:
+            # Debug log selected settings
+            logger.info("Selected agent: %s", agent_name)
+            logger.info("Selected scenario: %s", scenario_type)
+            logger.info("Scenario params: %s", scenario_params)
+            
             # Create settings dictionary
             settings = {
                 "start_date": start_date,
@@ -183,24 +186,36 @@ def main():
             scenario_manager = ScenarioManager()
             
             # Stage 1: Load raw market data
+            logger.info("Loading market data...")
             raw_data = backtest_manager.load_market_data()
             if raw_data is None:
                 st.error("Failed to load market data")
                 return
+            logger.info("Loaded market data shape: %s", raw_data.shape)
                 
             # Stage 2: Apply scenario transformation
             try:
+                logger.info("Applying scenario transformation...")
                 modified_data = scenario_manager.apply_scenario(
                     raw_data=raw_data,
                     scenario_type=scenario_type,  # Now using internal string directly
                     params=scenario_params
                 )
+                logger.info("Modified data shape: %s", modified_data.shape)
             except ValueError as e:
                 st.error(f"Error applying scenario: {str(e)}")
                 return
                 
             # Stage 3: Run backtest
+            logger.info("Running backtest with agent: %s", agent_name)
             results = backtest_manager.run_backtest(modified_data)
+            
+            # Debug log results
+            if "portfolio_values" in results:
+                final_value = results["portfolio_values"][-1] if results["portfolio_values"] else None
+                logger.info("Final portfolio value: %.2f", final_value)
+                logger.info("Total trades: %d", len(results.get("trades", [])))
+                logger.info("Portfolio history length: %d", len(results.get("portfolio_values", [])))
             
             # Display results
             col1, col2 = st.columns(2)
@@ -210,8 +225,10 @@ def main():
                 portfolio_chart = create_portfolio_chart(results.get("portfolio_values", []))
                 if portfolio_chart:
                     st.plotly_chart(portfolio_chart, use_container_width=True)
+                    logger.info("Successfully created portfolio chart")
                 else:
                     st.warning("No portfolio data available")
+                    logger.warning("Failed to create portfolio chart - no data")
             
             with col2:
                 st.subheader("Trading Metrics")
@@ -222,13 +239,76 @@ def main():
             price_chart = create_price_chart(modified_data)  # Use modified data for chart
             if price_chart:
                 st.plotly_chart(price_chart, use_container_width=True)
+                logger.info("Successfully created price chart")
             
             # Display trade list
             trades = results.get("trades", [])
             if trades:
-                st.dataframe(pd.DataFrame(trades))
+                trades_df = pd.DataFrame(trades)
+                
+                # Define column order and formatting
+                display_columns = [
+                    "timestamp", "symbol", "type", "amount", "price",
+                    "profit", "cumulative_pnl", "portfolio_value_after",
+                    "position_units", "position_value", "cash_after",
+                    "fee", "success", "reason"
+                ]
+                
+                # Only use columns that exist in the DataFrame
+                display_columns = [col for col in display_columns if col in trades_df.columns]
+                trades_df = trades_df[display_columns]
+                
+                # Format numeric columns
+                if "price" in trades_df.columns:
+                    trades_df["price"] = trades_df["price"].map("${:,.2f}".format)
+                if "profit" in trades_df.columns:
+                    trades_df["profit"] = trades_df["profit"].map("${:,.2f}".format)
+                if "cumulative_pnl" in trades_df.columns:
+                    trades_df["cumulative_pnl"] = trades_df["cumulative_pnl"].map("${:,.2f}".format)
+                if "portfolio_value_after" in trades_df.columns:
+                    trades_df["portfolio_value_after"] = trades_df["portfolio_value_after"].map("${:,.2f}".format)
+                if "position_value" in trades_df.columns:
+                    trades_df["position_value"] = trades_df["position_value"].map("${:,.2f}".format)
+                if "cash_after" in trades_df.columns:
+                    trades_df["cash_after"] = trades_df["cash_after"].map("${:,.2f}".format)
+                if "fee" in trades_df.columns:
+                    trades_df["fee"] = trades_df["fee"].map("${:,.4f}".format)
+                if "position_units" in trades_df.columns:
+                    trades_df["position_units"] = trades_df["position_units"].map("{:,.6f}".format)
+                
+                # Display with Streamlit's column configuration
+                st.dataframe(
+                    trades_df,
+                    column_config={
+                        "timestamp": st.column_config.DatetimeColumn(
+                            "Time",
+                            format="DD/MM/YY HH:mm:ss"
+                        ),
+                        "type": st.column_config.TextColumn(
+                            "Type",
+                            width="small"
+                        ),
+                        "symbol": st.column_config.TextColumn(
+                            "Symbol",
+                            width="small"
+                        ),
+                        "success": st.column_config.CheckboxColumn(
+                            "Success",
+                            width="small",
+                            help="Whether the trade was successful"
+                        ),
+                        "reason": st.column_config.TextColumn(
+                            "Reason",
+                            width="medium"
+                        )
+                    },
+                    hide_index=True,
+                    use_container_width=True
+                )
+                logger.info("Displayed %d trades", len(trades))
             else:
                 st.info("No trades to display")
+                logger.warning("No trades in results")
                 
     except Exception as e:
         logger.error(f"Error in backtest page: {str(e)}", exc_info=True)

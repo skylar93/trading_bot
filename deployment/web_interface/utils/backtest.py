@@ -11,40 +11,80 @@ from training.backtesting.risk_aware_backtester import RiskAwareBacktester
 from training.backtesting.risk_manager import RiskManager, RiskConfig
 from agents.strategies.agent_factory import create_agent
 
-logger = logging.getLogger(__name__)
+def setup_logging():
+    """Configure logging with proper handlers and levels"""
+    # Use a flag to check if logging has already been set up
+    logger_name = "backtest_logger"
+    logger = logging.getLogger(logger_name)
+    
+    # If logger already has handlers, assume it's configured
+    if logger.handlers:
+        return logger
+        
+    # Remove any existing handlers from root logger
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+        
+    # Configure console handler for INFO level
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.DEBUG)
+    console_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    console_handler.setFormatter(console_formatter)
+    
+    # Configure file handler for DEBUG level
+    file_handler = logging.FileHandler('backtest_debug.log')
+    file_handler.setLevel(logging.DEBUG)
+    file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(file_formatter)
+    
+    # Set up logger
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
+    
+    # Prevent propagation to root logger to avoid duplicate logs
+    logger.propagate = False
+    
+    return logger
+
+# Initialize logger only once
+logger = setup_logging()
 
 class BacktestManager:
     """Manage backtest execution and results"""
     
     def __init__(self, settings: Dict[str, Any]):
         self.settings = settings
-        self.logger = logging.getLogger(self.__class__.__name__)
-        self.logger.info("Initializing BacktestManager with settings: %s", settings)
+        self.logger = logger  # Use the singleton logger instance
+        self.logger.debug("Initializing BacktestManager with settings: %s", settings)
         
         self.risk_config = RiskConfig(
-            max_position_size=settings["max_position_size"] / 100.0,  # Convert from percentage
-            stop_loss_pct=settings["stop_loss"] / 100.0,  # Convert from percentage
+            max_position_size=settings["max_position_size"] / 100.0,
+            stop_loss_pct=settings["stop_loss"] / 100.0,
             max_drawdown_pct=0.15,
             daily_trade_limit=1000,
             var_confidence_level=0.95,
             portfolio_var_limit=0.02,
             max_correlation=0.7
         )
-        self.logger.info("Risk config initialized: %s", vars(self.risk_config))
+        self.logger.debug("Risk config initialized: %s", vars(self.risk_config))
         
         # Create agent using factory
         agent_name = settings.get("agent_name", "Dummy")
         agent_config = settings.get("agent_config", {})
+        self.logger.debug("Creating agent: %s with config: %s", agent_name, agent_config)
         self.agent = create_agent(agent_name, config=agent_config)
-        self.logger.info(f"{agent_name} agent initialized")
+        self.logger.info("Agent created: %s", agent_name)
         
     def load_market_data(self) -> Optional[pd.DataFrame]:
-        """Load market data for backtesting
-        
-        Returns:
-            DataFrame with OHLCV data or None if loading fails
-        """
+        """Load market data for backtesting"""
         try:
+            self.logger.info("Loading market data for %s from %s to %s", 
+                           self.settings["trading_pair"],
+                           self.settings["start_date"],
+                           self.settings["end_date"])
+            
             import ccxt
             
             # Initialize exchange
@@ -97,19 +137,30 @@ class BacktestManager:
             df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
             df.set_index("timestamp", inplace=True)
             
-            self.logger.info(f"Successfully loaded {len(df)} data points")
+            self.logger.info("Successfully loaded %d data points", len(df))
+            self.logger.debug("Data head: %s", df.head())
             return df
             
         except Exception as e:
-            self.logger.error(f"Error loading market data: {str(e)}", exc_info=True)
+            self.logger.error("Error loading market data: %s", str(e), exc_info=True)
             return None
     
     def run_backtest(self, data: pd.DataFrame) -> Dict[str, Any]:
         """Run backtest with the current agent"""
         try:
-            self.logger.info("Starting backtest with data shape: %s", data.shape)
+            self.logger.info("Starting backtest - Agent: %s, Data period: %s to %s",
+                           self.settings.get("agent_name"),
+                           data.index[0].strftime('%Y-%m-%d'),
+                           data.index[-1].strftime('%Y-%m-%d'))
             
             # Initialize backtester with risk config
+            risk_config_summary = {
+                "max_position": f"{self.risk_config.max_position_size*100}%",
+                "stop_loss": f"{self.risk_config.stop_loss_pct*100}%",
+                "max_drawdown": f"{self.risk_config.max_drawdown_pct*100}%"
+            }
+            self.logger.info("Risk config: %s", risk_config_summary)
+            
             backtester = RiskAwareBacktester(
                 data=data,
                 risk_config=self.risk_config,
@@ -124,13 +175,13 @@ class BacktestManager:
                 verbose=True
             )
             
-            # Process results to ensure all required metrics
-            if "metrics" not in results:
-                results["metrics"] = {}
-            
-            # Update portfolio values with timestamps
+            # Process results
             portfolio_values = results.get("portfolio_values", [])
             if portfolio_values:
+                self.logger.info("Backtest completed - Portfolio values: %d, Final value: $%.2f",
+                               len(portfolio_values),
+                               portfolio_values[-1])
+                
                 # Create timestamps for each portfolio value
                 timestamps = pd.date_range(
                     start=data.index[0],
@@ -141,87 +192,64 @@ class BacktestManager:
                     {"timestamp": ts, "value": val}
                     for ts, val in zip(timestamps, portfolio_values)
                 ]
+            else:
+                self.logger.warning("No portfolio values in results")
             
-            # Update metrics
+            # Update and log metrics
+            results["metrics"] = results.get("metrics", {})
             results["metrics"].update(self._process_results(results))
             
-            # Log final results
-            self.logger.info("Backtest completed")
-            self.logger.info("Final portfolio value: %.2f", results.get("portfolio_values", [])[-1])
-            self.logger.info("Total trades: %d", len(results.get("trades", [])))
+            # Log key performance metrics
+            metrics = results["metrics"]
+            self.logger.info("Performance Metrics:")
+            self.logger.info("- Total Return: %.2f%%", metrics.get("total_return", 0) * 100)
+            self.logger.info("- Sharpe Ratio: %.3f", metrics.get("sharpe_ratio", 0))
+            self.logger.info("- Max Drawdown: %.2f%%", metrics.get("max_drawdown", 0) * 100)
+            self.logger.info("- Total Trades: %d", metrics.get("total_trades", 0))
+            self.logger.info("- Win Rate: %.2f%%", metrics.get("win_rate", 0) * 100)
             
             return results
             
         except Exception as e:
-            self.logger.error(f"Error running backtest: {str(e)}", exc_info=True)
-            return {
-                "error": str(e),
-                "portfolio_values": [],
-                "trades": [],
-                "metrics": self._process_results({"trades": [], "portfolio_values": []})
-            }
+            self.logger.error("Backtest failed: %s", str(e), exc_info=True)
+            raise
     
     def _process_results(self, results: Dict[str, Any]) -> Dict[str, Any]:
         """Process backtest results and calculate metrics"""
-        metrics = {}
-        
-        if "trades" in results and results["trades"]:
-            trades = results["trades"]
-            pnls = [t.get("pnl", 0.0) for t in trades]
+        try:
+            metrics = {}
+            trades = results.get("trades", [])
+            portfolio_values = results.get("portfolio_values", [])
             
-            # Calculate basic metrics
-            total_pnl = sum(pnls)
-            profitable_trades = sum(1 for pnl in pnls if pnl > 0)
-            total_trades = len(trades)
+            if trades:
+                # Calculate basic metrics
+                profitable_trades = sum(1 for t in trades if t.get("pnl", 0) > 0)
+                total_trades = len(trades)
+                win_rate = (profitable_trades / total_trades * 100) if total_trades > 0 else 0
+                
+                metrics.update({
+                    "total_trades": total_trades,
+                    "win_rate": win_rate,
+                    "avg_trade": sum(t.get("pnl", 0) for t in trades) / total_trades if total_trades > 0 else 0
+                })
             
-            # Calculate profit factor
-            winning_pnls = [pnl for pnl in pnls if pnl > 0]
-            losing_pnls = [abs(pnl) for pnl in pnls if pnl < 0]
-            total_profits = sum(winning_pnls) if winning_pnls else 0
-            total_losses = sum(losing_pnls) if losing_pnls else 0
-            profit_factor = total_profits / total_losses if total_losses > 0 else float('inf') if total_profits > 0 else 0.0
+            if portfolio_values:
+                # Calculate portfolio metrics
+                returns = pd.Series([float(v) for v in portfolio_values]).pct_change().dropna()
+                if len(returns) > 0:
+                    sharpe_ratio = np.sqrt(252) * (returns.mean() / returns.std()) if returns.std() != 0 else 0
+                    max_drawdown = ((pd.Series(portfolio_values).cummax() - pd.Series(portfolio_values)) 
+                                  / pd.Series(portfolio_values).cummax()).max() * 100
+                    
+                    metrics.update({
+                        "sharpe_ratio": sharpe_ratio,
+                        "max_drawdown": max_drawdown,
+                        "total_return": ((portfolio_values[-1] / portfolio_values[0]) - 1) * 100
+                    })
             
-            # Calculate average trade
-            avg_trade = total_pnl / total_trades if total_trades > 0 else 0.0
+            self.logger.info("Processed metrics: %s", metrics)
+            return metrics
             
-            metrics.update({
-                "total_return": total_pnl / self.settings.get("initial_balance", 10000.0),
-                "sharpe_ratio": self._calculate_sharpe_ratio(pnls) if pnls else 0.0,
-                "max_drawdown": self._calculate_max_drawdown(results.get("portfolio_values", [])),
-                "win_rate": (profitable_trades / total_trades * 100) if total_trades > 0 else 0.0,
-                "total_trades": total_trades,
-                "profitable_trades": profitable_trades,
-                "total_pnl": total_pnl,
-                "profit_factor": profit_factor,
-                "avg_trade": avg_trade
-            })
-        
-        return metrics
-    
-    def _calculate_sharpe_ratio(self, pnls: List[float]) -> float:
-        """Calculate Sharpe ratio from PnL values"""
-        if not pnls or len(pnls) < 2:
-            return 0.0
-            
-        returns = pd.Series(pnls)
-        std = returns.std()
-        if std == 0:
-            return 0.0
-            
-        return (returns.mean() / std) * np.sqrt(252)  # Annualized
-        
-    def _calculate_max_drawdown(self, portfolio_values: List[float]) -> float:
-        """Calculate maximum drawdown from portfolio values"""
-        if not portfolio_values:
-            return 0.0
-            
-        peak = portfolio_values[0]
-        max_dd = 0.0
-        
-        for value in portfolio_values:
-            if value > peak:
-                peak = value
-            dd = (peak - value) / peak
-            max_dd = max(max_dd, dd)
-            
-        return max_dd 
+        except Exception as e:
+            self.logger.error("Error processing results: %s", str(e), exc_info=True)
+            return {} 

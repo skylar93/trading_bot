@@ -4,7 +4,6 @@ Main Streamlit application for Trading Bot with enhanced debugging capabilities
 
 import os
 import sys
-import logging
 import asyncio
 from datetime import datetime
 
@@ -15,18 +14,7 @@ sys.path.insert(0, project_root)
 import streamlit as st
 from pages.Live_Trading import render_live_trading
 from utils.state import init_session_state
-
-# Configure logging
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler(os.path.join("logs", "app.log"), mode="a"),
-    ],
-)
-
-logger = logging.getLogger(__name__)
+from utils.backtest import logger  # Import the shared logger
 
 async def main():
     """Main application entry point with error handling"""

@@ -180,15 +180,6 @@ class BaseBacktester:
         """
         Fractional Holding version:
         action in [0,1] => fraction of total portfolio to hold in this asset.
-        
-        Steps:
-          1) clamp action in [0,1]
-          2) portfolio_value = self.cash + (old_units * current_price)
-          3) target_coin_value = action * portfolio_value
-          4) diff_value = target_coin_value - current_coin_value
-          5) trade_amount = diff_value / current_price
-          6) if diff_value>0 => buy, else => sell
-          7) risk manager check, cost basis update, fee, etc.
         """
         trade = {
             "timestamp": timestamp,
@@ -204,12 +195,18 @@ class BaseBacktester:
             "action": action,
             "type": "none",
             "value": 0.0,
+            "portfolio_value_before": self.get_portfolio_value(price_data),
+            "portfolio_value_after": 0.0,
+            "cumulative_pnl": 0.0,  # Track cumulative PnL
+            "cash_after": 0.0,  # Track remaining cash
+            "position_units": 0.0,  # Track position size
+            "position_value": 0.0,  # Track position value
         }
 
         if asset not in price_data:
             trade["reason"] = "price_not_available"
             self.trades.append(trade)
-            self.logger.debug(f"[TRADE_SKIP] {asset}: price_not_available")
+            self.logger.debug("[TRADE_SKIP] %s: price_not_available", asset)
             return trade
 
         current_price = price_data[asset]
@@ -278,6 +275,9 @@ class BaseBacktester:
                 trade_value = abs(diff_value)
                 fee = trade_value*self.trading_fee
 
+        # Only log significant trades (value > 1% of portfolio)
+        is_significant = trade_value > (portfolio_value * 0.01)
+
         # BUY
         if diff_value > 0:
             trade["type"] = "buy"
@@ -298,7 +298,6 @@ class BaseBacktester:
             }
             self.cash -= total_cost
 
-            trade["type"] = "buy"
             trade["amount"] = trade_amount
             trade["value"] = trade_value
             trade["fee"] = fee
@@ -307,12 +306,17 @@ class BaseBacktester:
             trade["profit"] = 0.0
             trade["success"] = True
 
+            if is_significant:
+                self.logger.info(
+                    "[BUY] %s: Amount=%.6f, Price=$%.2f, Total=$%.2f, Fee=$%.2f",
+                    asset, trade_amount, current_price, total_cost, fee
+                )
+
         else:
             # SELL
             trade["type"] = "sell"
             sell_amount = abs(trade_amount)
-            if sell_amount> old_units+1e-12:
-                # can't sell more than we hold => clip
+            if sell_amount > old_units+1e-12:
                 sell_amount = old_units
                 diff_value = sell_amount*current_price
                 trade_value = abs(diff_value)
@@ -332,7 +336,6 @@ class BaseBacktester:
                     "cost_basis": new_cost_basis,
                 }
             else:
-                # fully closed
                 del self.positions[asset]
 
             self.cash += (revenue - fee)
@@ -344,14 +347,38 @@ class BaseBacktester:
             trade["revenue"] = revenue
             trade["profit"] = realized_profit
             trade["success"] = True
-        
-        self.trades.append(trade)
-        self.logger.debug(
-            f"[FRAC_EXECUTE] {asset}: action={action:.3f}, diff_value={diff_value:.2f}, "
-            f"amount={trade['amount']:.6f}, cost={trade['cost']:.2f}, fee={fee:.2f}, "
-            f"cash={self.cash:.2f}"
-        )
 
+            if is_significant:
+                self.logger.info(
+                    "[SELL] %s: Amount=%.6f, Price=$%.2f, Revenue=$%.2f, Profit=$%.2f",
+                    asset, sell_amount, current_price, revenue, realized_profit
+                )
+        
+        # If trade was successful, update portfolio value after and related metrics
+        if trade["success"]:
+            updated_portfolio_value = self.get_portfolio_value(price_data)
+            trade["portfolio_value_after"] = updated_portfolio_value
+            trade["cumulative_pnl"] = updated_portfolio_value - self.initial_capital
+            trade["cash_after"] = self.cash
+            
+            # Track position details
+            if asset in self.positions:
+                pos = self.positions[asset]
+                trade["position_units"] = pos["units"]
+                trade["position_value"] = pos["units"] * current_price
+            else:
+                trade["position_units"] = 0.0
+                trade["position_value"] = 0.0
+        else:
+            # For unsuccessful trades, use before values
+            trade["portfolio_value_after"] = trade["portfolio_value_before"]
+            trade["cumulative_pnl"] = trade["portfolio_value_before"] - self.initial_capital
+            trade["cash_after"] = self.cash
+            trade["position_units"] = self.positions[asset]["units"] if asset in self.positions else 0.0
+            trade["position_value"] = (self.positions[asset]["units"] * current_price) if asset in self.positions else 0.0
+
+        self.trades.append(trade)
+        
         # risk manager post-update
         if self.risk_manager and trade["success"]:
             self.risk_manager.update_after_trade(timestamp)
@@ -371,11 +398,41 @@ class BaseBacktester:
         
         if self.risk_manager:
             current_drawdown = self.risk_manager.update_drawdown(portfolio_value)
-            self.logger.debug(
-                f"Portfolio value: {portfolio_value:.2f}, "
-                f"Peak value: {self.risk_manager.peak_value:.2f}, "
-                f"Drawdown: {current_drawdown:.2%}"
+            
+            # Initialize update counter if not exists
+            if not hasattr(self, '_update_counter'):
+                self._update_counter = 0
+                self._last_logged_value = portfolio_value
+            
+            self._update_counter += 1
+            
+            # Log on significant events:
+            # 1. Significant drawdown (>5%)
+            # 2. Significant value change (>2%)
+            # 3. Every 100 updates
+            should_log = (
+                current_drawdown > 0.05 or  # Significant drawdown
+                abs(portfolio_value - self._last_logged_value) / self._last_logged_value > 0.02 or  # Significant value change
+                self._update_counter % 100 == 0  # Periodic update
             )
+            
+            if should_log:
+                if current_drawdown > 0.05:
+                    self.logger.warning(
+                        "High drawdown: %.2f%% (Portfolio: $%.2f, Peak: $%.2f)",
+                        current_drawdown * 100,
+                        portfolio_value,
+                        self.risk_manager.peak_value
+                    )
+                else:
+                    self.logger.info(
+                        "Portfolio Update - Value: $%.2f (%.2f%% change), Drawdown: %.2f%%",
+                        portfolio_value,
+                        ((portfolio_value - self._last_logged_value) / self._last_logged_value) * 100,
+                        current_drawdown * 100
+                    )
+                self._last_logged_value = portfolio_value
+                
         return portfolio_value
 
     def run(
