@@ -218,16 +218,17 @@ def main():
                 logger.info("Portfolio history length: %d", len(results.get("portfolio_values", [])))
             
             # Display results
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.subheader("Trading Metrics")
-                display_trading_metrics(results.get("metrics", {}))
-            
-            with col2:
-                # Display scenario-specific metrics if scenario is active
-                if scenario_type != "none":
+            st.subheader("Trading Metrics")
+            if scenario_type != "none":
+                # If scenario metrics exist, use two columns
+                col1, col2 = st.columns(2)
+                with col1:
+                    display_trading_metrics(results.get("metrics", {}))
+                with col2:
                     display_scenario_metrics(scenario_type, results.get("scenario_metrics", {}))
+            else:
+                # If no scenario metrics, use full width for trading metrics
+                display_trading_metrics(results.get("metrics", {}))
             
             # Display portfolio value time series
             st.subheader("Portfolio Value Time Series")
@@ -272,35 +273,69 @@ def main():
             if trades:
                 trades_df = pd.DataFrame(trades)
                 
-                # Define column order and formatting
+                # Define exact column order to match the trade dictionary structure
                 display_columns = [
-                    "timestamp", "symbol", "type", "amount", "price",
-                    "profit", "cumulative_pnl", "portfolio_value_after",
-                    "position_units", "position_value", "cash_after",
-                    "fee", "success", "reason"
+                    "timestamp",          # Basic trade info
+                    "symbol",
+                    "type",              # buy/sell
+                    "amount",
+                    "price",
+                    
+                    # Transaction details (in order of calculation)
+                    "fee",               # Transaction fee
+                    "cost",              # For sells: cost basis portion
+                    "revenue",           # For sells: revenue from sale
+                    "profit",            # For sells: revenue - cost - fee
+                    
+                    # Portfolio impact
+                    "portfolio_value_before",
+                    "portfolio_value_after",
+                    "cumulative_pnl",
+                    
+                    # Position details
+                    "position_units",
+                    "position_value",
+                    "cash_after",
+                    
+                    # Status
+                    "success",
+                    "reason"
                 ]
                 
                 # Only use columns that exist in the DataFrame
                 display_columns = [col for col in display_columns if col in trades_df.columns]
                 trades_df = trades_df[display_columns]
                 
-                # Format numeric columns
-                if "price" in trades_df.columns:
-                    trades_df["price"] = trades_df["price"].map("${:,.2f}".format)
-                if "profit" in trades_df.columns:
-                    trades_df["profit"] = trades_df["profit"].map("${:,.2f}".format)
-                if "cumulative_pnl" in trades_df.columns:
-                    trades_df["cumulative_pnl"] = trades_df["cumulative_pnl"].map("${:,.2f}".format)
-                if "portfolio_value_after" in trades_df.columns:
-                    trades_df["portfolio_value_after"] = trades_df["portfolio_value_after"].map("${:,.2f}".format)
-                if "position_value" in trades_df.columns:
-                    trades_df["position_value"] = trades_df["position_value"].map("${:,.2f}".format)
-                if "cash_after" in trades_df.columns:
-                    trades_df["cash_after"] = trades_df["cash_after"].map("${:,.2f}".format)
-                if "fee" in trades_df.columns:
-                    trades_df["fee"] = trades_df["fee"].map("${:,.4f}".format)
-                if "position_units" in trades_df.columns:
-                    trades_df["position_units"] = trades_df["position_units"].map("{:,.6f}".format)
+                # Add debug logging for profit calculation verification
+                for trade in trades:
+                    if trade["type"] == "sell" and trade.get("profit", 0) > 0:
+                        logger.info(
+                            "Profitable sell trade found: fee=%.2f, cost=%.2f, revenue=%.2f, profit=%.2f",
+                            trade.get("fee", 0),
+                            trade.get("cost", 0),
+                            trade.get("revenue", 0),
+                            trade.get("profit", 0)
+                        )
+                
+                # Format numeric columns with clear labels
+                format_cols = {
+                    "price": lambda x: f"${x:,.2f}",
+                    "fee": lambda x: f"Fee: ${x:,.2f}",
+                    "cost": lambda x: f"Cost: ${x:,.2f}",
+                    "revenue": lambda x: f"Rev: ${x:,.2f}",
+                    "profit": lambda x: f"P/L: ${x:,.2f}",
+                    "cumulative_pnl": lambda x: f"Cum.P/L: ${x:,.2f}",
+                    "portfolio_value_before": lambda x: f"${x:,.2f}",
+                    "portfolio_value_after": lambda x: f"${x:,.2f}",
+                    "position_value": lambda x: f"${x:,.2f}",
+                    "cash_after": lambda x: f"${x:,.2f}",
+                    "position_units": lambda x: f"{x:,.6f}"
+                }
+                
+                # Apply formatting only to columns that exist
+                for col, format_func in format_cols.items():
+                    if col in trades_df.columns:
+                        trades_df[col] = trades_df[col].map(format_func)
                 
                 # Display with Streamlit's column configuration
                 st.dataframe(
@@ -318,6 +353,26 @@ def main():
                             "Symbol",
                             width="small"
                         ),
+                        "fee": st.column_config.TextColumn(
+                            "Fee",
+                            width="medium",
+                            help="Transaction fee"
+                        ),
+                        "cost": st.column_config.TextColumn(
+                            "Cost Basis",
+                            width="medium",
+                            help="Portion of original purchase cost"
+                        ),
+                        "revenue": st.column_config.TextColumn(
+                            "Revenue",
+                            width="medium",
+                            help="Amount received from sale"
+                        ),
+                        "profit": st.column_config.TextColumn(
+                            "Profit/Loss",
+                            width="medium",
+                            help="Revenue - Cost - Fee"
+                        ),
                         "success": st.column_config.CheckboxColumn(
                             "Success",
                             width="small",
@@ -331,7 +386,7 @@ def main():
                     hide_index=True,
                     use_container_width=True
                 )
-                logger.info("Displayed %d trades", len(trades))
+                logger.info("Displayed %d trades with corrected column order", len(trades))
             else:
                 st.info("No trades to display")
                 logger.warning("No trades in results")

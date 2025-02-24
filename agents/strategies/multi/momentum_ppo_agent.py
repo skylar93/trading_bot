@@ -241,7 +241,8 @@ class MomentumPPOAgent(PPOAgent):
         # Final defensive clamp to ensure no NaN/inf values escape
         action = np.nan_to_num(action, nan=0.0, posinf=1.0, neginf=-1.0)
         action = np.clip(action, -1.0, 1.0)
-            
+        
+        print(f"Action: {action}")
         return action
     
     def train_step(self, state: np.ndarray, action: np.ndarray, 

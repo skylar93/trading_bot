@@ -45,39 +45,57 @@ def display_portfolio_metrics(portfolio_value: float, initial_balance: float):
         st.error("Failed to display portfolio metrics")
 
 def display_trading_metrics(metrics: Dict):
-    """Display trading performance metrics"""
+    """
+    Display trading performance metrics
+    
+    Args:
+        metrics: Dictionary containing:
+            - total_return: Total return in percentage (e.g., -8.64 means -8.64%)
+            - sharpe_ratio: Annualized Sharpe ratio (not percentage)
+            - sortino_ratio: Annualized Sortino ratio (not percentage)
+            - max_drawdown: Maximum drawdown in percentage (e.g., 15.2 means 15.2%)
+            - total_trades: Number of successful trades (count)
+            - win_rate: Win rate in percentage (e.g., 34.5 means 34.5%)
+            - successful_trades: Number of successfully executed trades (count)
+            - total_trade_attempts: Total number of trade attempts (count)
+            
+    Note:
+        Percentage values are already in percentage form (e.g., 34.5 means 34.5%).
+        We just need to append the '%' symbol for display.
+    """
     try:
         # Create three columns
         col1, col2, col3 = st.columns(3)
 
         with col1:
             st.metric(
-                "Sharpe Ratio",
-                f"{metrics.get('sharpe_ratio', 0):.2f}"
+                "Total Return",
+                f"{metrics.get('total_return', 0):.1f}%",  # Already in percentage form
+                delta_color="normal"
             )
             st.metric(
                 "Win Rate",
-                f"{metrics.get('win_rate', 0):.1f}%"
+                f"{metrics.get('win_rate', 0):.1f}%"  # Already in percentage form
             )
 
         with col2:
             st.metric(
                 "Max Drawdown",
-                f"{metrics.get('max_drawdown', 0):.1f}%"
+                f"{metrics.get('max_drawdown', 0):.1f}%"  # Already in percentage form
             )
             st.metric(
-                "Profit Factor",
-                f"{metrics.get('profit_factor', 0):.2f}"
+                "Sharpe Ratio",
+                f"{metrics.get('sharpe_ratio', 0):.2f}"  # Not a percentage
             )
 
         with col3:
             st.metric(
                 "Total Trades",
-                metrics.get('total_trades', 0)
+                f"{metrics.get('successful_trades', 0)} / {metrics.get('total_trade_attempts', 0)}"  # Counts
             )
             st.metric(
-                "Average Trade",
-                f"${metrics.get('avg_trade', 0):.2f}"
+                "Sortino Ratio",
+                f"{metrics.get('sortino_ratio', 0):.2f}"  # Not a percentage
             )
 
     except Exception as e:

@@ -508,76 +508,105 @@ class BaseBacktester:
     def _calculate_metrics(self) -> Dict[str, float]:
         """
         Calculate trading performance metrics.
+        
+        Returns:
+            Dict[str, float] containing:
+            - total_return: Total return in percentage (e.g., -8.64 means -8.64%)
+            - sharpe_ratio: Annualized Sharpe ratio (not percentage)
+            - sortino_ratio: Annualized Sortino ratio (not percentage)
+            - max_drawdown: Maximum drawdown in percentage (e.g., 15.2 means 15.2%)
+            - total_trades: Number of successful trades (count)
+            - win_rate: Win rate in percentage (e.g., 34.5 means 34.5%)
+            - final_balance: Final cash balance (absolute value)
+            - final_portfolio_value: Final total portfolio value (absolute value)
+            - successful_trades: Number of successfully executed trades (count)
+            - total_trade_attempts: Total number of trade attempts (count)
         """
         try:
             values = np.array(self.portfolio_history)
             if len(values) < 2:
                 return {
-                    'total_return': 0,
-                    'sharpe_ratio': 0,
-                    'sortino_ratio': 0,
-                    'max_drawdown': 0,
-                    'total_trades': len(self.trades),
-                    'win_rate': 0,
-                    'final_balance': self.cash,
-                    'final_portfolio_value': self.cash,
+                    'total_return': 0.0,  # percentage
+                    'sharpe_ratio': 0.0,  # ratio
+                    'sortino_ratio': 0.0,  # ratio
+                    'max_drawdown': 0.0,  # percentage
+                    'total_trades': 0,    # count
+                    'win_rate': 0.0,      # percentage
+                    'final_balance': self.cash,  # absolute value
+                    'final_portfolio_value': self.cash,  # absolute value
+                    'successful_trades': 0,  # count
+                    'total_trade_attempts': len(self.trades)  # count
                 }
 
-            returns = np.diff(values) / values[:-1]
+            returns = np.diff(values) / values[:-1]  # returns as decimals
             
-            total_return = (values[-1] - values[0]) / values[0]
+            # Calculate total return percentage
+            total_return_decimal = (values[-1] / values[0]) - 1  # decimal form (e.g., -0.0864)
+            total_return = total_return_decimal * 100.0  # percentage form (e.g., -8.64)
             
+            # Calculate Sharpe ratio (this is a ratio, not a percentage)
             if len(returns) > 1 and np.std(returns)>0:
                 sharpe_ratio = np.sqrt(252) * np.mean(returns) / np.std(returns)
             else:
                 sharpe_ratio = 0.0
             
+            # Calculate Sortino ratio (this is a ratio, not a percentage)
             downside_returns = returns[returns < 0]
             if len(downside_returns) > 0 and np.std(downside_returns)>0:
-                sortino_ratio = (
-                    np.sqrt(252) * np.mean(returns) / np.std(downside_returns)
-                )
+                sortino_ratio = np.sqrt(252) * np.mean(returns) / np.std(downside_returns)
             else:
                 sortino_ratio = 0.0
             
-            # max drawdown
+            # Calculate max drawdown percentage
             peak = values[0]
-            max_dd = 0.0
+            max_dd_decimal = 0.0  # decimal form (e.g., 0.152)
             for val in values[1:]:
                 if val>peak:
                     peak=val
                 dd = (peak-val)/peak
-                max_dd = max(max_dd, dd)
+                max_dd_decimal = max(max_dd_decimal, dd)
+            max_dd = max_dd_decimal * 100.0  # percentage form (e.g., 15.2)
             
-            profitable_trades = sum(
-                1
-                for t in self.trades
-                if t["success"] and t["profit"] > 0
-            )
-            total_trades = len(self.trades)
-            win_rate = (profitable_trades / total_trades) if total_trades>0 else 0.0
+            # Calculate win rate percentage
+            successful_trades = [t for t in self.trades if t["success"]]
+            if not successful_trades:
+                win_rate = 0.0  # percentage form
+            else:
+                profitable_trades = sum(
+                    1 for t in successful_trades
+                    if (t["type"] == "buy" and t["portfolio_value_after"] > t["portfolio_value_before"]) or
+                       (t["type"] == "sell" and t["profit"] >= -t["fee"])
+                )
+                win_rate_decimal = profitable_trades / len(successful_trades)  # decimal form (e.g., 0.345)
+                win_rate = win_rate_decimal * 100.0  # percentage form (e.g., 34.5)
+            
+            total_trades = len(successful_trades)
             
             return {
-                'total_return': total_return,
-                'sharpe_ratio': sharpe_ratio,
-                'sortino_ratio': sortino_ratio,
-                'max_drawdown': max_dd,  # positive
-                'total_trades': total_trades,
-                'win_rate': win_rate,
-                'final_balance': self.cash,
-                'final_portfolio_value': values[-1]
+                'total_return': total_return,          # percentage (e.g., -8.64 means -8.64%)
+                'sharpe_ratio': sharpe_ratio,          # ratio (not percentage)
+                'sortino_ratio': sortino_ratio,        # ratio (not percentage)
+                'max_drawdown': max_dd,                # percentage (e.g., 15.2 means 15.2%)
+                'total_trades': total_trades,          # count
+                'win_rate': win_rate,                  # percentage (e.g., 34.5 means 34.5%)
+                'final_balance': self.cash,            # absolute value
+                'final_portfolio_value': values[-1],   # absolute value
+                'successful_trades': total_trades,     # count
+                'total_trade_attempts': len(self.trades)  # count
             }
         except Exception as e:
             self.logger.error(f"Error calculating metrics: {str(e)}")
             return {
-                'total_return': 0,
-                'sharpe_ratio': 0,
-                'sortino_ratio': 0,
-                'max_drawdown': 0,
-                'total_trades': len(self.trades),
-                'win_rate': 0,
+                'total_return': 0.0,
+                'sharpe_ratio': 0.0,
+                'sortino_ratio': 0.0,
+                'max_drawdown': 0.0,
+                'total_trades': 0,
+                'win_rate': 0.0,
                 'final_balance': self.cash,
                 'final_portfolio_value': self.cash,
+                'successful_trades': 0,
+                'total_trade_attempts': len(self.trades)
             }
 
     def get_returns(self) -> pd.Series:
