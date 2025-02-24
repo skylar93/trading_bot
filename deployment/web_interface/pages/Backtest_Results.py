@@ -221,18 +221,44 @@ def main():
             col1, col2 = st.columns(2)
             
             with col1:
-                st.subheader("Portfolio Performance")
-                portfolio_chart = create_portfolio_chart(results.get("portfolio_values", []))
-                if portfolio_chart:
-                    st.plotly_chart(portfolio_chart, use_container_width=True)
-                    logger.info("Successfully created portfolio chart")
-                else:
-                    st.warning("No portfolio data available")
-                    logger.warning("Failed to create portfolio chart - no data")
-            
-            with col2:
                 st.subheader("Trading Metrics")
                 display_trading_metrics(results.get("metrics", {}))
+            
+            with col2:
+                # Display scenario-specific metrics if scenario is active
+                if scenario_type != "none":
+                    display_scenario_metrics(scenario_type, results.get("scenario_metrics", {}))
+            
+            # Display portfolio value time series
+            st.subheader("Portfolio Value Time Series")
+            portfolio_values = results.get("portfolio_values", [])
+            timestamps = results.get("timestamps", [])
+            
+            if portfolio_values and timestamps:
+                # Create DataFrame with portfolio values
+                portfolio_df = pd.DataFrame({
+                    "timestamp": timestamps,
+                    "portfolio_value": portfolio_values
+                })
+                
+                # Display both table and chart
+                col3, col4 = st.columns(2)
+                
+                with col3:
+                    st.dataframe(portfolio_df)
+                
+                with col4:
+                    import plotly.express as px
+                    fig = px.line(
+                        portfolio_df, 
+                        x="timestamp", 
+                        y="portfolio_value",
+                        title="Portfolio Value Over Time"
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                    logger.info("Successfully created portfolio value time series visualization")
+            else:
+                st.warning("No portfolio history data available")
             
             # Display price chart with trades
             st.subheader("Trade History")

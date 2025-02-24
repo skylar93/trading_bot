@@ -6,9 +6,8 @@ This module provides experimental features for backtesting through a mixin class
 Features include weighted entry price calculation and improved PnL calculation.
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 import pandas as pd
-import numpy as np
 from collections import defaultdict
 
 class ExperimentalMixin:

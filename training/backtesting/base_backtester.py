@@ -370,9 +370,10 @@ class BaseBacktester:
                 trade["position_units"] = 0.0
                 trade["position_value"] = 0.0
         else:
-            # For unsuccessful trades, use before values
-            trade["portfolio_value_after"] = trade["portfolio_value_before"]
-            trade["cumulative_pnl"] = trade["portfolio_value_before"] - self.initial_capital
+            # For unsuccessful trades, still record actual portfolio value
+            updated_portfolio_value = self.get_portfolio_value(price_data)
+            trade["portfolio_value_after"] = updated_portfolio_value
+            trade["cumulative_pnl"] = updated_portfolio_value - self.initial_capital
             trade["cash_after"] = self.cash
             trade["position_units"] = self.positions[asset]["units"] if asset in self.positions else 0.0
             trade["position_value"] = (self.positions[asset]["units"] * current_price) if asset in self.positions else 0.0
@@ -444,6 +445,9 @@ class BaseBacktester:
         """
         Run backtest for single-asset strategy (Fractional Holding).
         strategy.get_action() => fraction in [0,1].
+        
+        Now uses update() for each bar to track portfolio changes every step,
+        even when no trade occurs.
         """
         if self.data is None:
             raise ValueError("No data provided for backtesting")
@@ -465,23 +469,19 @@ class BaseBacktester:
                     )
                     continue
 
-                # 2) do trade
-                price_data = {"default": current_data["$close"]}
-                trade_result = self.execute_trade(
+                # 2) Prepare prices and actions dict for update()
+                prices = {"default": current_data["$close"]}
+                actions = {"default": action}
+
+                # 3) Call update() once per bar
+                update_result = self.update(
                     timestamp=timestamp,
-                    action=action,
-                    price_data=price_data,
-                    asset="default"
+                    prices=prices,
+                    actions=actions
                 )
 
-                # 3) if we didn't store portfolio_value in trade_result, update manually
-                if "portfolio_value" not in trade_result:
-                    pv = self.get_portfolio_value(price_data)
-                    self.portfolio_history.append(pv)
-                    self.peak_value = max(self.peak_value, pv)
-
                 if verbose and i % 100 == 0:
-                    self.logger.info(f"Progress: {i}/{len(self.data)}")
+                    self.logger.info(f"Progress: {i}/{len(self.data)} bars processed")
 
         except Exception as e:
             self.logger.error(f"Error during backtest: {str(e)}")
