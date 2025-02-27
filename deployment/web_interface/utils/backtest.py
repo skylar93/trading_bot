@@ -215,41 +215,37 @@ class BacktestManager:
             raise
     
     def _process_results(self, results: Dict[str, Any]) -> Dict[str, Any]:
-        """Process backtest results and calculate metrics"""
+        """Process backtest results and calculate additional metrics"""
         try:
-            metrics = {}
+            # Start with existing metrics
+            metrics = results.get("metrics", {}).copy()
             trades = results.get("trades", [])
             portfolio_values = results.get("portfolio_values", [])
             
             if trades:
-                # Calculate basic metrics
-                profitable_trades = sum(1 for t in trades if t.get("pnl", 0) > 0)
-                total_trades = len(trades)
-                win_rate = (profitable_trades / total_trades * 100) if total_trades > 0 else 0
-                
-                metrics.update({
-                    "total_trades": total_trades,
-                    "win_rate": win_rate,
-                    "avg_trade": sum(t.get("pnl", 0) for t in trades) / total_trades if total_trades > 0 else 0
-                })
+                # Only calculate these if not already present
+                if "avg_trade" not in metrics:
+                    total_trades = len(trades)
+                    metrics["avg_trade"] = (
+                        sum(t.get("pnl", 0) for t in trades) / total_trades 
+                        if total_trades > 0 else 0
+                    )
             
-            if portfolio_values:
-                # Calculate portfolio metrics
+            if portfolio_values and "sharpe_ratio" not in metrics:
+                # Calculate portfolio metrics only if not present
                 returns = pd.Series([float(v) for v in portfolio_values]).pct_change().dropna()
                 if len(returns) > 0:
-                    sharpe_ratio = np.sqrt(252) * (returns.mean() / returns.std()) if returns.std() != 0 else 0
-                    max_drawdown = ((pd.Series(portfolio_values).cummax() - pd.Series(portfolio_values)) 
-                                  / pd.Series(portfolio_values).cummax()).max() * 100
-                    
-                    metrics.update({
-                        "sharpe_ratio": sharpe_ratio,
-                        "max_drawdown": max_drawdown,
-                        "total_return": ((portfolio_values[-1] / portfolio_values[0]) - 1) * 100
-                    })
+                    metrics["sharpe_ratio"] = (
+                        np.sqrt(252) * (returns.mean() / returns.std()) 
+                        if returns.std() != 0 else 0
+                    )
             
-            self.logger.info("Processed metrics: %s", metrics)
+            self.logger.info("Additional metrics processed: %s", 
+                           {k: v for k, v in metrics.items() 
+                            if k not in results.get("metrics", {})})
+            
             return metrics
             
         except Exception as e:
-            self.logger.error("Error processing results: %s", str(e), exc_info=True)
-            return {} 
+            self.logger.error("Error processing additional metrics: %s", str(e), exc_info=True)
+            return results.get("metrics", {}).copy()  # Return original metrics on error 

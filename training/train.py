@@ -3,13 +3,11 @@ import logging
 import yaml
 import pandas as pd
 import numpy as np
-import torch
-from data.utils.data_loader import DataLoader
 from agents.strategies.single.ppo_agent import PPOAgent
-from envs.trading_env import TradingEnvironment
+from envs.single_asset_rl_env import SingleAssetRLTradingEnv
 from envs.wrap_env import make_env
 from training.utils.unified_mlflow_manager import MLflowManager
-from typing import Union, Dict, Any, Tuple, Optional
+from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 import ccxt
 
@@ -58,7 +56,7 @@ def load_config(config_path: str = "config/default_config.yaml") -> dict:
         }
 
 
-def create_env(env_config: Dict[str, Any]) -> TradingEnvironment:
+def create_env(env_config: Dict[str, Any]) -> SingleAssetRLTradingEnv:
     """Create trading environment from config
 
     Args:
@@ -98,12 +96,12 @@ def create_env(env_config: Dict[str, Any]) -> TradingEnvironment:
             data = data.rename(columns=rename_dict)
 
     # Create environment with config parameters
-    env = TradingEnvironment(
+    env = SingleAssetRLTradingEnv(
         data=data,
         initial_capital=env_config.get("initial_capital", 10000.0),
         trading_fee=env_config.get("trading_fee", 0.001),
         window_size=env_config.get("window_size", 20),
-        max_position=env_config.get("max_position_size", 1.0),
+        max_position_size=env_config.get("max_position_size", 1.0),
     )
 
     # Apply wrappers if specified in config
@@ -155,14 +153,14 @@ def train_agent(
     config["training"].setdefault("total_timesteps", 10000)
 
     # Create environments
-    train_env = TradingEnvironment(
+    train_env = SingleAssetRLTradingEnv(
         data=train_data,
         initial_capital=config["env"]["initial_capital"],
         trading_fee=config["env"]["trading_fee"],
         window_size=config["env"]["window_size"],
     )
 
-    val_env = TradingEnvironment(
+    val_env = SingleAssetRLTradingEnv(
         data=val_data,
         initial_capital=config["env"]["initial_capital"],
         trading_fee=config["env"]["trading_fee"],
@@ -244,14 +242,14 @@ class TrainingPipeline:
             Trained agent
         """
         # Create environments
-        train_env = TradingEnvironment(
+        train_env = SingleAssetRLTradingEnv(
             data=train_data,
             initial_balance=self.config["env"]["initial_balance"],
             trading_fee=self.config["env"]["trading_fee"],
             window_size=self.config["env"]["window_size"],
         )
 
-        val_env = TradingEnvironment(
+        val_env = SingleAssetRLTradingEnv(
             data=val_data,
             initial_balance=self.config["env"]["initial_balance"],
             trading_fee=self.config["env"]["trading_fee"],

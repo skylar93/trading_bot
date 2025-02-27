@@ -50,45 +50,64 @@ def display_trading_metrics(metrics: Dict):
     
     Args:
         metrics: Dictionary containing:
-            - total_return: Total return in percentage (e.g., -8.64 means -8.64%)
+            - total_return: Total return as decimal (e.g., -0.0864 means -8.64%)
             - sharpe_ratio: Annualized Sharpe ratio (not percentage)
             - sortino_ratio: Annualized Sortino ratio (not percentage)
-            - max_drawdown: Maximum drawdown in percentage (e.g., 15.2 means 15.2%)
+            - max_drawdown: Maximum drawdown as decimal (e.g., 0.152 means 15.2%)
             - total_trades: Number of successful trades (count)
-            - win_rate: Win rate in percentage (e.g., 34.5 means 34.5%)
+            - win_rate: Win rate as decimal (e.g., 0.345 means 34.5%)
             - successful_trades: Number of successfully executed trades (count)
             - total_trade_attempts: Total number of trade attempts (count)
+            - final_portfolio_value: Final total portfolio value (absolute value)
+            - final_balance: Final cash balance (absolute value)
             
     Note:
-        Percentage values are already in percentage form (e.g., 34.5 means 34.5%).
-        We just need to append the '%' symbol for display.
+        All percentage values are in decimal form and need to be multiplied by 100 for display
     """
     try:
-        # Create three columns
-        col1, col2, col3 = st.columns(3)
+        # Create four columns
+        col1, col2, col3, col4 = st.columns(4)
 
         with col1:
+            # Convert decimal to percentage for display
+            total_return = metrics.get('total_return', 0)
+            final_portfolio_value = metrics.get('final_portfolio_value', 0)
+            initial_value = final_portfolio_value / (1 + total_return) if abs(total_return) > 1e-12 else final_portfolio_value
+            total_return_dollars = final_portfolio_value - initial_value
+            
             st.metric(
-                "Total Return",
-                f"{metrics.get('total_return', 0):.1f}%",  # Already in percentage form
+                "Total Return ($)",
+                f"${total_return_dollars:,.2f}",
                 delta_color="normal"
             )
             st.metric(
-                "Win Rate",
-                f"{metrics.get('win_rate', 0):.1f}%"  # Already in percentage form
+                "Total Return (%)",
+                f"{total_return * 100:.2f}%"  # Convert decimal to percentage
             )
 
         with col2:
             st.metric(
+                "Final Portfolio",
+                f"${metrics.get('final_portfolio_value', 0):,.2f}"
+            )
+            win_rate = metrics.get('win_rate', 0)
+            st.metric(
+                "Win Rate",
+                f"{win_rate * 100:.2f}%"  # Convert decimal to percentage
+            )
+
+        with col3:
+            max_dd = metrics.get('max_drawdown', 0)
+            st.metric(
                 "Max Drawdown",
-                f"{metrics.get('max_drawdown', 0):.1f}%"  # Already in percentage form
+                f"{max_dd * 100:.2f}%"  # Convert decimal to percentage
             )
             st.metric(
                 "Sharpe Ratio",
                 f"{metrics.get('sharpe_ratio', 0):.2f}"  # Not a percentage
             )
 
-        with col3:
+        with col4:
             st.metric(
                 "Total Trades",
                 f"{metrics.get('successful_trades', 0)} / {metrics.get('total_trade_attempts', 0)}"  # Counts

@@ -16,7 +16,7 @@ from hyperopt import hp
 
 from training.hyperopt.hyperopt_tuner import MinimalTuner
 from training.utils.unified_mlflow_manager import MLflowManager
-from envs.trading_env import TradingEnvironment
+from envs.single_asset_rl_env import SingleAssetRLTradingEnv
 from agents.strategies.single.ppo_agent import PPOAgent
 
 

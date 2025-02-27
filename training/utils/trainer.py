@@ -1,18 +1,17 @@
 """Distributed training utilities"""
 
 import os
-import ray
 import torch
 import logging
 import numpy as np
 import pandas as pd
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, List
 from dataclasses import dataclass
 
 from training.utils.unified_mlflow_manager import MLflowManager
 from training.utils.ray_manager import RayManager, RayConfig
-from envs.trading_env import TradingEnvironment
-from agents.strategies.ppo_agent import PPOAgent
+from envs.single_asset_rl_env import SingleAssetRLTradingEnv
+from agents.strategies.single.ppo_agent import PPOAgent
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +55,7 @@ class DistributedTrainer:
         os.makedirs("models", exist_ok=True)
         os.makedirs("results", exist_ok=True)
 
-    def create_env(self, data: pd.DataFrame) -> TradingEnvironment:
+    def create_env(self, data: pd.DataFrame) -> SingleAssetRLTradingEnv:
         """Create trading environment
 
         Args:
@@ -65,14 +64,14 @@ class DistributedTrainer:
         Returns:
             Trading environment instance
         """
-        return TradingEnvironment(
+        return SingleAssetRLTradingEnv(
             df=data,
             initial_balance=self.config.initial_balance,
             trading_fee=self.config.trading_fee,
             window_size=self.config.window_size,
         )
 
-    def create_agent(self, env: TradingEnvironment) -> PPOAgent:
+    def create_agent(self, env: SingleAssetRLTradingEnv) -> PPOAgent:
         """Create PPO agent
 
         Args:
@@ -146,7 +145,7 @@ class DistributedTrainer:
             raise
 
     def evaluate(
-        self, agent: PPOAgent, env: TradingEnvironment
+        self, agent: PPOAgent, env: SingleAssetRLTradingEnv
     ) -> Dict[str, float]:
         """Evaluate agent performance
 

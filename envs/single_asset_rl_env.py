@@ -7,7 +7,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class TradingEnvironment(gym.Env):
+class SingleAssetRLTradingEnv(gym.Env):
     """Trading environment for reinforcement learning"""
 
     def __init__(
@@ -16,7 +16,7 @@ class TradingEnvironment(gym.Env):
         initial_capital: float = 10000.0,
         trading_fee: float = 0.001,
         window_size: int = 20,
-        max_position: float = 1.0,
+        max_position_size: float = 1.0,
     ):
         """Initialize environment
 
@@ -25,7 +25,7 @@ class TradingEnvironment(gym.Env):
             initial_capital: Initial account capital
             trading_fee: Trading fee as fraction of trade value
             window_size: Number of time steps to include in state
-            max_position: Maximum position size as fraction of capital
+            max_position_size: Maximum position size as fraction of capital
         """
         super().__init__()
 
@@ -61,7 +61,7 @@ class TradingEnvironment(gym.Env):
         self.initial_capital = initial_capital
         self.trading_fee = trading_fee
         self.window_size = window_size
-        self.max_position = max_position
+        self.max_position_size = max_position_size
 
         # Define action and observation spaces
         self.action_space = gym.spaces.Box(
@@ -122,14 +122,14 @@ class TradingEnvironment(gym.Env):
         current_price = self.data.iloc[self.current_step]["$close"]
         
         # Calculate target position change
-        position_change = float(action[0]) * self.max_position
+        position_change = float(action[0]) * self.max_position_size
         target_position = self.current_position + position_change
         
         # Apply position limits
         target_position = np.clip(
             target_position, 
-            -self.max_position,
-            self.max_position
+            -self.max_position_size,
+            self.max_position_size
         )
         
         # Calculate actual position change

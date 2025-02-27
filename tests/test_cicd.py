@@ -13,7 +13,7 @@ from training.train import train_agent
 from training.backtesting.base_backtester import BaseBacktester
 from training.evaluation import TradingMetrics
 from data.utils.feature_generator import FeatureGenerator
-from envs.trading_env import TradingEnvironment
+from envs.single_asset_rl_env import SingleAssetRLTradingEnv
 from agents.strategies.single.ppo_agent import PPOAgent
 
 logging.basicConfig(
@@ -145,7 +145,7 @@ def test_resource_usage():
         data = create_test_data()
 
         # Create environment
-        env = TradingEnvironment(
+        env = SingleAssetRLTradingEnv(
             data=data,
             initial_capital=10000.0,
             trading_fee=0.001,
@@ -171,7 +171,7 @@ def test_resource_usage():
 
 
 def test_environment_initialization():
-    env = TradingEnvironment(
+    env = SingleAssetRLTradingEnv(
         data=create_test_data(),
         initial_capital=10000.0,
         trading_fee=0.001,
@@ -180,7 +180,7 @@ def test_environment_initialization():
 
 
 def test_agent_training():
-    env = TradingEnvironment(
+    env = SingleAssetRLTradingEnv(
         data=create_test_data(),
         initial_capital=10000.0,
         trading_fee=0.001,

@@ -9,12 +9,11 @@ from typing import Dict, Any, List, Tuple, Optional
 import pandas as pd
 import numpy as np
 import logging
-from pathlib import Path
 import mlflow
 import shutil
 import time
 
-from envs.trading_env import TradingEnvironment
+from envs.single_asset_rl_env import SingleAssetRLTradingEnv
 from agents.strategies.single.ppo_agent import PPOAgent
 from training.train import train_agent
 from training.utils.unified_mlflow_manager import MLflowManager
@@ -165,7 +164,7 @@ class MinimalTuner:
         """Evaluate a configuration on validation data"""
         try:
             # Create validation environment
-            val_env = TradingEnvironment(
+            val_env = SingleAssetRLTradingEnv(
                 df=self.val_data,
                 initial_balance=config["env"]["initial_balance"],
                 trading_fee=config["env"]["trading_fee"],

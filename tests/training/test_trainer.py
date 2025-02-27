@@ -6,7 +6,7 @@ import pandas as pd
 import mlflow
 from training.train import TrainingPipeline, Trainer
 from training.utils.unified_mlflow_manager import MLflowManager
-from envs.trading_env import TradingEnvironment
+from envs.single_asset_rl_env import SingleAssetRLTradingEnv
 from agents.strategies.single.ppo_agent import PPOAgent
 import gym
 from gym import spaces
@@ -144,14 +144,14 @@ def test_trainer_initialization(mlflow_test_context, mock_env, mock_agent):
 
 def test_environment_creation(sample_data, config):
     """Test environment creation"""
-    env = TradingEnvironment(
+    env = SingleAssetRLTradingEnv(
         data=sample_data,
         initial_capital=config["env"]["initial_balance"],
         trading_fee=config["env"]["trading_fee"],
         window_size=config["env"]["window_size"],
     )
 
-    assert isinstance(env, TradingEnvironment)
+    assert isinstance(env, SingleAssetRLTradingEnv)
     assert env.initial_capital == 10000.0
     assert env.trading_fee == 0.001
     assert env.window_size == 20

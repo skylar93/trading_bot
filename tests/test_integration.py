@@ -7,7 +7,7 @@ from pathlib import Path
 import logging.config
 
 from data.utils.data_loader import DataLoader
-from envs.trading_env import TradingEnvironment
+from envs.single_asset_rl_env import SingleAssetRLTradingEnv
 from envs.wrap_env import make_env
 from training.train import load_config, create_env
 from data.utils.feature_generator import FeatureGenerator
@@ -92,13 +92,13 @@ class TestIntegration:
             logger.debug(
                 f"Creating environment with window_size={window_size}"
             )
-            env = TradingEnvironment(
+            env = SingleAssetRLTradingEnv(
                 data=df,
                 initial_capital=config["env"]["initial_balance"],
                 trading_fee=config["env"]["trading_fee"],
                 window_size=window_size,
             )
-            logger.debug("Created TradingEnvironment instance")
+            logger.debug("Created SingleAssetRLTradingEnv instance")
 
             # 3. Apply wrappers
             logger.debug("Applying environment wrappers")
@@ -170,14 +170,14 @@ class TestIntegration:
             # Create environment
             env = create_env(env_config)
             
-            # Check if TradingEnvironment is in the wrapper chain
+            # Check if SingleAssetRLTradingEnv is in the wrapper chain
             def get_base_env(wrapped_env):
                 if hasattr(wrapped_env, 'env'):
                     return get_base_env(wrapped_env.env)
                 return wrapped_env
             
             base_env = get_base_env(env)
-            assert isinstance(base_env, TradingEnvironment)
+            assert isinstance(base_env, SingleAssetRLTradingEnv)
 
         except Exception as e:
             logger.error(f"Test failed: {str(e)}")
@@ -241,7 +241,7 @@ class TestIntegration:
                 index=dates,
             )
 
-            env = TradingEnvironment(
+            env = SingleAssetRLTradingEnv(
                 data=df,
                 initial_capital=10000.0,
                 trading_fee=0.001,
@@ -278,7 +278,7 @@ class TestIntegration:
 
         try:
             # Create environment
-            env = TradingEnvironment(
+            env = SingleAssetRLTradingEnv(
                 data=create_test_data(),
                 initial_capital=10000.0,
                 trading_fee=0.001,

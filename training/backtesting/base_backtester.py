@@ -184,32 +184,33 @@ class BaseBacktester:
         trade = {
             "timestamp": timestamp,
             "symbol": asset,
-            "amount": 0.0,
-            "price": 0.0,
-            "fee": 0.0,
-            "cost": 0.0,
-            "revenue": 0.0,
-            "profit": 0.0,
-            "success": False,
-            "reason": "",
-            "action": action,
-            "type": "none",
-            "value": 0.0,
-            "portfolio_value_before": self.get_portfolio_value(price_data),
-            "portfolio_value_after": 0.0,
-            "cumulative_pnl": 0.0,  # Track cumulative PnL
-            "cash_after": 0.0,  # Track remaining cash
-            "position_units": 0.0,  # Track position size
-            "position_value": 0.0,  # Track position value
+            "amount": 0.0,  # float
+            "price": 0.0,   # float
+            "fee": 0.0,     # float
+            "cost": 0.0,    # float
+            "revenue": 0.0, # float
+            "profit": 0.0,  # float
+            "success": False,  # bool
+            "reason": "",     # str
+            "action": float(action),  # float
+            "type": "none",   # str (will be "buy" or "sell")
+            "value": 0.0,     # float
+            "portfolio_value_before": self.get_portfolio_value(price_data),  # float
+            "portfolio_value_after": 0.0,  # float
+            "cumulative_pnl": 0.0,  # float
+            "cash_after": 0.0,      # float
+            "position_units": 0.0,   # float
+            "position_value": 0.0,   # float
         }
 
         if asset not in price_data:
             trade["reason"] = "price_not_available"
+            trade["success"] = False  # explicit bool
             self.trades.append(trade)
             self.logger.debug("[TRADE_SKIP] %s: price_not_available", asset)
             return trade
 
-        current_price = price_data[asset]
+        current_price = float(price_data[asset])  # ensure float
         trade["price"] = current_price
         
         # clamp action in [0,1]
@@ -226,8 +227,8 @@ class BaseBacktester:
             }
 
         pos_dict = self.positions[asset]
-        old_units = pos_dict["units"]
-        old_cost_basis = pos_dict["cost_basis"]
+        old_units = float(pos_dict["units"])  # ensure float
+        old_cost_basis = float(pos_dict["cost_basis"])  # ensure float
 
         # current coin value
         current_coin_value = old_units * current_price
@@ -240,12 +241,14 @@ class BaseBacktester:
         diff_value = target_coin_value - current_coin_value
         if abs(diff_value) < 1e-12:
             trade["reason"] = "trade_size_too_small"
+            trade["success"] = False  # explicit bool
             self.trades.append(trade)
             return trade
 
         trade_amount = diff_value / current_price if abs(current_price) > 1e-12 else 0.0
         if abs(trade_amount) < 1e-12:
             trade["reason"] = "trade_size_too_small"
+            trade["success"] = False  # explicit bool
             self.trades.append(trade)
             return trade
 
@@ -263,27 +266,28 @@ class BaseBacktester:
                 asset=asset
             )
             if not risk_check['allowed']:
-                trade["success"] = False
+                trade["success"] = False  # explicit bool
                 trade["reason"] = risk_check['reason']
                 self.trades.append(trade)
                 return trade
 
             # if size adjusted
             if abs(risk_check['adjusted_size'] - trade_amount) > 1e-12:
-                trade_amount = risk_check['adjusted_size']
+                trade_amount = float(risk_check['adjusted_size'])  # ensure float
                 diff_value = trade_amount * current_price
                 trade_value = abs(diff_value)
-                fee = trade_value*self.trading_fee
+                fee = trade_value * self.trading_fee
 
         # Only log significant trades (value > 1% of portfolio)
         is_significant = trade_value > (portfolio_value * 0.01)
 
         # BUY
         if diff_value > 0:
-            trade["type"] = "buy"
+            trade["type"] = "buy"  # explicit str
             total_cost = trade_value + fee
             if total_cost > self.cash + 1e-12:
                 trade["reason"] = "insufficient_funds"
+                trade["success"] = False  # explicit bool
                 self.trades.append(trade)
                 return trade
             
@@ -292,19 +296,19 @@ class BaseBacktester:
             avg_price = new_cost_basis/new_units if new_units>1e-12 else 0.0
             
             self.positions[asset] = {
-                "units": new_units,
-                "avg_price": avg_price,
-                "cost_basis": new_cost_basis,
+                "units": float(new_units),  # ensure float
+                "avg_price": float(avg_price),  # ensure float
+                "cost_basis": float(new_cost_basis),  # ensure float
             }
             self.cash -= total_cost
 
-            trade["amount"] = trade_amount
-            trade["value"] = trade_value
-            trade["fee"] = fee
-            trade["cost"] = total_cost
-            trade["revenue"] = 0.0
-            trade["profit"] = 0.0
-            trade["success"] = True
+            trade["amount"] = float(trade_amount)  # ensure float
+            trade["value"] = float(trade_value)  # ensure float
+            trade["fee"] = float(fee)  # ensure float
+            trade["cost"] = float(total_cost)  # ensure float
+            trade["revenue"] = 0.0  # explicit float
+            trade["profit"] = 0.0  # explicit float
+            trade["success"] = True  # explicit bool
 
             if is_significant:
                 self.logger.info(
@@ -314,7 +318,7 @@ class BaseBacktester:
 
         else:
             # SELL
-            trade["type"] = "sell"
+            trade["type"] = "sell"  # explicit str
             sell_amount = abs(trade_amount)
             if sell_amount > old_units+1e-12:
                 sell_amount = old_units
@@ -331,22 +335,22 @@ class BaseBacktester:
             if new_units>1e-12:
                 new_cost_basis = old_cost_basis - cost_portion
                 self.positions[asset] = {
-                    "units": new_units,
-                    "avg_price": pos_dict["avg_price"],
-                    "cost_basis": new_cost_basis,
+                    "units": float(new_units),  # ensure float
+                    "avg_price": float(pos_dict["avg_price"]),  # ensure float
+                    "cost_basis": float(new_cost_basis),  # ensure float
                 }
             else:
                 del self.positions[asset]
 
             self.cash += (revenue - fee)
 
-            trade["amount"] = -sell_amount
-            trade["value"] = revenue
-            trade["fee"] = fee
-            trade["cost"] = cost_portion
-            trade["revenue"] = revenue
-            trade["profit"] = realized_profit
-            trade["success"] = True
+            trade["amount"] = float(-sell_amount)  # ensure float
+            trade["value"] = float(revenue)  # ensure float
+            trade["fee"] = float(fee)  # ensure float
+            trade["cost"] = float(cost_portion)  # ensure float
+            trade["revenue"] = float(revenue)  # ensure float
+            trade["profit"] = float(realized_profit)  # ensure float
+            trade["success"] = True  # explicit bool
 
             if is_significant:
                 self.logger.info(
@@ -355,33 +359,33 @@ class BaseBacktester:
                 )
         
         # If trade was successful, update portfolio value after and related metrics
-        if trade["success"]:
+        if trade["success"]:  # using bool
             updated_portfolio_value = self.get_portfolio_value(price_data)
-            trade["portfolio_value_after"] = updated_portfolio_value
-            trade["cumulative_pnl"] = updated_portfolio_value - self.initial_capital
-            trade["cash_after"] = self.cash
+            trade["portfolio_value_after"] = float(updated_portfolio_value)  # ensure float
+            trade["cumulative_pnl"] = float(updated_portfolio_value - self.initial_capital)  # ensure float
+            trade["cash_after"] = float(self.cash)  # ensure float
             
             # Track position details
             if asset in self.positions:
                 pos = self.positions[asset]
-                trade["position_units"] = pos["units"]
-                trade["position_value"] = pos["units"] * current_price
+                trade["position_units"] = float(pos["units"])  # ensure float
+                trade["position_value"] = float(pos["units"] * current_price)  # ensure float
             else:
-                trade["position_units"] = 0.0
-                trade["position_value"] = 0.0
+                trade["position_units"] = 0.0  # explicit float
+                trade["position_value"] = 0.0  # explicit float
         else:
             # For unsuccessful trades, still record actual portfolio value
             updated_portfolio_value = self.get_portfolio_value(price_data)
-            trade["portfolio_value_after"] = updated_portfolio_value
-            trade["cumulative_pnl"] = updated_portfolio_value - self.initial_capital
-            trade["cash_after"] = self.cash
-            trade["position_units"] = self.positions[asset]["units"] if asset in self.positions else 0.0
-            trade["position_value"] = (self.positions[asset]["units"] * current_price) if asset in self.positions else 0.0
+            trade["portfolio_value_after"] = float(updated_portfolio_value)  # ensure float
+            trade["cumulative_pnl"] = float(updated_portfolio_value - self.initial_capital)  # ensure float
+            trade["cash_after"] = float(self.cash)  # ensure float
+            trade["position_units"] = float(self.positions[asset]["units"]) if asset in self.positions else 0.0  # ensure float
+            trade["position_value"] = float(self.positions[asset]["units"] * current_price) if asset in self.positions else 0.0  # ensure float
 
         self.trades.append(trade)
         
         # risk manager post-update
-        if self.risk_manager and trade["success"]:
+        if self.risk_manager and trade["success"]:  # using bool
             self.risk_manager.update_after_trade(timestamp)
 
         return trade
@@ -511,12 +515,12 @@ class BaseBacktester:
         
         Returns:
             Dict[str, float] containing:
-            - total_return: Total return in percentage (e.g., -8.64 means -8.64%)
+            - total_return: Total return as decimal (e.g., -0.0864 means -8.64%)
             - sharpe_ratio: Annualized Sharpe ratio (not percentage)
             - sortino_ratio: Annualized Sortino ratio (not percentage)
-            - max_drawdown: Maximum drawdown in percentage (e.g., 15.2 means 15.2%)
+            - max_drawdown: Maximum drawdown as decimal (e.g., 0.152 means 15.2%)
             - total_trades: Number of successful trades (count)
-            - win_rate: Win rate in percentage (e.g., 34.5 means 34.5%)
+            - win_rate: Win rate as decimal (e.g., 0.345 means 34.5%)
             - final_balance: Final cash balance (absolute value)
             - final_portfolio_value: Final total portfolio value (absolute value)
             - successful_trades: Number of successfully executed trades (count)
@@ -526,23 +530,22 @@ class BaseBacktester:
             values = np.array(self.portfolio_history)
             if len(values) < 2:
                 return {
-                    'total_return': 0.0,  # percentage
-                    'sharpe_ratio': 0.0,  # ratio
-                    'sortino_ratio': 0.0,  # ratio
-                    'max_drawdown': 0.0,  # percentage
-                    'total_trades': 0,    # count
-                    'win_rate': 0.0,      # percentage
-                    'final_balance': self.cash,  # absolute value
-                    'final_portfolio_value': self.cash,  # absolute value
-                    'successful_trades': 0,  # count
-                    'total_trade_attempts': len(self.trades)  # count
+                    'total_return': 0.0,
+                    'sharpe_ratio': 0.0,
+                    'sortino_ratio': 0.0,
+                    'max_drawdown': 0.0,
+                    'total_trades': 0,
+                    'win_rate': 0.0,
+                    'final_balance': self.cash,
+                    'final_portfolio_value': self.cash,
+                    'successful_trades': 0,
+                    'total_trade_attempts': len(self.trades)
                 }
 
             returns = np.diff(values) / values[:-1]  # returns as decimals
             
-            # Calculate total return percentage
-            total_return_decimal = (values[-1] / values[0]) - 1  # decimal form (e.g., -0.0864)
-            total_return = total_return_decimal * 100.0  # percentage form (e.g., -8.64)
+            # Calculate total return as decimal
+            total_return = (values[-1] / values[0]) - 1  # decimal form (e.g., -0.0864)
             
             # Calculate Sharpe ratio (this is a ratio, not a percentage)
             if len(returns) > 1 and np.std(returns)>0:
@@ -557,45 +560,103 @@ class BaseBacktester:
             else:
                 sortino_ratio = 0.0
             
-            # Calculate max drawdown percentage
+            # Calculate max drawdown as decimal
             peak = values[0]
-            max_dd_decimal = 0.0  # decimal form (e.g., 0.152)
+            max_dd = 0.0  # decimal form (e.g., 0.152)
             for val in values[1:]:
                 if val>peak:
                     peak=val
                 dd = (peak-val)/peak
-                max_dd_decimal = max(max_dd_decimal, dd)
-            max_dd = max_dd_decimal * 100.0  # percentage form (e.g., 15.2)
+                max_dd = max(max_dd, dd)
             
-            # Calculate win rate percentage
-            successful_trades = [t for t in self.trades if t["success"]]
-            if not successful_trades:
-                win_rate = 0.0  # percentage form
-            else:
-                profitable_trades = sum(
-                    1 for t in successful_trades
-                    if (t["type"] == "buy" and t["portfolio_value_after"] > t["portfolio_value_before"]) or
-                       (t["type"] == "sell" and t["profit"] >= -t["fee"])
-                )
-                win_rate_decimal = profitable_trades / len(successful_trades)  # decimal form (e.g., 0.345)
-                win_rate = win_rate_decimal * 100.0  # percentage form (e.g., 34.5)
+            # Calculate win rate with detailed debugging
+            successful_trades = []
+            profitable_trades = 0
+            total_trades = 0
+            sell_trades = 0
+            buy_trades = 0
             
-            total_trades = len(successful_trades)
+            print("\n=== Starting Win Rate Calculation ===")
+            print(f"Total trades to analyze: {len(self.trades)}")
             
-            return {
-                'total_return': total_return,          # percentage (e.g., -8.64 means -8.64%)
-                'sharpe_ratio': sharpe_ratio,          # ratio (not percentage)
-                'sortino_ratio': sortino_ratio,        # ratio (not percentage)
-                'max_drawdown': max_dd,                # percentage (e.g., 15.2 means 15.2%)
-                'total_trades': total_trades,          # count
-                'win_rate': win_rate,                  # percentage (e.g., 34.5 means 34.5%)
-                'final_balance': self.cash,            # absolute value
-                'final_portfolio_value': values[-1],   # absolute value
-                'successful_trades': total_trades,     # count
-                'total_trade_attempts': len(self.trades)  # count
+            # Let's examine first few trades in detail
+            for idx, t in enumerate(self.trades[:5]):  # Look at first 5 trades
+                print(f"\nTrade {idx+1} Details:")
+                print(f"Raw success: {t.get('success')} (type: {type(t.get('success'))})")
+                print(f"Raw type: {t.get('type')} (type: {type(t.get('type'))})")
+                print(f"Raw profit: {t.get('profit')} (type: {type(t.get('profit'))})")
+            
+            # Now process all trades
+            for idx, t in enumerate(self.trades):
+                # Get raw values first for debugging
+                raw_success = t.get("success")
+                raw_type = t.get("type")
+                raw_profit = t.get("profit")
+                
+                # Now process them
+                success = (isinstance(raw_success, bool) and raw_success) or \
+                         (isinstance(raw_success, str) and raw_success.lower() == "true")
+                
+                trade_type = str(raw_type).strip().lower() if raw_type else "none"
+                
+                try:
+                    profit = float(str(raw_profit).replace("$", "").replace(",", "").strip()) \
+                            if raw_profit is not None else 0.0
+                except (ValueError, TypeError):
+                    profit = 0.0
+                
+                if success:
+                    total_trades += 1
+                    if trade_type == "sell":
+                        sell_trades += 1
+                        if profit > 0:
+                            profitable_trades += 1
+                            if idx < 5:  # Print details for first 5 profitable trades
+                                print(f"\nFound profitable sell trade #{idx+1}:")
+                                print(f"  Processed success: {success}")
+                                print(f"  Processed type: {trade_type}")
+                                print(f"  Processed profit: {profit}")
+                    elif trade_type == "buy":
+                        buy_trades += 1
+                        portfolio_before = float(t.get("portfolio_value_before", 0))
+                        portfolio_after = float(t.get("portfolio_value_after", 0))
+                        if portfolio_after > portfolio_before:
+                            profitable_trades += 1
+            
+            # Calculate win rate
+            win_rate = profitable_trades / total_trades if total_trades > 0 else 0.0
+            
+            print("\n=== Win Rate Calculation Summary ===")
+            print(f"Total trades processed: {len(self.trades)}")
+            print(f"Successful trades: {total_trades}")
+            print(f"Buy trades: {buy_trades}")
+            print(f"Sell trades: {sell_trades}")
+            print(f"Profitable trades: {profitable_trades}")
+            print(f"Final win rate: {win_rate:.1%}")
+            
+            metrics = {
+                'total_return': (values[-1] / values[0]) - 1,
+                'sharpe_ratio': sharpe_ratio,
+                'sortino_ratio': sortino_ratio,
+                'max_drawdown': max_dd,
+                'total_trades': total_trades,
+                'win_rate': win_rate,  # This is now correctly stored
+                'final_balance': self.cash,
+                'final_portfolio_value': values[-1],
+                'successful_trades': total_trades,
+                'total_trade_attempts': len(self.trades)
             }
+            
+            # Log the metrics we're returning
+            print("\nReturning metrics:")
+            for key, value in metrics.items():
+                print(f"{key}: {value}")
+                
+            return metrics
         except Exception as e:
-            self.logger.error(f"Error calculating metrics: {str(e)}")
+            print(f"Error calculating metrics: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return {
                 'total_return': 0.0,
                 'sharpe_ratio': 0.0,
