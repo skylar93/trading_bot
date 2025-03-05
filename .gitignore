@@ -42,3 +42,27 @@ mlflow.db
 # IDE and system files
 .idea/
 .vscode/
+
+# Ray related (often contains large files)
+ray_results/
+ray_test/
+ray_test_flow/
+
+# Checkpoints (can be large)
+checkpoints/
+test_checkpoints/
+test_checkpoints_multi/
+
+# Specstory (as requested)
+.specstory/
+
+# Large files
+*.pt
+get-pip.py
+
+# Backtest results (can be regenerated)
+backtest_results/
+
+# HTML reports
+htmlcov/
+result.html
