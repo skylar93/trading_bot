@@ -174,11 +174,11 @@ def show_training():
             val_data = features_df[train_idx:]
 
             # Initialize training environment and agent
-            from training.environment import TradingEnvironment
-            from training.agents import create_agent
+            from envs.single_asset_rl_env import SingleAssetRLTradingEnv
+            from agents.strategies.agent_factory import create_agent
 
             # Create environment
-            env = TradingEnvironment(
+            env = SingleAssetRLTradingEnv(
                 df=train_data,
                 initial_balance=10000.0,
                 trading_fee=0.001,
@@ -220,7 +220,7 @@ def show_training():
                     episode_reward += reward
 
                 # Evaluate on validation set
-                val_env = TradingEnvironment(val_data, initial_balance=10000)
+                val_env = SingleAssetRLTradingEnv(val_data, initial_balance=10000)
                 val_metrics = agent.evaluate(val_env)
 
                 # Update metrics

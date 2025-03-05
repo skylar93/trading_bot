@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 from gymnasium import spaces
-from agents.strategies.multi.momentum_ppo_agent import MomentumPPOAgent
+from agents.strategies.agent_factory import create_agent
 
 @pytest.fixture
 def sample_config():
@@ -21,12 +21,12 @@ def sample_config():
     }
 
 def test_agent_initialization(sample_config):
-    agent = MomentumPPOAgent(sample_config)
+    agent = create_agent("Momentum", config=sample_config)
     assert agent.momentum_window == 10
     assert agent.momentum_threshold == 0.02
 
 def test_momentum_calculation(sample_config):
-    agent = MomentumPPOAgent(sample_config)
+    agent = create_agent("Momentum", config=sample_config)
     
     # Test upward momentum
     state = np.zeros((20, 5))
@@ -54,7 +54,7 @@ def test_momentum_calculation(sample_config):
     assert trend < 0  # Should have negative trend
 
 def test_volatility_calculation(sample_config):
-    agent = MomentumPPOAgent(sample_config)
+    agent = create_agent("Momentum", config=sample_config)
     
     # Test low volatility
     state = np.zeros((20, 5))
@@ -76,7 +76,7 @@ def test_volatility_calculation(sample_config):
     assert volatility > 5.0  # Should have high volatility
 
 def test_action_momentum_bias(sample_config):
-    agent = MomentumPPOAgent(sample_config)
+    agent = create_agent("Momentum", config=sample_config)
     
     # Test strong upward momentum
     state = np.zeros((20, 5))
@@ -96,7 +96,7 @@ def test_action_momentum_bias(sample_config):
     assert action <= 0  # Should prefer selling in downward momentum
 
 def test_momentum_reward_modification(sample_config):
-    agent = MomentumPPOAgent(sample_config)
+    agent = create_agent("Momentum", config=sample_config)
     
     # Create state with strong upward momentum
     state = np.zeros((20, 5))

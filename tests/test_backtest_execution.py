@@ -51,13 +51,13 @@ def create_test_data(n_samples: int = 100) -> pd.DataFrame:
 
 class DummyStrategy:
     def __init__(self):
-        self.last_action = -1  # Start with sell so first action will be buy
-        
-    def get_action(self, window_data):
-        """Simple strategy that alternates between buy and sell"""
-        self.last_action *= -1  # Alternate between 1 and -1
-        return self.last_action  # Always trade with full size
+        self.is_holding = False  # False=현금, True=코인 (처음엔 현금)
 
+    def get_action(self, window_data):
+        # 간단히 0 -> 1 -> 0 -> 1... 토글
+        self.is_holding = not self.is_holding
+        return 1.0 if self.is_holding else 0.0
+    
 def test_backtest_initialization():
     """Test backtest manager initialization"""
     settings = create_test_settings()

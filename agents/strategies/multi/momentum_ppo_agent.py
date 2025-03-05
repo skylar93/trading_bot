@@ -15,29 +15,57 @@ class MomentumPPOAgent(PPOAgent):
     Inherits from base PPO agent but adds momentum-specific features and logic.
     """
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(
+        self,
+        observation_space,
+        action_space,
+        momentum_window: int = 20,
+        volatility_window: int = 20,
+        trend_window: int = 50,
+        momentum_threshold: float = 0.02,
+        learning_rate: float = 3e-4,
+        gamma: float = 0.99,
+        gae_lambda: float = 0.95,
+        clip_epsilon: float = 0.2,
+        c1: float = 1.0,
+        c2: float = 0.01,
+        c3: float = 0.5,
+        batch_size: int = 64,
+        n_epochs: int = 10,
+        target_kl: float = 0.015,
+        device: str = None,
+        **kwargs
+    ):
         """
         Initialize Momentum PPO Agent.
         
         Args:
-            config: Configuration dictionary containing:
-                - All PPO parameters (learning_rate, gamma, etc.)
-                - momentum_window: Window size for momentum calculation
-                - momentum_threshold: Threshold for momentum signals
+            observation_space: Observation space
+            action_space: Action space
+            momentum_window: Window size for momentum calculation
+            volatility_window: Window size for volatility calculation
+            trend_window: Window size for trend calculation
+            momentum_threshold: Threshold for momentum signals (default: 0.02)
+            learning_rate: Learning rate for optimizer
+            gamma: Discount factor
+            gae_lambda: GAE lambda parameter
+            clip_epsilon: PPO clip parameter
+            c1: Value loss coefficient
+            c2: Entropy coefficient
+            c3: KL divergence coefficient
+            batch_size: Batch size for updates
+            n_epochs: Number of epochs per update
+            target_kl: Target KL divergence
+            device: Device to use for computations
+            **kwargs: Additional arguments
         """
-        # Calculate augmented observation space
-        base_obs_space = config["observation_space"]
+        # Calculate total features (base features + momentum indicators)
         n_momentum_features = 3  # momentum, volatility, trend
         
-        if isinstance(base_obs_space, spaces.Box):
-            # If observation space is Box, extend the feature dimension
-            if len(base_obs_space.shape) == 2:  # (window_size, features)
-                # Calculate total input size for the network
-                # Original features: window_size * features
-                # Momentum features: 3 (momentum, volatility, trend)
-                total_features = base_obs_space.shape[0] * base_obs_space.shape[1] + n_momentum_features
+        if isinstance(observation_space, spaces.Box):
+            if len(observation_space.shape) == 2:  # (window_size, features)
+                total_features = observation_space.shape[0] * observation_space.shape[1] + n_momentum_features
                 
-                # Create flattened observation space
                 flat_obs_space = spaces.Box(
                     low=-np.inf,
                     high=np.inf,
@@ -47,8 +75,7 @@ class MomentumPPOAgent(PPOAgent):
             else:
                 raise ValueError("Observation space must be 2D (window_size, features)")
             
-            # Store original space for reference
-            self.original_obs_space = base_obs_space
+            self.original_obs_space = observation_space
             self.n_momentum_features = n_momentum_features
         else:
             raise ValueError("Observation space must be Box")
@@ -56,28 +83,38 @@ class MomentumPPOAgent(PPOAgent):
         # Initialize base PPO agent with flattened observation space
         super().__init__(
             observation_space=flat_obs_space,
-            action_space=config["action_space"],
-            learning_rate=config.get("learning_rate", 3e-4),
-            gamma=config.get("gamma", 0.99),
-            gae_lambda=config.get("gae_lambda", 0.95),
-            clip_epsilon=config.get("clip_epsilon", 0.2),
-            c1=config.get("c1", 1.0),
-            c2=config.get("c2", 0.01),
-            c3=config.get("c3", 0.5),
-            batch_size=config.get("batch_size", 64),
-            n_epochs=config.get("n_epochs", 10),
-            target_kl=config.get("target_kl", 0.015),
-            device=config.get("device", "cuda" if torch.cuda.is_available() else "cpu")
+            action_space=action_space,
+            learning_rate=learning_rate,
+            gamma=gamma,
+            gae_lambda=gae_lambda,
+            clip_epsilon=clip_epsilon,
+            c1=c1,
+            c2=c2,
+            c3=c3,
+            batch_size=batch_size,
+            n_epochs=n_epochs,
+            target_kl=target_kl,
+            device=device,
+            **kwargs
         )
         
-        # Momentum-specific parameters
-        self.momentum_window = config.get("momentum_window", 20)
-        self.momentum_threshold = config.get("momentum_threshold", 0.0)
-        self.strategy = "momentum"  # Add strategy attribute
+        # Momentum specific parameters
+        self.momentum_window = momentum_window
+        self.volatility_window = volatility_window
+        self.trend_window = trend_window
+        self.momentum_threshold = momentum_threshold
+        self.strategy = "momentum"
+        
+        # Log unused config keys
+        unused_keys = [key for key in kwargs.keys() if key not in self.__init__.__code__.co_varnames]
+        if unused_keys:
+            self.logger.warning(f"Ignoring unused config keys in MomentumPPOAgent: {unused_keys}")
         
         logger.info(
             f"Initialized MomentumPPOAgent with window={self.momentum_window}, "
-            f"threshold={self.momentum_threshold}"
+            f"volatility_window={self.volatility_window}, "
+            f"trend_window={self.trend_window}, "
+            f"momentum_threshold={self.momentum_threshold}"
         )
     
     def _calculate_momentum_features(self, state: np.ndarray) -> np.ndarray:
@@ -101,22 +138,36 @@ class MomentumPPOAgent(PPOAgent):
         if state.shape[-1] >= 4:  # Ensure we have enough features
             close_prices = state[..., 3]  # Get close prices
             
-            # Calculate momentum indicators
-            if len(close_prices.shape) == 2:
-                momentum = close_prices[:, -1] / close_prices[:, -self.momentum_window] - 1
-                volatility = np.std(close_prices[:, -self.momentum_window:], axis=1)
+            # Calculate momentum indicators with safety checks
+            if len(close_prices.shape) == 2:  # Batch case
+                # Use available window size if momentum_window is too large
+                available_window = min(close_prices.shape[1], self.momentum_window)
+                if available_window < 2:  # Need at least 2 points for momentum
+                    return np.zeros((close_prices.shape[0], 3), dtype=np.float32)
+                
+                momentum = close_prices[:, -1] / close_prices[:, -available_window] - 1
+                volatility = np.std(close_prices[:, -available_window:], axis=1)
                 trend = np.array([
-                    np.polyfit(range(self.momentum_window), prices[-self.momentum_window:], 1)[0]
+                    np.polyfit(range(available_window), prices[-available_window:], 1)[0]
                     for prices in close_prices
                 ])
-            else:
-                momentum = close_prices[-1] / close_prices[-self.momentum_window] - 1
-                volatility = np.std(close_prices[-self.momentum_window:])
+            else:  # Single case
+                available_window = min(len(close_prices), self.momentum_window)
+                if available_window < 2:  # Need at least 2 points for momentum
+                    return np.zeros(3, dtype=np.float32)
+                
+                momentum = close_prices[-1] / close_prices[-available_window] - 1
+                volatility = np.std(close_prices[-available_window:])
                 trend = np.polyfit(
-                    range(self.momentum_window),
-                    close_prices[-self.momentum_window:],
+                    range(available_window),
+                    close_prices[-available_window:],
                     1
                 )[0]
+            
+            # Handle NaN/inf values
+            momentum = np.nan_to_num(momentum, nan=0.0, posinf=1.0, neginf=-1.0)
+            volatility = np.nan_to_num(volatility, nan=0.0, posinf=1.0, neginf=0.0)
+            trend = np.nan_to_num(trend, nan=0.0, posinf=1.0, neginf=-1.0)
             
             return np.column_stack([momentum, volatility, trend]) if len(state.shape) > 2 else np.array([momentum, volatility, trend])
         else:
@@ -125,49 +176,39 @@ class MomentumPPOAgent(PPOAgent):
             return np.zeros(shape, dtype=np.float32)
     
     def get_action(self, state: np.ndarray, deterministic: bool = False) -> np.ndarray:
-        """
-        Get action from policy network with momentum considerations.
+        """Get action from policy network with momentum strategy.
+        
+        Handles different input shapes:
+        - 2D: (window_size, features)
+        - 3D: (batch_size, window_size, features)
         
         Args:
-            state: Current state observation (can be numpy array or pandas DataFrame)
-            deterministic: Whether to use deterministic action selection
+            state: Current state observation
+            deterministic: Whether to use deterministic action
             
         Returns:
-            Selected action as numpy array
+            Action as numpy array with shape (1,)
         """
         # Convert DataFrame to numpy if needed
         if isinstance(state, pd.DataFrame):
             state = state.to_numpy()
-            
+        
         # Calculate momentum features
         momentum_features = self._calculate_momentum_features(state)
         
-        # Combine with original state
-        if len(state.shape) == 3:  # (batch, window, features)
-            batch_size = state.shape[0]
-            flat_state = state.reshape(batch_size, -1)
-            augmented_state = np.concatenate([flat_state, momentum_features], axis=1)
-        else:  # (window, features)
-            flat_state = state.reshape(1, -1)
-            augmented_state = np.concatenate([flat_state, momentum_features.reshape(1, -1)], axis=1)
-        
-        # Get action from parent class
-        action = super().get_action(augmented_state.reshape(-1), deterministic)
-        
-        # Calculate trend strength safely
-        if len(state.shape) == 3:
-            close_prices = state[..., 3]
+        # Calculate trend strength
+        if len(state.shape) == 3:  # (batch_size, window_size, features)
+            close_prices = state[..., 3]  # Get close prices for all batches
             if close_prices.shape[1] < 10:
                 trend_strength = np.zeros(close_prices.shape[0])
             else:
                 denominator = close_prices[:, -10]
-                # Handle zero/nan/inf denominators
                 safe_mask = (denominator != 0) & ~np.isnan(denominator) & ~np.isinf(denominator)
                 trend_strength = np.zeros(close_prices.shape[0])
                 trend_strength[safe_mask] = (close_prices[safe_mask, -1] - denominator[safe_mask]) / denominator[safe_mask]
                 trend_strength = np.nan_to_num(trend_strength, nan=0.0, posinf=0.0, neginf=0.0)
-        else:
-            close_prices = state[:, 3]
+        else:  # (window_size, features)
+            close_prices = state[:, 3]  # Get close prices
             if len(close_prices) < 10:
                 trend_strength = 0.0
             else:
@@ -178,59 +219,37 @@ class MomentumPPOAgent(PPOAgent):
                     trend_strength = (close_prices[-1] - denominator) / denominator
                     trend_strength = np.nan_to_num(trend_strength, nan=0.0, posinf=0.0, neginf=0.0)
         
-        # Apply momentum-based action modification with trend strength
-        if len(momentum_features.shape) > 1:
-            momentum = momentum_features[:, 0]
-            trend = momentum_features[:, 2]
-            
-            # Calculate trend-based bias
-            trend_bias = np.sign(trend_strength) * np.abs(trend_strength) * 2.0  # Stronger trend bias
-            
-            # Combine momentum and trend signals
-            momentum_signal = np.where(
-                momentum < -self.momentum_threshold,
-                np.minimum(action + trend_bias, 0),  # Stronger downward bias
+        # Extract momentum and trend features
+        momentum = momentum_features[0] if len(momentum_features.shape) == 1 else momentum_features[:, 0]
+        trend = momentum_features[2] if len(momentum_features.shape) == 1 else momentum_features[:, 2]
+        
+        # Calculate trend-based bias (stronger bias for momentum agent)
+        trend_bias = np.sign(trend_strength) * np.abs(trend_strength) * 3.0  # Increased multiplier
+        
+        # Generate action based on trend and momentum
+        if isinstance(momentum, np.ndarray):  # Batch case
+            # Strong trend following
+            action = np.where(
+                trend_strength > self.momentum_threshold,
+                1.0,  # Strong buy in uptrend
                 np.where(
-                    momentum > self.momentum_threshold,
-                    np.maximum(action + trend_bias, 0),  # Stronger upward bias
-                    action + trend_bias * 0.5  # Weaker trend bias when momentum is weak
+                    trend_strength < -self.momentum_threshold,
+                    -1.0,  # Strong sell in downtrend
+                    0.0  # Hold when no clear trend
                 )
             )
-            
-            # Scale action based on trend strength
-            action = momentum_signal * (1.0 + np.abs(trend_strength))
-            
-            # Handle any NaN/inf values and clip
-            action = np.nan_to_num(action, nan=0.0, posinf=1.0, neginf=-1.0)
-            action = np.clip(action, -1.0, 1.0)
-        else:
-            momentum = momentum_features[0]
-            trend = momentum_features[2]
-            
-            # Calculate trend-based bias
-            trend_bias = np.sign(trend_strength) * np.abs(trend_strength) * 2.0  # Stronger trend bias
-            
-            # Combine momentum and trend signals
-            if momentum < -self.momentum_threshold:
-                # Strong downward momentum: reduce long positions
-                action = np.minimum(action + trend_bias, 0)  # Stronger downward bias
-            elif momentum > self.momentum_threshold:
-                # Strong upward momentum: reduce short positions
-                action = np.maximum(action + trend_bias, 0)  # Stronger upward bias
+        else:  # Single case
+            # Strong trend following
+            if trend_strength > self.momentum_threshold:
+                action = 1.0  # Strong buy in uptrend
+            elif trend_strength < -self.momentum_threshold:
+                action = -1.0  # Strong sell in downtrend
             else:
-                # Weak momentum: use trend bias with reduced strength
-                action = action + trend_bias * 0.5
-            
-            # Scale action based on trend strength
-            action = action * (1.0 + np.abs(trend_strength))
-            
-            # Handle any NaN/inf values and clip
-            action = np.nan_to_num(action, nan=0.0, posinf=1.0, neginf=-1.0)
-            action = np.clip(action, -1.0, 1.0)
-            
-            # If there's a strong trend, make sure we're following it
-            if abs(trend_strength) > 0.1:  # Strong trend threshold
-                action = np.sign(trend_strength) * max(abs(action), 0.5)  # Ensure minimum trend-following position size
+                action = 0.0  # Hold when no clear trend
+        
+        # Handle any NaN/inf values and clip
+        action = np.nan_to_num(action, nan=0.0, posinf=1.0, neginf=-1.0)
+        action = np.clip(action, -1.0, 1.0)
         
         # Ensure action is a numpy array with shape (1,)
         if isinstance(action, (float, np.float32, np.float64)):
@@ -238,15 +257,11 @@ class MomentumPPOAgent(PPOAgent):
         elif isinstance(action, np.ndarray) and action.shape != (1,):
             action = action.reshape(1)
         
-        # Final defensive clamp to ensure no NaN/inf values escape
-        action = np.nan_to_num(action, nan=0.0, posinf=1.0, neginf=-1.0)
-        action = np.clip(action, -1.0, 1.0)
-            
         return action
     
     def train_step(self, state: np.ndarray, action: np.ndarray, 
                   reward: float, next_state: np.ndarray, 
-                  done: bool) -> Dict[str, float]:
+                  done: bool, agent_id: str = None) -> Dict[str, float]:
         """
         Train the agent on a single state transition with momentum considerations.
         
@@ -256,6 +271,7 @@ class MomentumPPOAgent(PPOAgent):
             reward: Reward received
             next_state: Next state
             done: Whether episode is done
+            agent_id: Optional agent identifier for multi-agent scenarios
             
         Returns:
             Dictionary of training metrics

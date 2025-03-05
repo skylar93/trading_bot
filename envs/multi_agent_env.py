@@ -47,11 +47,12 @@ class MultiAgentTradingEnv(gym.Env):
         self.action_spaces = {}
 
         for agent_id in self.agents:
-            # Observation space: price data + technical indicators + position info
+            # Observation space: OHLCV data for window_size steps
+            n_features = self._get_n_features(agent_id)
             self.observation_spaces[agent_id] = spaces.Box(
                 low=-np.inf,
                 high=np.inf,
-                shape=(window_size, self._get_n_features(agent_id)),
+                shape=(window_size, n_features),  # Changed from flat_dim to (window_size, n_features)
                 dtype=np.float32,
             )
 
@@ -73,16 +74,9 @@ class MultiAgentTradingEnv(gym.Env):
 
     def _get_n_features(self, agent_id: str) -> int:
         """Get number of features for an agent based on its strategy"""
+        # Simplified: Use same number of features for all agents
         base_features = len(self.data.columns)  # OHLCV data
-
-        strategy = self.agent_configs[agent_id]["strategy"]
-        if strategy == "momentum":
-            return base_features + 3  # Add momentum indicators
-        elif strategy == "mean_reversion":
-            return base_features + 4  # Add mean reversion indicators
-        elif strategy == "market_making":
-            return base_features + 5  # Add order book features
-        return base_features
+        return base_features  # Fixed number of features for all agents
 
     def _calculate_strategy_features(self, agent_id: str) -> np.ndarray:
         """Calculate strategy-specific features"""
@@ -101,21 +95,23 @@ class MultiAgentTradingEnv(gym.Env):
         config = self.agent_configs[agent_id]
         lookback = config.get("lookback", 20)
 
-        # Calculate momentum indicators
+        # Ensure we have enough data for the lookback period
+        if self.current_step < lookback:
+            return np.zeros(3)  # Return zero features if not enough data
+
+        # Get price window
         close_prices = self.data["$close"].values
-        momentum = (
-            close_prices[self.current_step]
-            / close_prices[self.current_step - lookback]
-            - 1
-        )
-        volatility = np.std(
-            close_prices[self.current_step - lookback : self.current_step]
-        )
-        trend = np.polyfit(
-            range(lookback),
-            close_prices[self.current_step - lookback : self.current_step],
-            1,
-        )[0]
+        price_window = close_prices[self.current_step - lookback : self.current_step]
+
+        # Calculate momentum
+        momentum = price_window[-1] / price_window[0] - 1
+
+        # Calculate volatility
+        volatility = np.std(price_window)
+
+        # Calculate trend using matching x and y arrays
+        x = np.arange(len(price_window))
+        trend = np.polyfit(x, price_window, 1)[0]
 
         return np.array([momentum, volatility, trend])
 
@@ -124,14 +120,20 @@ class MultiAgentTradingEnv(gym.Env):
         config = self.agent_configs[agent_id]
         window = config.get("window", 50)
 
-        # Calculate mean reversion indicators
-        close_prices = self.data["$close"].values[
-            self.current_step - window : self.current_step
-        ]
-        mean = np.mean(close_prices)
-        std = np.std(close_prices)
-        zscore = (close_prices[-1] - mean) / std
-        mean_dist = (close_prices[-1] - mean) / close_prices[-1]
+        # Ensure we have enough data
+        if self.current_step < window:
+            return np.zeros(4)  # Return zero features if not enough data
+
+        # Get price window
+        close_prices = self.data["$close"].values
+        price_window = close_prices[self.current_step - window : self.current_step]
+
+        # Calculate indicators
+        mean = np.mean(price_window)
+        std = np.std(price_window)
+        current_price = price_window[-1]
+        zscore = (current_price - mean) / std if std != 0 else 0
+        mean_dist = (current_price - mean) / current_price if current_price != 0 else 0
 
         return np.array([mean, std, zscore, mean_dist])
 
@@ -170,14 +172,7 @@ class MultiAgentTradingEnv(gym.Env):
             self.current_step - self.window_size : self.current_step
         ].values
 
-        # Add strategy-specific features
-        strategy_features = self._calculate_strategy_features(agent_id)
-        if len(strategy_features) > 0:
-            strategy_features = np.tile(
-                strategy_features, (self.window_size, 1)
-            )
-            obs = np.hstack([obs, strategy_features])
-
+        # Return 2D array with shape (window_size, n_features)
         return obs.astype(np.float32)
 
     def _add_to_shared_buffer(self, experience: Dict):

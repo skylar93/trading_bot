@@ -1,17 +1,22 @@
 """
-Hyperparameter optimization module
+Hyperparameter optimization module using Ray Tune.
+
+This module provides functionality for hyperparameter optimization using Ray Tune,
+integrated with our unified configuration system.
 """
 
-from .hyperopt_env import SimplifiedTradingEnv
-from .hyperopt_agent import MinimalPPOAgent
-from .hyperopt_tuner import MinimalTuner, train_agent
-
-# Expose MinimalTuner as HyperparameterOptimizer for backward compatibility
-HyperparameterOptimizer = MinimalTuner
+from .hyperopt_ray import (
+    train_func,
+    create_search_space,
+    create_search_algorithm,
+    create_scheduler,
+    run_hyperparameter_optimization
+)
 
 __all__ = [
-    "SimplifiedTradingEnv",
-    "MinimalPPOAgent",
-    "MinimalTuner",
-    "train_agent",
+    "train_func",
+    "create_search_space",
+    "create_search_algorithm",
+    "create_scheduler",
+    "run_hyperparameter_optimization"
 ]

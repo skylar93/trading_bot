@@ -258,7 +258,7 @@ class RiskManager:
                     return {
                         "allowed": False,
                         "adjusted_size": 0.0,
-                        "reason": "trade_size_too_small"
+                        "reason": "trade_small"
                     }
                 # clamp but allow if size is still meaningful
                 adjusted_units = remain_exposure / price

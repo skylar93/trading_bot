@@ -7,6 +7,7 @@ import torch
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from gymnasium import spaces
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,11 @@ class MultiAgentManager:
     Coordinates training, experience sharing, and agent interactions.
     """
     
-    def __init__(self, agent_configs: List[Dict[str, Any]], device: str = "cuda" if torch.cuda.is_available() else "cpu"):
+    def __init__(
+        self,
+        agent_configs: List[Dict[str, Any]],
+        device: str = "cuda" if torch.cuda.is_available() else "cpu"
+    ):
         """
         Initialize the multi-agent manager.
         
@@ -42,17 +47,35 @@ class MultiAgentManager:
         # Initialize agents based on configs
         for config in agent_configs:
             agent_id = config["id"]
-            strategy = config["strategy"]
+            # Support both 'type' and 'strategy' keys for backward compatibility
+            strategy = config.get("type", config.get("strategy"))
+            if not strategy:
+                raise ValueError(f"Agent config must specify either 'type' or 'strategy': {config}")
             
             # Add device to config
             config["device"] = device
             
+            # Get observation and action spaces
+            observation_space = config.get("observation_space")
+            action_space = config.get("action_space")
+            
+            # Normalize strategy name
+            strategy = strategy.lower().replace("_", "")
+            
             if strategy == "momentum":
                 from .momentum_ppo_agent import MomentumPPOAgent
-                self.agents[agent_id] = MomentumPPOAgent(config)  # Pass config directly
-            elif strategy == "mean_reversion":
+                self.agents[agent_id] = MomentumPPOAgent(
+                    observation_space=observation_space,
+                    action_space=action_space,
+                    **{k: v for k, v in config.items() if k not in ["id", "type", "strategy", "observation_space", "action_space"]}
+                )
+            elif strategy == "meanreversion":
                 from .mean_reversion_ppo_agent import MeanReversionPPOAgent
-                self.agents[agent_id] = MeanReversionPPOAgent(config)  # Pass config directly
+                self.agents[agent_id] = MeanReversionPPOAgent(
+                    observation_space=observation_space,
+                    action_space=action_space,
+                    **{k: v for k, v in config.items() if k not in ["id", "type", "strategy", "observation_space", "action_space"]}
+                )
             else:
                 raise ValueError(f"Unknown strategy type: {strategy}")
         
@@ -149,14 +172,12 @@ class MultiAgentManager:
     
     def _add_to_shared_buffer(self, agent_id: str, experience: Dict[str, Any]) -> None:
         """Add experience to shared buffer with source agent id."""
-        self.shared_buffer.append({
-            "agent_id": agent_id,
-            **experience
-        })
+        if len(self.shared_buffer) >= self.shared_buffer_size:
+            self.shared_buffer.pop(0)  # Remove oldest experience
         
-        # Maintain buffer size
-        if len(self.shared_buffer) > self.shared_buffer_size:
-            self.shared_buffer.pop(0)
+        # Add agent ID to experience
+        experience["agent_id"] = agent_id
+        self.shared_buffer.append(experience)
     
     def save(self, path: str) -> None:
         """Save all agents' models."""

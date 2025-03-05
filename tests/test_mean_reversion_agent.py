@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 from gymnasium import spaces
-from agents.strategies.multi.mean_reversion_ppo_agent import MeanReversionPPOAgent
+from agents.strategies.agent_factory import create_agent
 
 @pytest.fixture
 def sample_config():
@@ -24,7 +24,7 @@ def sample_config():
     }
 
 def test_agent_initialization(sample_config):
-    agent = MeanReversionPPOAgent(sample_config)
+    agent = create_agent("MeanReversion", config=sample_config)
     assert agent.rsi_window == 14
     assert agent.bb_window == 20
     assert agent.bb_std == 2.0
@@ -32,7 +32,7 @@ def test_agent_initialization(sample_config):
     assert agent.overbought_threshold == 70
 
 def test_rsi_calculation(sample_config):
-    agent = MeanReversionPPOAgent(sample_config)
+    agent = create_agent("MeanReversion", config=sample_config)
     
     # Test RSI with upward trend
     prices = np.array([100.0] * 10 + [100.0 + i for i in range(5)])  # Last 5 prices trending up
@@ -45,7 +45,7 @@ def test_rsi_calculation(sample_config):
     assert rsi < 50  # RSI should be low in downward trend
 
 def test_bollinger_bands_calculation(sample_config):
-    agent = MeanReversionPPOAgent(sample_config)
+    agent = create_agent("MeanReversion", config=sample_config)
     
     # Test with flat prices
     prices = np.array([10.0] * 20)
@@ -60,7 +60,7 @@ def test_bollinger_bands_calculation(sample_config):
     assert lower < np.mean(prices)  # Lower band should be below mean
 
 def test_get_action_mean_reversion(sample_config):
-    agent = MeanReversionPPOAgent(sample_config)
+    agent = create_agent("MeanReversion", config=sample_config)
     
     # Create a state where price is at BB upper and RSI is high (overbought)
     state = np.zeros((20, 5))
@@ -81,7 +81,7 @@ def test_get_action_mean_reversion(sample_config):
     assert action >= 0  # Should prefer buying in oversold condition
 
 def test_train_step_reward_modification(sample_config):
-    agent = MeanReversionPPOAgent(sample_config)
+    agent = create_agent("MeanReversion", config=sample_config)
     
     # Create a price series with initial stability followed by sharp decline
     state = np.zeros((20, 5))

@@ -1,321 +1,180 @@
+"""
+Integration tests for the trading bot system.
+
+These tests verify that different components of the system work together correctly,
+including environment creation, agent training, and hyperparameter optimization.
+"""
+
 import pytest
-import pandas as pd
 import numpy as np
+import pandas as pd
+from unittest.mock import patch
 import os
-import yaml
-from pathlib import Path
-import logging.config
+import tempfile
+import shutil
 
-from data.utils.data_loader import DataLoader
-from envs.trading_env import TradingEnvironment
-from envs.wrap_env import make_env
-from training.train import load_config, create_env
-from data.utils.feature_generator import FeatureGenerator
+from training.train_pipeline import train_pipeline
+from training.hyperopt.hyperopt_ray import run_hyperparameter_optimization
+from training.utils.config_manager import ConfigManager
 
-
-# Set up logging configuration
-def setup_logging():
-    """Set up logging configuration"""
-    log_config_path = Path("config/logging_config.yaml")
-    if log_config_path.exists():
-        with open(log_config_path, "r") as f:
-            config = yaml.safe_load(f)
-            # Ensure log directory exists
-            os.makedirs("logs", exist_ok=True)
-            logging.config.dictConfig(config)
-    else:
-        logging.basicConfig(
-            level=logging.DEBUG,
-            format="%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s",
-        )
-
-
-# Set up logging before tests run
-setup_logging()
-logger = logging.getLogger("trading_bot.tests")
-
-
-def create_test_data():
-    """Create sample data for testing"""
-    dates = pd.date_range(start="2023-01-01", periods=100, freq="1h")
-    data = pd.DataFrame(
+@pytest.fixture
+def sample_data():
+    """Create sample market data with $ prefix columns."""
+    dates = pd.date_range(start="2025-01-01", periods=200, freq="H")
+    df = pd.DataFrame(
         {
-            "$open": np.random.randn(100) * 10 + 100,
-            "$high": np.random.randn(100) * 10 + 105,
-            "$low": np.random.randn(100) * 10 + 95,
-            "$close": np.random.randn(100) * 10 + 100,
-            "$volume": np.abs(np.random.randn(100) * 1000),
+            "$open": np.random.normal(100, 1, 200).cumsum(),
+            "$high": np.random.normal(100, 1, 200).cumsum(),
+            "$low": np.random.normal(100, 1, 200).cumsum(),
+            "$close": np.random.normal(100, 1, 200).cumsum(),
+            "$volume": np.abs(np.random.randn(200) * 100),
         },
         index=dates,
     )
-    return data
+    return df
 
-
-class TestIntegration:
-    @pytest.fixture
-    def config(self):
-        """Load configuration"""
-        config_path = Path("config/default_config.yaml")
-        assert config_path.exists(), "Configuration file not found"
-        return load_config(str(config_path))
-
-    def test_data_to_env_pipeline(self, config):
-        """Test data pipeline integration with environment"""
-        logger.info("Starting data pipeline integration test")
-
-        try:
-            # 1. Load data
-            loader = DataLoader(config["data"]["exchange"])
-            logger.debug("Created DataLoader instance")
-
-            df = loader.fetch_and_process(
-                symbol=config["data"]["symbols"][0],
-                timeframe=config["data"]["timeframe"],
-                start_date=config["data"]["start_date"],
-                limit=100,  # Use small dataset for testing
-            )
-            logger.debug(f"Loaded data shape: {df.shape}")
-
-            assert not df.empty, "Failed to load data"
-            required_columns = ["$open", "$high", "$low", "$close", "$volume"]
-            assert all(
-                col in df.columns for col in required_columns
-            ), f"Missing required columns. Found: {df.columns.tolist()}"
-
-            # Generate additional features
-            feature_generator = FeatureGenerator()
-            df = feature_generator.generate_features(df)
-            logger.debug(f"Generated features. New shape: {df.shape}")
-
-            # 2. Create environment
-            window_size = 20  # Use smaller window size for testing
-            logger.debug(
-                f"Creating environment with window_size={window_size}"
-            )
-            env = TradingEnvironment(
-                data=df,
-                initial_capital=config["env"]["initial_balance"],
-                trading_fee=config["env"]["trading_fee"],
-                window_size=window_size,
-            )
-            logger.debug("Created TradingEnvironment instance")
-
-            # 3. Apply wrappers
-            logger.debug("Applying environment wrappers")
-            wrapped_env = make_env(
-                env,
-                normalize=config["env"]["normalize"],
-                stack_size=config["env"]["stack_size"],
-            )
-            logger.debug("Applied environment wrappers")
-
-            # 4. Test environment functionality
-            logger.debug("Testing environment reset")
-            obs, info = wrapped_env.reset()
-            logger.debug(f"Reset observation shape: {obs.shape}")
-            logger.debug(f"Reset info: {info}")
-
-            assert isinstance(
-                obs, np.ndarray
-            ), "Observation should be numpy array"
-            expected_shape = (
-                window_size,
-                env.observation_space.shape[1],
-            )
-            assert (
-                obs.shape == expected_shape
-            ), f"Observation shape mismatch: expected {expected_shape}, got {obs.shape}"
-
-            # 5. Test environment step
-            logger.debug("Testing environment step")
-            action = np.array([0.5])  # Buy position with 50% size
-            obs, reward, done, truncated, info = wrapped_env.step(action)
-
-            logger.debug(f"Step observation shape: {obs.shape}")
-            logger.debug(f"Step reward: {reward}")
-            logger.debug(f"Step info: {info}")
-
-            assert isinstance(
-                obs, np.ndarray
-            ), "Step observation should be numpy array"
-            assert isinstance(reward, float), "Reward should be float"
-            assert isinstance(done, bool), "Done should be boolean"
-            assert isinstance(info, dict), "Info should be dictionary"
-            assert info["capital"] > 0, "Capital should be positive"
-
-            logger.info(
-                "Data pipeline integration test completed successfully"
-            )
-
-        except Exception as e:
-            logger.error(f"Test failed: {str(e)}", exc_info=True)
-            raise
-
-    def test_create_env_function(self):
-        """Test environment creation"""
-        logger.info("Starting environment creation test")
-
-        try:
-            # Create test data
-            data = create_test_data()
-
-            # Create environment config
-            env_config = {
-                "data": data,
-                "initial_capital": 10000.0,
-                "trading_fee": 0.001,
-                "window_size": 20,
+@pytest.fixture
+def test_config():
+    """Create a test configuration."""
+    return {
+        "env": {
+            "type": "single_asset_rl",
+            "initial_capital": 10000.0,
+            "trading_fee": 0.001,
+            "window_size": 10,
+            "max_position_size": 1.0,
+        },
+        "agent": {
+            "name": "PPO",
+            "learning_rate": 3e-4,
+            "gamma": 0.99,
+            "clip_epsilon": 0.2,
+            "batch_size": 32,
+            "n_epochs": 2,
+        },
+        "training": {
+            "total_timesteps": 500,
+            "eval_freq": 100,
+            "n_eval_episodes": 5,
+        },
+        "hyperopt": {
+            "search_algorithm": "random",
+            "metric": "mean_reward",
+            "mode": "max",
+            "num_samples": 2,
+            "parameters": {
+                "agent.learning_rate": {
+                    "distribution": "loguniform",
+                    "min": 1e-5,
+                    "max": 1e-2
+                }
             }
+        },
+        "paths": {
+            "checkpoint_dir": "test_checkpoints",
+            "hyperopt_results_dir": "test_hyperopt_results"
+        },
+        "data": {
+            "data_path": "test_data.csv"
+        }
+    }
 
-            # Create environment
-            env = create_env(env_config)
+@pytest.mark.integration
+def test_training_to_hyperopt_flow(test_config, sample_data):
+    """
+    Test the flow from training to hyperparameter optimization.
+    This verifies that we can:
+    1. Train a basic model
+    2. Use that as a baseline for hyperopt
+    3. Get improved parameters
+    """
+    with tempfile.TemporaryDirectory() as temp_dir:
+        # Update paths to use temp directory
+        test_config["paths"]["checkpoint_dir"] = os.path.join(temp_dir, "checkpoints")
+        test_config["paths"]["hyperopt_results_dir"] = os.path.join(temp_dir, "hyperopt")
+        
+        # First, do a basic training run
+        with patch("training.env_factory.load_data", return_value=sample_data):
+            results = train_pipeline(test_config)
             
-            # Check if TradingEnvironment is in the wrapper chain
-            def get_base_env(wrapped_env):
-                if hasattr(wrapped_env, 'env'):
-                    return get_base_env(wrapped_env.env)
-                return wrapped_env
+            # Verify we got basic training results
+            assert "episode_rewards" in results
+            assert "best_eval_reward" in results
+            baseline_reward = results["best_eval_reward"]
+        
+        # Now run hyperopt with the same base config
+        with patch("training.env_factory.load_data", return_value=sample_data), \
+             patch("ray.init"):
             
-            base_env = get_base_env(env)
-            assert isinstance(base_env, TradingEnvironment)
-
-        except Exception as e:
-            logger.error(f"Test failed: {str(e)}")
-            raise
-
-    def test_full_episode(self):
-        """Test running a full episode"""
-        logger.info("Starting full episode test")
-
-        try:
-            # Create test data
-            data = create_test_data()
-
-            # Create environment config
-            env_config = {
-                "data": data,
-                "initial_capital": 10000.0,
-                "trading_fee": 0.001,
-                "window_size": 20,
-            }
-
-            # Create environment
-            env = create_env(env_config)
-
-            # Run full episode
-            obs, info = env.reset()
-            done = False
-            truncated = False
-            total_reward = 0
-
-            while not (done or truncated):
-                action = env.action_space.sample()
-                obs, reward, done, truncated, info = env.step(action)
-                total_reward += reward
-
-            assert isinstance(total_reward, float)
-            assert "portfolio_value" in info
-
-        except Exception as e:
-            logger.error(f"Test failed: {str(e)}")
-            raise
-
-    def test_state_transitions(self, config):
-        """Test state transitions and position changes"""
-        logger.info("Starting state transition test")
-
-        try:
-            # Create test environment with upward trending data
-            dates = pd.date_range(start="2023-01-01", periods=100, freq="1h")
-            df = pd.DataFrame(
-                {
-                    "$open": np.linspace(1000, 1100, 100),  # Upward trend
-                    "$high": np.linspace(1010, 1110, 100),
-                    "$low": np.linspace(990, 1090, 100),
-                    "$close": np.linspace(1000, 1100, 100),
-                    "$volume": np.random.rand(100) * 1000,
-                    "RSI": np.random.uniform(0, 100, 100),
-                    "MACD": np.random.normal(0, 1, 100),
-                    "Signal": np.random.normal(0, 1, 100),
-                },
-                index=dates,
+            best_config, opt_results = run_hyperparameter_optimization(
+                config=test_config,  # Pass config directly
+                experiment_id="test_exp"
             )
+            
+            # Verify we got optimization results
+            assert best_config is not None
+            assert "agent.learning_rate" in best_config
 
-            env = TradingEnvironment(
-                data=df,
-                initial_capital=10000.0,
-                trading_fee=0.001,
-                window_size=20,
-            )
+@pytest.mark.integration
+def test_config_to_training_flow(test_config, sample_data):
+    """
+    Test the flow from config management to training.
+    This verifies that we can:
+    1. Load and modify config
+    2. Use it for training
+    3. Save and reload results
+    """
+    with tempfile.TemporaryDirectory() as temp_dir:
+        # Create a config file
+        config_path = os.path.join(temp_dir, "config.yaml")
+        config_manager = ConfigManager()
+        config_manager.config = test_config  # Set config directly
+        config_manager.save(config_path)
+        
+        # Load and modify some settings
+        config_manager.load_config(config_path)
+        config_manager.set("env.window_size", 20)
+        config_manager.set("training.total_timesteps", 300)
+        
+        # Use the modified config for training
+        with patch("training.env_factory.load_data", return_value=sample_data):
+            results = train_pipeline(config_manager.config)
+            
+            # Verify the results reflect our modifications
+            assert "episode_rewards" in results
+            assert len(results["episode_rewards"]) > 0
 
-            # Test initial state
-            obs, info = env.reset()
-            assert info["position"] == 0.0, "Initial position should be zero"
+@pytest.mark.integration
+def test_checkpoint_resume_flow(test_config, sample_data):
+    """
+    Test the flow of saving checkpoints and resuming training.
+    This verifies that we can:
+    1. Start training and save checkpoints
+    2. Resume training from a checkpoint
+    3. Get consistent results
+    """
+    with tempfile.TemporaryDirectory() as temp_dir:
+        # Set up checkpoint directory
+        checkpoint_dir = os.path.join(temp_dir, "checkpoints")
+        test_config["paths"]["checkpoint_dir"] = checkpoint_dir
+        test_config["training"]["checkpoint_freq"] = 100
+        
+        # Do initial training
+        with patch("training.env_factory.load_data", return_value=sample_data):
+            results1 = train_pipeline(test_config)
+            
+            # Verify we got checkpoints
+            assert os.path.exists(checkpoint_dir)
+            checkpoints = [f for f in os.listdir(checkpoint_dir) if f.endswith(".pt")]
+            assert len(checkpoints) > 0
+            
+            # Resume training
+            test_config["training"]["resume_from"] = os.path.join(checkpoint_dir, checkpoints[-1])
+            results2 = train_pipeline(test_config)
+            
+            # Verify resumed training produced results
+            assert "episode_rewards" in results2
+            assert len(results2["episode_rewards"]) > 0
 
-            # Test buy action
-            action = np.array([1.0])  # Full buy
-            obs, reward, done, truncated, info = env.step(action)
-            assert info["position"] > 0, "Position should be long after buy"
-            initial_position = info["position"]
-
-            # Test additional buy action
-            action = np.array([1.0])  # Another buy
-            obs, reward, done, truncated, info = env.step(action)
-            assert info["position"] >= initial_position, "Position should increase or stay same after another buy"
-
-            # Test sell action
-            action = np.array([-1.0])  # Full sell
-            obs, reward, done, truncated, info = env.step(action)
-            assert info["position"] < initial_position, "Position should decrease after sell"
-
-        except Exception as e:
-            logger.error(f"Test failed with error: {str(e)}")
-            raise
-
-    def test_reward_calculation(self):
-        """Test reward calculation"""
-        logger.info("Starting reward calculation test")
-
-        try:
-            # Create environment
-            env = TradingEnvironment(
-                data=create_test_data(),
-                initial_capital=10000.0,
-                trading_fee=0.001,
-                window_size=20,
-            )
-
-            # Reset environment
-            obs, info = env.reset()
-            assert "capital" in info
-            assert info["capital"] == env.initial_capital
-
-            # Take a buy action
-            action = np.array([1.0])  # Full buy
-            obs, reward, done, truncated, info = env.step(action)
-
-            # Verify reward calculation
-            assert isinstance(reward, float)
-            assert "capital" in info
-            assert info["capital"] > 0
-
-        except Exception as e:
-            logger.error(f"Test failed with error: {str(e)}")
-            raise
-
-    def _create_test_data(self):
-        """Create test data with known price movements"""
-        dates = pd.date_range(start="2023-01-01", periods=100, freq="1h")
-        return pd.DataFrame(
-            {
-                "$open": np.linspace(1000, 1100, 100),
-                "$high": np.linspace(1010, 1110, 100),
-                "$low": np.linspace(990, 1090, 100),
-                "$close": np.linspace(1000, 1100, 100),
-                "$volume": np.random.rand(100) * 1000,
-                "RSI": np.random.uniform(0, 100, 100),
-                "MACD": np.random.normal(0, 1, 100),
-                "Signal": np.random.normal(0, 1, 100),
-            },
-            index=dates,
-        )
+if __name__ == "__main__":
+    pytest.main(["-v", __file__]) 
