@@ -16,6 +16,10 @@
   * initial_balance: Starting account balance
   * max_position_size: Maximum allowed position size
 
+- RL Model Parameters
+  * action_space: Box(-1.0, 1.0, (1,)) for continuous action spaces
+  * observation_space: Consistent (window_size, n_features) shape
+
 [Code Organization]
 - Class Initialization
   * Always initialize logger in __init__
@@ -27,6 +31,18 @@
   * Validate required columns exist
   * Handle missing data appropriately
 
+- Environment Standardization
+  * Implement gym.Env interface consistently
+  * Always include reset(), step(), render(), close() methods
+  * Return correct observation types in reset() and step()
+  * Proper use of gym spaces in action_space and observation_space
+
+- ML/RL Code Standards
+  * Separate model definition from training logic
+  * Use Ray for distributed training where appropriate
+  * Log all experiments with MLflow
+  * Save models in standard format (PyTorch .pt)
+
 [Testing Standards]
 - Data Creation
   * Use consistent test data creation methods
@@ -36,6 +52,17 @@
 - Configuration
   * Use consistent parameter names in test configs
   * Match parameter names with environment variables 
+
+- Environment Testing
+  * Test reset() returns correct observation format
+  * Test step() processes actions correctly
+  * Verify reward calculation is correct
+  * Check episode termination conditions
+
+- Model Testing
+  * Test model loading/saving
+  * Verify forward pass works with correct input shapes
+  * Test gradient flow and optimization
 
 [Documentation Standards]
 - Python Docstrings:
@@ -54,14 +81,48 @@
   - Include edge cases and their handling
   - Explain numerical tolerances used
 
+- Configuration Documentation:
+  - Document all config parameters in YAML files
+  - Include allowed values and constraints
+  - Explain interaction between configuration options
+
 [Automated Checks]
 - Pre-commit hooks should verify:
   - Docstring presence and format
   - CHANGELOG.md updates
   - Test documentation completeness
+  - Type hints for all public functions
+  - Consistent naming conventions
 
 [Version Control]
 - Commit messages must reference:
   - Changed formulas/algorithms
   - Updated test cases
-  - Documentation updates 
+  - Documentation updates
+  - Configuration changes
+
+[MLflow Best Practices]
+- Experiment Structure:
+  - Use consistent experiment naming
+  - Store artifact paths in "./mlflow_runs/"
+  - Log hyperparameters before training starts
+  - Log metrics at regular intervals during training
+
+- Run Management:
+  - Always end active runs
+  - Clean up resources between tests
+  - Follow the MLflow Manager patterns
+  - Use parquet format for metrics data
+
+[Error Handling & Logging]
+- Logging:
+  - Use consistent log levels (DEBUG, INFO, WARNING, ERROR)
+  - Log all trading actions at INFO level
+  - Log performance metrics at regular intervals
+  - Include timestamp and context in log messages
+
+- Error Handling:
+  - Handle API errors gracefully, especially in live trading
+  - Implement circuit breakers for unexpected market conditions
+  - Log full stack traces but show user-friendly messages
+  - Document recovery procedures for common failure modes 

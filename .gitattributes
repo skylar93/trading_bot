@@ -1,0 +1,21 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Don't diff or merge these files
+*.pt binary
+*.parquet binary
+*.csv binary
+*.log binary
+
+# Mark certain files as having LF line endings on checkout
+*.py text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.ini text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.json text eol=lf
+
+# Exclude these files from GitHub language statistics
+*.log linguist-vendored
+get-pip.py linguist-vendored 
