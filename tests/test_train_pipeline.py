@@ -22,7 +22,7 @@ from envs.single_asset_rl_env import SingleAssetRLTradingEnv
 def sample_data():
     """Create sample market data with $ prefix columns."""
     # 200 timesteps of fake data, just enough for quick tests
-    dates = pd.date_range(start="2025-01-01", periods=200, freq="H")
+    dates = pd.date_range(start="2025-01-01", periods=200, freq="h")
     df = pd.DataFrame(
         {
             "$open": np.random.normal(100, 1, 200).cumsum(),

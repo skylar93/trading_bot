@@ -119,7 +119,13 @@ class MomentumPPOAgent(PPOAgent):
     
     def _calculate_momentum_features(self, state: np.ndarray) -> np.ndarray:
         """
-        Calculate momentum-specific features from the state.
+        Calculate momentum specific features from the state.
+        Handles NaN values safely.
+        
+        Recent Changes:
+        - Improved handling of NaN/Inf values with better bounds checking
+        - Added protection against division by zero
+        - Added clipping for extreme values
         
         Args:
             state: Raw state observation
@@ -127,51 +133,96 @@ class MomentumPPOAgent(PPOAgent):
         Returns:
             Momentum features as numpy array
         """
-        # Ensure state is 2D
+        # Handle NaN values in state with more specific bounds
+        state = np.nan_to_num(state, nan=0.0, posinf=1e10, neginf=-1e10)
+        
         if len(state.shape) == 1:
             state = state.reshape(1, -1)
-        elif len(state.shape) == 3:
-            # If state is (batch, window, features), use the last window
-            state = state[:, -self.momentum_window:, :]
-            
-        # Extract close prices (assuming OHLCV format)
+        
         if state.shape[-1] >= 4:  # Ensure we have enough features
-            close_prices = state[..., 3]  # Get close prices
+            if len(state.shape) == 3:  # (batch, window, features)
+                close_prices = state[..., 3]  # Get close prices for all batches
+            else:  # (window, features)
+                close_prices = state[:, 3]  # Get close prices for single sample
             
-            # Calculate momentum indicators with safety checks
-            if len(close_prices.shape) == 2:  # Batch case
-                # Use available window size if momentum_window is too large
-                available_window = min(close_prices.shape[1], self.momentum_window)
-                if available_window < 2:  # Need at least 2 points for momentum
-                    return np.zeros((close_prices.shape[0], 3), dtype=np.float32)
+            if len(close_prices.shape) == 2:  # Batch processing
+                batch_size = close_prices.shape[0]
+                window_size = close_prices.shape[1]
                 
-                momentum = close_prices[:, -1] / close_prices[:, -available_window] - 1
-                volatility = np.std(close_prices[:, -available_window:], axis=1)
-                trend = np.array([
-                    np.polyfit(range(available_window), prices[-available_window:], 1)[0]
-                    for prices in close_prices
-                ])
-            else:  # Single case
-                available_window = min(len(close_prices), self.momentum_window)
-                if available_window < 2:  # Need at least 2 points for momentum
-                    return np.zeros(3, dtype=np.float32)
+                # Initialize arrays for features
+                momentum_values = np.zeros(batch_size)
+                volatility_values = np.zeros(batch_size)
+                trend_values = np.zeros(batch_size)
                 
-                momentum = close_prices[-1] / close_prices[-available_window] - 1
-                volatility = np.std(close_prices[-available_window:])
-                trend = np.polyfit(
-                    range(available_window),
-                    close_prices[-available_window:],
-                    1
-                )[0]
-            
-            # Handle NaN/inf values
-            momentum = np.nan_to_num(momentum, nan=0.0, posinf=1.0, neginf=-1.0)
-            volatility = np.nan_to_num(volatility, nan=0.0, posinf=1.0, neginf=0.0)
-            trend = np.nan_to_num(trend, nan=0.0, posinf=1.0, neginf=-1.0)
-            
-            return np.column_stack([momentum, volatility, trend]) if len(state.shape) > 2 else np.array([momentum, volatility, trend])
+                for i, prices in enumerate(close_prices):
+                    # Ensure prices are valid
+                    prices = np.nan_to_num(prices, nan=np.nanmean(prices) if np.any(~np.isnan(prices)) else 0.0)
+                    
+                    # Calculate momentum with protection against division by zero
+                    if len(prices) > 1 and prices[0] != 0:
+                        momentum_values[i] = prices[-1] / prices[0] - 1
+                    else:
+                        momentum_values[i] = 0.0
+                    
+                    # Calculate volatility
+                    if len(prices) > 1:
+                        volatility_values[i] = np.std(prices)
+                    else:
+                        volatility_values[i] = 0.0
+                    
+                    # Calculate trend using linear regression
+                    if len(prices) > 1:
+                        x = np.arange(len(prices))
+                        try:
+                            trend_values[i] = np.polyfit(x, prices, 1)[0]
+                        except:
+                            trend_values[i] = 0.0
+                    else:
+                        trend_values[i] = 0.0
+                
+                # Clip extreme values
+                momentum_values = np.clip(momentum_values, -10, 10)
+                
+                # Stack features and handle any remaining NaN/Inf values
+                features = np.column_stack([momentum_values, volatility_values, trend_values])
+                features = np.nan_to_num(features, nan=0.0, posinf=1e10, neginf=-1e10)
+                
+                return features
+            else:  # Single sample processing
+                # Ensure prices are valid
+                prices = np.nan_to_num(close_prices, nan=np.nanmean(close_prices) if np.any(~np.isnan(close_prices)) else 0.0)
+                
+                # Calculate momentum with protection against division by zero
+                if len(prices) > 1 and prices[0] != 0:
+                    momentum = prices[-1] / prices[0] - 1
+                else:
+                    momentum = 0.0
+                
+                # Calculate volatility
+                if len(prices) > 1:
+                    volatility = np.std(prices)
+                else:
+                    volatility = 0.0
+                
+                # Calculate trend using linear regression
+                if len(prices) > 1:
+                    x = np.arange(len(prices))
+                    try:
+                        trend = np.polyfit(x, prices, 1)[0]
+                    except:
+                        trend = 0.0
+                else:
+                    trend = 0.0
+                
+                # Clip extreme values
+                momentum = np.clip(momentum, -10, 10)
+                
+                # Create feature array and handle any remaining NaN/Inf values
+                features = np.array([momentum, volatility, trend])
+                features = np.nan_to_num(features, nan=0.0, posinf=1e10, neginf=-1e10)
+                
+                return features
         else:
-            # If we don't have enough features, return zero features
             shape = (state.shape[0], 3) if len(state.shape) > 2 else (3,)
             return np.zeros(shape, dtype=np.float32)
     

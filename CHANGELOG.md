@@ -44,6 +44,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed MultiAgentTradingEnv constructor parameters in env_factory.py to match actual implementation
 - Added backward compatibility for data path specification in hyperopt_ray.py - now supports both paths.data and data.data_path configurations
 - Fixed error handling in hyperparameter optimization when data paths are not correctly specified
+- Fixed handling of dotted parameters in hyperopt_ray.py to ensure they are preserved in the returned configuration
+- Updated Ray Tune integration to use get_dataframe() method for retrieving trial counts instead of the deprecated num_trials attribute
+- Improved error handling in hyperparameter optimization to ensure valid fallback configurations are always returned
+- Added proper initialization of Ray only when needed to prevent errors in hyperparameter optimization
+- Implemented proactive NaN/Inf handling in feature calculations to prevent training failures
+- Added robust sanitization of feature values in FeatureGenerator to ensure valid numerical outputs
+- Enhanced momentum and mean reversion feature calculations with better division-by-zero protection
+- Improved observation handling in environments to ensure consistent shapes and valid values
+- Added value clipping for extreme feature values to prevent model instability
 
 ## [0.1.0] - 2024-01-08
 

@@ -211,7 +211,7 @@ def mock_dataloader():
 
     class MockDataLoader:
         def fetch_data(self, start_date, end_date):
-            dates = pd.date_range(start=start_date, end=end_date, freq="1H")
+            dates = pd.date_range(start=start_date, end=end_date, freq="1h")
 
             # Generate consistent OHLCV data
             base_price = 100

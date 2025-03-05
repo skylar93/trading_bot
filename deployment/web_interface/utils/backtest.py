@@ -4,7 +4,6 @@ Backtest utilities for the Trading Bot UI
 
 import pandas as pd
 import numpy as np
-from datetime import datetime
 from typing import Dict, List, Optional, Any
 import logging
 from training.backtesting.risk_aware_backtester import RiskAwareBacktester

@@ -192,14 +192,19 @@ class MeanReversionPPOAgent(PPOAgent):
         Calculate mean reversion specific features from the state.
         Handles NaN values safely.
         
+        Recent Changes:
+        - Improved handling of NaN/Inf values with better bounds checking
+        - Added protection against division by zero
+        - Added clipping for extreme values
+        
         Args:
             state: Raw state observation
             
         Returns:
             Mean reversion features as numpy array
         """
-        # Handle NaN values in state
-        state = np.nan_to_num(state, nan=0.0, posinf=9999, neginf=-9999)
+        # Handle NaN values in state with more specific bounds
+        state = np.nan_to_num(state, nan=0.0, posinf=1e10, neginf=-1e10)
         
         if len(state.shape) == 1:
             state = state.reshape(1, -1)
@@ -216,27 +221,59 @@ class MeanReversionPPOAgent(PPOAgent):
                 bb_lower_values = []
                 
                 for prices in close_prices:
+                    # Ensure prices are valid
+                    prices = np.nan_to_num(prices, nan=np.nanmean(prices) if np.any(~np.isnan(prices)) else 0.0)
+                    
+                    # Calculate RSI and Bollinger Bands
                     rsi = self._calculate_rsi(prices)
                     bb_upper, bb_lower = self._calculate_bollinger_bands(prices)
-                    current_price = prices[-1]
+                    current_price = prices[-1] if len(prices) > 0 else 0.0
+                    
+                    # Avoid division by zero
+                    if current_price < self.EPS:
+                        current_price = self.EPS
+                    
+                    # Calculate distances with protection
+                    bb_upper_dist = (bb_upper - current_price) / current_price
+                    bb_lower_dist = (current_price - bb_lower) / current_price
+                    
+                    # Clip to reasonable ranges
+                    bb_upper_dist = np.clip(bb_upper_dist, -1.0, 1.0)
+                    bb_lower_dist = np.clip(bb_lower_dist, -1.0, 1.0)
                     
                     rsi_values.append(rsi)
-                    bb_upper_values.append((bb_upper - current_price) / max(current_price, self.EPS))
-                    bb_lower_values.append((current_price - bb_lower) / max(current_price, self.EPS))
+                    bb_upper_values.append(bb_upper_dist)
+                    bb_lower_values.append(bb_lower_dist)
                 
                 rsi = np.array(rsi_values)
                 bb_upper_dist = np.array(bb_upper_values)
                 bb_lower_dist = np.array(bb_lower_values)
             else:  # Single sample processing
-                rsi = self._calculate_rsi(close_prices)
-                bb_upper, bb_lower = self._calculate_bollinger_bands(close_prices)
-                current_price = close_prices[-1]
-                bb_upper_dist = (bb_upper - current_price) / max(current_price, self.EPS)
-                bb_lower_dist = (current_price - bb_lower) / max(current_price, self.EPS)
+                # Ensure prices are valid
+                prices = np.nan_to_num(close_prices, nan=np.nanmean(close_prices) if np.any(~np.isnan(close_prices)) else 0.0)
+                
+                # Calculate RSI and Bollinger Bands
+                rsi = self._calculate_rsi(prices)
+                bb_upper, bb_lower = self._calculate_bollinger_bands(prices)
+                current_price = prices[-1] if len(prices) > 0 else 0.0
+                
+                # Avoid division by zero
+                if current_price < self.EPS:
+                    current_price = self.EPS
+                
+                # Calculate distances with protection
+                bb_upper_dist = (bb_upper - current_price) / current_price
+                bb_lower_dist = (current_price - bb_lower) / current_price
+                
+                # Clip to reasonable ranges
+                bb_upper_dist = np.clip(bb_upper_dist, -1.0, 1.0)
+                bb_lower_dist = np.clip(bb_lower_dist, -1.0, 1.0)
             
-            # Handle any NaN values in the final features
+            # Create feature array and handle any remaining NaN/Inf values
             features = np.column_stack([rsi, bb_upper_dist, bb_lower_dist]) if len(state.shape) > 2 else np.array([rsi, bb_upper_dist, bb_lower_dist])
-            return np.nan_to_num(features, nan=0.0, posinf=1.0, neginf=-1.0)
+            features = np.nan_to_num(features, nan=0.0, posinf=1.0, neginf=-1.0)
+            
+            return features
         else:
             shape = (state.shape[0], 3) if len(state.shape) > 2 else (3,)
             return np.zeros(shape, dtype=np.float32)

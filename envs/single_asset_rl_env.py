@@ -174,7 +174,9 @@ class SingleAssetRLTradingEnv(gym.Env):
         
         # Calculate incremental reward (change in portfolio value)
         # Use relative change with protection against division by zero
-        reward = (self.portfolio_value - self.previous_portfolio_value) / max(self.previous_portfolio_value, 1e-8)
+        # Add a small epsilon to prevent division by very small numbers
+        eps = 1e-8
+        reward = (self.portfolio_value - self.previous_portfolio_value) / max(self.previous_portfolio_value, eps)
         
         observation = self._get_observation()
         info = self._get_info()

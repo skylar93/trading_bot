@@ -91,7 +91,14 @@ class MultiAgentTradingEnv(gym.Env):
         return np.array([])
 
     def _calculate_momentum_features(self, agent_id: str) -> np.ndarray:
-        """Calculate momentum strategy features"""
+        """
+        Calculate momentum strategy features.
+        
+        Recent Changes:
+        - Added protection against NaN/Inf values
+        - Added protection against division by zero
+        - Added bounds checking for calculated features
+        """
         config = self.agent_configs[agent_id]
         lookback = config.get("lookback", 20)
 
@@ -102,21 +109,47 @@ class MultiAgentTradingEnv(gym.Env):
         # Get price window
         close_prices = self.data["$close"].values
         price_window = close_prices[self.current_step - lookback : self.current_step]
+        
+        # Handle potential NaN values in price window
+        price_window = np.nan_to_num(price_window, nan=np.nanmean(price_window) if np.any(~np.isnan(price_window)) else 0.0)
+        
+        # Ensure we have valid prices
+        if len(price_window) == 0 or np.all(price_window == 0):
+            return np.zeros(3)
 
-        # Calculate momentum
-        momentum = price_window[-1] / price_window[0] - 1
+        # Calculate momentum with protection against division by zero
+        if price_window[0] == 0:
+            momentum = 0
+        else:
+            momentum = price_window[-1] / price_window[0] - 1
 
         # Calculate volatility
         volatility = np.std(price_window)
 
         # Calculate trend using matching x and y arrays
         x = np.arange(len(price_window))
-        trend = np.polyfit(x, price_window, 1)[0]
+        trend = np.polyfit(x, price_window, 1)[0] if len(price_window) > 1 else 0
 
-        return np.array([momentum, volatility, trend])
+        # Create feature array and sanitize
+        features = np.array([momentum, volatility, trend])
+        
+        # Handle any NaN or Inf values
+        features = np.nan_to_num(features, nan=0.0, posinf=1e10, neginf=-1e10)
+        
+        # Clip extreme values
+        features[0] = np.clip(features[0], -10, 10)  # Clip momentum to reasonable range
+        
+        return features
 
     def _calculate_mean_reversion_features(self, agent_id: str) -> np.ndarray:
-        """Calculate mean reversion strategy features"""
+        """
+        Calculate mean reversion strategy features.
+        
+        Recent Changes:
+        - Added protection against NaN/Inf values
+        - Added protection against division by zero
+        - Added bounds checking for calculated features
+        """
         config = self.agent_configs[agent_id]
         window = config.get("window", 50)
 
@@ -127,50 +160,128 @@ class MultiAgentTradingEnv(gym.Env):
         # Get price window
         close_prices = self.data["$close"].values
         price_window = close_prices[self.current_step - window : self.current_step]
+        
+        # Handle potential NaN values in price window
+        price_window = np.nan_to_num(price_window, nan=np.nanmean(price_window) if np.any(~np.isnan(price_window)) else 0.0)
+        
+        # Ensure we have valid prices
+        if len(price_window) == 0 or np.all(price_window == 0):
+            return np.zeros(4)
 
         # Calculate indicators
         mean = np.mean(price_window)
         std = np.std(price_window)
         current_price = price_window[-1]
-        zscore = (current_price - mean) / std if std != 0 else 0
-        mean_dist = (current_price - mean) / current_price if current_price != 0 else 0
-
-        return np.array([mean, std, zscore, mean_dist])
+        
+        # Add protection against division by zero with epsilon
+        eps = 1e-8
+        
+        # Calculate z-score with protection against zero std
+        if std < eps:
+            zscore = 0
+        else:
+            zscore = (current_price - mean) / std
+            
+        # Calculate mean distance with protection against zero price
+        if abs(current_price) < eps:
+            mean_dist = 0
+        else:
+            mean_dist = (current_price - mean) / current_price
+        
+        # Create feature array and sanitize
+        features = np.array([mean, std, zscore, mean_dist])
+        
+        # Handle any NaN or Inf values
+        features = np.nan_to_num(features, nan=0.0, posinf=1e10, neginf=-1e10)
+        
+        # Clip extreme values
+        features[2] = np.clip(features[2], -10, 10)  # Clip zscore to reasonable range
+        features[3] = np.clip(features[3], -1, 1)    # Clip mean_dist to [-1, 1]
+        
+        return features
 
     def _calculate_market_making_features(self, agent_id: str) -> np.ndarray:
-        """Calculate market making strategy features"""
+        """
+        Calculate market making strategy features.
+        
+        Recent Changes:
+        - Added protection against NaN/Inf values
+        - Added bounds checking for calculated features
+        """
         config = self.agent_configs[agent_id]
 
-        # Calculate market making indicators
-        spread = (
-            self.data["$high"].values[self.current_step]
-            - self.data["$low"].values[self.current_step]
-        )
-        volume = self.data["$volume"].values[self.current_step]
-        volatility = np.std(
-            self.data["$close"].values[
-                self.current_step - 20 : self.current_step
-            ]
-        )
-        bid_strength = (
-            self.data["$close"].values[self.current_step]
-            - self.data["$low"].values[self.current_step]
-        )
-        ask_strength = (
-            self.data["$high"].values[self.current_step]
-            - self.data["$close"].values[self.current_step]
-        )
+        # Ensure we have enough data
+        if self.current_step < 20:  # Need at least 20 steps for volatility
+            return np.zeros(5)  # Return zero features if not enough data
 
-        return np.array(
-            [spread, volume, volatility, bid_strength, ask_strength]
-        )
+        # Get current data
+        high = self.data["$high"].values[self.current_step]
+        low = self.data["$low"].values[self.current_step]
+        close = self.data["$close"].values[self.current_step]
+        volume = self.data["$volume"].values[self.current_step]
+        
+        # Handle potential NaN values
+        high = np.nan_to_num(high, nan=close)
+        low = np.nan_to_num(low, nan=close)
+        close = np.nan_to_num(close, nan=0.0)
+        volume = np.nan_to_num(volume, nan=0.0)
+        
+        # Calculate market making indicators
+        spread = high - low
+        
+        # Calculate volatility with protection against NaN
+        price_window = self.data["$close"].values[self.current_step - 20 : self.current_step]
+        price_window = np.nan_to_num(price_window, nan=np.nanmean(price_window) if np.any(~np.isnan(price_window)) else 0.0)
+        volatility = np.std(price_window)
+        
+        bid_strength = close - low
+        ask_strength = high - close
+
+        # Create feature array and sanitize
+        features = np.array([spread, volume, volatility, bid_strength, ask_strength])
+        
+        # Handle any NaN or Inf values
+        features = np.nan_to_num(features, nan=0.0, posinf=1e10, neginf=-1e10)
+        
+        return features
 
     def _get_observation(self, agent_id: str) -> np.ndarray:
-        """Get observation for an agent"""
+        """
+        Get observation for an agent.
+        
+        Recent Changes:
+        - Added protection against NaN/Inf values in observations
+        - Added validation to ensure observation has correct shape
+        """
         # Get base OHLCV data
-        obs = self.data.iloc[
-            self.current_step - self.window_size : self.current_step
-        ].values
+        start_idx = self.current_step - self.window_size
+        end_idx = self.current_step
+        
+        # Handle negative start index with padding
+        if start_idx < 0:
+            # Create a padded observation with zeros
+            obs = np.zeros((self.window_size, len(self.data.columns)))
+            # Fill in the available data
+            available_data = self.data.iloc[:end_idx].values
+            obs[-len(available_data):] = available_data
+        else:
+            # Normal case: slice the window
+            obs = self.data.iloc[start_idx:end_idx].values
+        
+        # Verify we have exactly window_size rows
+        if len(obs) != self.window_size:
+            self.logger.warning(
+                f"Observation shape mismatch: got {len(obs)} rows, expected {self.window_size}. Padding with zeros."
+            )
+            # Create correctly sized observation with zeros
+            correct_obs = np.zeros((self.window_size, obs.shape[1] if len(obs) > 0 else len(self.data.columns)))
+            # Fill in the available data
+            if len(obs) > 0:
+                correct_obs[-len(obs):] = obs
+            obs = correct_obs
+        
+        # Handle NaN and Inf values
+        obs = np.nan_to_num(obs, nan=0.0, posinf=1e10, neginf=-1e10)
 
         # Return 2D array with shape (window_size, n_features)
         return obs.astype(np.float32)
