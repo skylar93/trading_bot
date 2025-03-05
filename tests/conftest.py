@@ -247,3 +247,102 @@ def event_loop():
     loop = asyncio.get_event_loop_policy().new_event_loop()
     yield loop
     loop.close()
+
+
+@pytest.fixture(scope="session")
+def mlflow_tracking():
+    """Set up and tear down MLflow tracking for all tests.
+    
+    This fixture:
+    1. Creates a temporary directory for MLflow tracking
+    2. Sets up MLflow tracking URI
+    3. Creates a default experiment
+    4. Cleans up after all tests
+    """
+    # Create temporary directory for MLflow
+    temp_dir = tempfile.mkdtemp()
+    os.makedirs(temp_dir, exist_ok=True)
+    tracking_uri = f"file://{temp_dir}"
+    
+    # Set up MLflow
+    mlflow.set_tracking_uri(tracking_uri)
+    
+    # Create and set default experiment
+    experiment_name = f"test_experiment_{int(time.time())}"
+    try:
+        experiment = mlflow.get_experiment_by_name(experiment_name)
+        if experiment:
+            mlflow.delete_experiment(experiment.experiment_id)
+            time.sleep(0.1)  # Wait for deletion to complete
+    except:
+        pass
+        
+    mlflow.create_experiment(experiment_name)
+    mlflow.set_experiment(experiment_name)
+    
+    yield temp_dir
+    
+    # Clean up any remaining active runs
+    try:
+        active_run = mlflow.active_run()
+        if active_run:
+            mlflow.end_run()
+            time.sleep(0.1)  # Wait for run to end
+    except Exception as e:
+        logger.warning(f"Error ending active run: {e}")
+    
+    # Delete experiment
+    try:
+        experiment = mlflow.get_experiment_by_name(experiment_name)
+        if experiment:
+            mlflow.delete_experiment(experiment.experiment_id)
+    except Exception as e:
+        logger.warning(f"Error deleting experiment: {e}")
+    
+    # Clean up temp directory
+    try:
+        shutil.rmtree(temp_dir)
+    except Exception as e:
+        logger.error(f"Failed to cleanup MLflow temp directory: {str(e)}")
+
+
+@pytest.fixture
+def mlflow_run(mlflow_tracking):
+    """Create a new MLflow run for each test.
+    
+    This fixture ensures each test gets its own MLflow run and proper cleanup.
+    """
+    # End any existing runs
+    try:
+        if mlflow.active_run():
+            mlflow.end_run()
+            time.sleep(0.1)  # Wait for run to end
+    except Exception as e:
+        logger.warning(f"Error ending existing run: {e}")
+    
+    # Start a new run
+    run = mlflow.start_run()
+    yield run
+    
+    # Ensure run is ended
+    try:
+        if mlflow.active_run():
+            mlflow.end_run()
+            time.sleep(0.1)  # Wait for run to end
+    except Exception as e:
+        logger.warning(f"Error ending test run: {e}")
+
+
+@pytest.fixture
+def ray_results_dir():
+    """Create and manage a temporary directory for Ray results.
+    
+    Returns:
+        Path to temporary directory
+    """
+    # Create temporary directory
+    temp_dir = tempfile.mkdtemp()
+    yield temp_dir
+    
+    # Clean up
+    shutil.rmtree(temp_dir)

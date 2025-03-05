@@ -1,0 +1,2 @@
+mean_reward,timestamp,checkpoint_dir_name,done,training_iteration,trial_id,date,time_this_iter_s,time_total_s,pid,hostname,node_ip,time_since_restore,iterations_since_restore
+-inf,1741146199,,False,1,f8dd3_00007,2025-03-04_22-43-19,0.29868412017822266,0.29868412017822266,51055,MacBook-Air.local,127.0.0.1,0.29868412017822266,1

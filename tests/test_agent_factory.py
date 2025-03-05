@@ -53,7 +53,7 @@ def test_create_invalid_agent():
     """Test error handling for invalid agent type."""
     with pytest.raises(ValueError) as exc_info:
         create_agent("InvalidAgent")
-    assert "Unsupported agent type: InvalidAgent" in str(exc_info.value)
+    assert "Unsupported agent type: invalidagent" in str(exc_info.value)
 
 def test_list_available_agents():
     """Test listing available agents."""
@@ -124,30 +124,59 @@ def test_agent_config_persistence():
     assert ppo_agent.batch_size == test_config["batch_size"]
 
 def test_agent_behavior_differentiation():
-    """Test that different agents produce different actions for the same input."""
-    # Create test observation
-    obs = np.random.random((20, 5)).astype(np.float32)
+    """Test that different agent types behave differently."""
+    # Create different types of agents
+    obs_space = gym.spaces.Box(
+        low=-np.inf, high=np.inf,
+        shape=(20, 5), dtype=np.float32
+    )
+    act_space = gym.spaces.Box(
+        low=-1.0, high=1.0,
+        shape=(1,), dtype=np.float32
+    )
     
-    # Create different agents
     agents = {
-        "Dummy": create_agent("Dummy"),
-        "MeanReversion": create_agent("MeanReversion"),
-        "Momentum": create_agent("Momentum")
+        "MeanReversion": create_agent(
+            "MeanReversion",
+            config={"rsi_window": 14, "bb_window": 20},
+            observation_space=obs_space,
+            action_space=act_space
+        ),
+        "Momentum": create_agent(
+            "Momentum",
+            config={"momentum_window": 20, "momentum_threshold": 0.02},
+            observation_space=obs_space,
+            action_space=act_space
+        )
     }
     
-    # Get actions from each agent
+    # Create test observation with clear trend
+    obs = np.zeros((20, 5), dtype=np.float32)
+    # Set increasing close prices (index 3) to create upward trend
+    obs[:, 3] = np.linspace(90, 110, 20)  # 20 days of increasing prices
+    # Set some reasonable volume
+    obs[:, 4] = 1000000
+    # Set OHLC values around close
+    for i in range(20):
+        obs[i, 0] = obs[i, 3] - 0.5  # open slightly lower
+        obs[i, 1] = obs[i, 3] + 1.0  # high above close
+        obs[i, 2] = obs[i, 3] - 1.0  # low below close
+    
+    # Get actions from both agents
     actions = {name: agent.predict(obs) for name, agent in agents.items()}
     
     # Verify actions are different
-    assert not np.array_equal(actions["Dummy"], actions["MeanReversion"])
-    assert not np.array_equal(actions["MeanReversion"], actions["Momentum"])
+    # Momentum agent should be more bullish in uptrend
+    assert actions["Momentum"][0] > actions["MeanReversion"][0], \
+        f"Expected Momentum agent to be more bullish than MeanReversion in uptrend. " \
+        f"Got Momentum: {actions['Momentum']}, MeanReversion: {actions['MeanReversion']}"
 
 def test_multi_agent_configuration():
     """Test proper configuration of MultiAgentManager."""
     agent_configs = [
         {
             "id": "mean_rev_1",
-            "strategy": "mean_reversion",
+            "type": "meanreversion",
             "weight": 0.5,
             "observation_space": gym.spaces.Box(
                 low=-np.inf, high=np.inf,
@@ -160,7 +189,7 @@ def test_multi_agent_configuration():
         },
         {
             "id": "momentum_1",
-            "strategy": "momentum",
+            "type": "momentum",
             "weight": 0.5,
             "observation_space": gym.spaces.Box(
                 low=-np.inf, high=np.inf,
@@ -174,7 +203,7 @@ def test_multi_agent_configuration():
     ]
     
     config = {
-        "agent_configs": agent_configs
+        "agents": agent_configs
     }
     
     # Create multi-agent
@@ -204,22 +233,29 @@ def test_agent_state_initialization():
 
 def test_agent_type_specific_config():
     """Test that agent-specific configurations are properly handled."""
+    # Create observation and action spaces
+    obs_space = gym.spaces.Box(
+        low=-np.inf, high=np.inf,
+        shape=(20, 5), dtype=np.float32
+    )
+    act_space = gym.spaces.Box(
+        low=-1.0, high=1.0,
+        shape=(1,), dtype=np.float32
+    )
+    
     # Test MeanReversion specific config
     mean_rev_config = {
         "rsi_window": 50,
         "bb_window": 20,
-        "bb_std": 2.0,
-        "observation_space": gym.spaces.Box(
-            low=-np.inf, high=np.inf,
-            shape=(20, 5), dtype=np.float32
-        ),
-        "action_space": gym.spaces.Box(
-            low=-1.0, high=1.0,
-            shape=(1,), dtype=np.float32
-        )
+        "bb_std": 2.0
     }
     
-    mean_rev_agent = create_agent("MeanReversion", config=mean_rev_config)
+    mean_rev_agent = create_agent(
+        "MeanReversion",
+        config=mean_rev_config,
+        observation_space=obs_space,
+        action_space=act_space
+    )
     assert hasattr(mean_rev_agent, "rsi_window")
     assert mean_rev_agent.rsi_window == 50
     assert hasattr(mean_rev_agent, "bb_window")
@@ -228,16 +264,16 @@ def test_agent_type_specific_config():
     # Test Momentum specific config
     momentum_config = {
         "momentum_window": 20,
-        "observation_space": gym.spaces.Box(
-            low=-np.inf, high=np.inf,
-            shape=(20, 5), dtype=np.float32
-        ),
-        "action_space": gym.spaces.Box(
-            low=-1.0, high=1.0,
-            shape=(1,), dtype=np.float32
-        )
+        "momentum_threshold": 0.02  # Added momentum threshold
     }
     
-    momentum_agent = create_agent("Momentum", config=momentum_config)
+    momentum_agent = create_agent(
+        "Momentum",
+        config=momentum_config,
+        observation_space=obs_space,
+        action_space=act_space
+    )
     assert hasattr(momentum_agent, "momentum_window")
-    assert momentum_agent.momentum_window == 20 
+    assert momentum_agent.momentum_window == 20
+    assert hasattr(momentum_agent, "momentum_threshold")
+    assert momentum_agent.momentum_threshold == 0.02 

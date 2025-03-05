@@ -349,13 +349,3 @@ If the codebase requires a major refactoring to align with these guidelines, fol
 
 - **Performance Slowdown**:  
   Monitor execution time, optimize batch sizes, leverage Ray for parallel processing.
-
----
-
-## References
-
-- [Project Repository](https://github.com/your-repo)
-- [Issue Tracker](https://github.com/your-repo/issues)
-- [README.md](./README.md)
-
-By adhering to these principles, rules, and workflow steps, you ensure a consistent, robust, and maintainable trading bot codebase.

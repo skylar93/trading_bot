@@ -81,6 +81,7 @@ class SingleAssetRLTradingEnv(gym.Env):
         self.current_position = None
         self.current_capital = None
         self.portfolio_value = None
+        self.previous_portfolio_value = None  # Added to track previous portfolio value
         self.done = None
         self.trades = []
 
@@ -98,14 +99,16 @@ class SingleAssetRLTradingEnv(gym.Env):
         if self.data is None:
             raise ValueError("No data provided to environment")
 
-        # Reset state
-        self.current_step = self.window_size
+        # Reset state variables
+        self.current_step = self.window_size  # Start at window_size
         self.current_position = 0.0
         self.current_capital = self.initial_capital
         self.portfolio_value = self.initial_capital
+        self.previous_portfolio_value = self.initial_capital
         self.done = False
         self.trades = []
 
+        # Get observation using _get_observation which handles padding
         observation = self._get_observation()
         info = self._get_info()
 
@@ -117,6 +120,9 @@ class SingleAssetRLTradingEnv(gym.Env):
         """Execute one step in the environment"""
         if self.done:
             raise RuntimeError("Environment is done, call reset() first")
+
+        # Store the portfolio value before taking action
+        self.previous_portfolio_value = self._calculate_portfolio_value(self.current_step)
 
         # Get current price data
         current_price = self.data.iloc[self.current_step]["$close"]
@@ -159,15 +165,16 @@ class SingleAssetRLTradingEnv(gym.Env):
                 "type": "buy" if actual_change > 0 else "sell"
             })
 
-        # Update portfolio value
-        self.portfolio_value = self._calculate_portfolio_value(self.current_step)
-        
-        # Calculate reward (change in portfolio value)
-        reward = (self.portfolio_value / self.initial_capital) - 1.0
-        
         # Move to next step
         self.current_step += 1
         self.done = self.current_step >= len(self.data)
+        
+        # Calculate new portfolio value after action and step
+        self.portfolio_value = self._calculate_portfolio_value(self.current_step - 1 if self.done else self.current_step)
+        
+        # Calculate incremental reward (change in portfolio value)
+        # Use relative change with protection against division by zero
+        reward = (self.portfolio_value - self.previous_portfolio_value) / max(self.previous_portfolio_value, 1e-8)
         
         observation = self._get_observation()
         info = self._get_info()
@@ -175,22 +182,49 @@ class SingleAssetRLTradingEnv(gym.Env):
         return observation, reward, self.done, False, info
 
     def _get_observation(self) -> np.ndarray:
-        """Get current observation (window of OHLCV data)"""
+        """Get current observation (window of OHLCV data)
+        
+        Returns:
+            np.ndarray: Observation with shape (window_size, 5) containing OHLCV data.
+            If current_step < window_size, the observation is padded with the first row's data.
+        """
         start_idx = self.current_step - self.window_size
         end_idx = self.current_step
         
-        window_data = self.data.iloc[start_idx:end_idx]
+        # Handle negative start index with padding
+        if start_idx < 0:
+            pad_size = abs(start_idx)
+            # Get available data up to current step
+            partial_data = self.data.iloc[:end_idx]
+            
+            # If no data available yet, pad with first row
+            if len(partial_data) == 0:
+                pad_data = pd.DataFrame([self.data.iloc[0]] * self.window_size)
+                window_data = pad_data
+            else:
+                # Pad with first available row
+                pad_data = pd.DataFrame([partial_data.iloc[0]] * pad_size)
+                window_data = pd.concat([pad_data, partial_data], axis=0)
+        else:
+            # Normal case: slice the window
+            window_data = self.data.iloc[start_idx:end_idx]
         
-        # Extract OHLCV data
+        # Verify we have exactly window_size rows
+        if len(window_data) != self.window_size:
+            raise ValueError(
+                f"Observation shape mismatch: got {len(window_data)} rows, expected {self.window_size}"
+            )
+        
+        # Create observation array with OHLCV data
         observation = np.column_stack([
             window_data["$open"].values,
             window_data["$high"].values,
             window_data["$low"].values,
             window_data["$close"].values,
             window_data["$volume"].values,
-        ])
+        ]).astype(np.float32)
         
-        return observation.astype(np.float32)
+        return observation
 
     def _get_info(self) -> Dict[str, Any]:
         """Get current state information"""
@@ -199,6 +233,8 @@ class SingleAssetRLTradingEnv(gym.Env):
             "position": self.current_position,
             "capital": self.current_capital,
             "portfolio_value": self.portfolio_value,
+            "previous_portfolio_value": self.previous_portfolio_value,  # Added to info dict
+            "portfolio_change_pct": (self.portfolio_value - self.previous_portfolio_value) / max(self.previous_portfolio_value, 1e-8),  # Added percent change
             "total_trades": len(self.trades)
         }
 

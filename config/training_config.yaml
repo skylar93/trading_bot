@@ -1,0 +1,123 @@
+env:
+  type: "single_asset_rl"         # or "multi_agent_rl"
+  initial_balance: 10000.0
+  trading_fee: 0.001
+  window_size: 20
+  normalize: true
+  stack_size: 4
+  max_position_size: 1.0
+  # Additional multi-agent specific settings
+  multi_agent_configs:
+    - id: "momentum_agent"
+      type: "Momentum"
+      initial_capital_percentage: 0.5  # Percentage of total capital
+      priority: 1                     # Decision priority (lower executes first)
+      hyperparameters:
+        learning_rate: 3e-4
+        gamma: 0.99
+        clip_epsilon: 0.2
+    - id: "mean_reversion_agent"
+      type: "MeanReversion"
+      initial_capital_percentage: 0.5
+      priority: 2
+      hyperparameters:
+        learning_rate: 2e-4
+        gamma: 0.98
+        clip_epsilon: 0.2
+
+data:
+  exchange: "binance"
+  symbols: ["BTC/USDT"]  # Can be extended for multi-asset: ["BTC/USDT", "ETH/USDT"]
+  timeframe: "1h"
+  start_date: "2023-01-01"
+  end_date: "2023-12-31"
+  train_test_split: 0.8  # 80% training, 20% testing
+  cache_dir: "data/raw"
+  data_path: "data/BTC_1h.csv"  # Direct file path if pre-processed data exists
+
+agent:
+  name: "PPO"  # Agent type for single-agent mode
+  # Base PPO parameters
+  learning_rate: 3e-4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_epsilon: 0.2
+  value_coef: 1.0  # c1 in the original config
+  entropy_coef: 0.01  # c2 in the original config
+  loss_coef: 0.5  # c3 in the original config
+  batch_size: 64
+  n_epochs: 10
+  target_kl: 0.015
+  # Network architecture
+  fcnet_hiddens: [64, 64]
+  activation: "tanh"  # or "relu", "leaky_relu", etc.
+  use_lstm: false
+  lstm_size: 128  # Only used if use_lstm is true
+
+training:
+  total_timesteps: 100000
+  checkpoint_interval: 10000
+  eval_interval: 5000
+  use_gpu: true
+  device: "cuda:0"  # or "cpu", specific GPU index
+  seed: 42
+  early_stop_patience: 20
+  tensorboard_log: true
+  log_level: "INFO"
+  
+  # For distributed training
+  num_workers: 4
+  parallel_envs: 1  # Number of environments to run in parallel per worker
+  rollout_fragments: 200  # Number of steps per rollout fragment
+
+paths:
+  model_dir: "models"
+  data_dir: "data"
+  log_dir: "logs"
+  checkpoint_dir: "checkpoints"
+  mlflow_tracking_uri: "mlruns"
+  hyperopt_results_dir: "hyperopt_results"
+
+hpc:
+  use_hpc: false  # Set to true for UW Hyak HPC mode
+  scheduler: "slurm"  # Or other HPC job scheduler
+  partition: "gpu-a40"  # Hyak partition name
+  account: "your_account"  # Your allocation account
+  nodes: 1
+  ntasks_per_node: 1
+  cpus_per_task: 4
+  gpus_per_node: 1
+  memory: "48G"
+  time: "24:00:00"  # Wall time limit in hours
+  job_name: "trading_bot_training"
+  output: "logs/slurm-%j.out"
+  email: ""  # Your email for job notifications
+  
+  # Ray cluster settings
+  ray_head_memory: "16G"
+  ray_worker_memory: "12G"
+  ray_object_store_memory: "8G"
+  ray_num_workers: 4
+
+hyperopt:
+  framework: "ray"  # or "optuna", "hyperopt"
+  num_samples: 50  # Number of trials to run
+  max_concurrent_trials: 4  # Maximum number of trials to run in parallel
+  search_algorithm: "random"  # or "bayesian", "pbt", "bohb"
+  metric: "mean_reward"  # Metric to optimize
+  mode: "max"  # Optimization direction
+  # Parameter search space (example for PPO agent)
+  parameters:
+    agent.learning_rate:
+      distribution: "loguniform"
+      min: 1e-5
+      max: 1e-3
+    agent.gamma:
+      distribution: "uniform"
+      min: 0.9
+      max: 0.999
+    agent.clip_epsilon:
+      distribution: "uniform"
+      min: 0.1
+      max: 0.3
+    # Add more parameters as needed 

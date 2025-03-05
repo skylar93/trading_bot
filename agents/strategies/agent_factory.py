@@ -5,10 +5,11 @@ This module provides a centralized factory for instantiating various trading age
 based on their name/type. It supports both single and multi-agent strategies.
 """
 
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Union, List
 
 import gymnasium as gym
 import numpy as np
+import logging
 
 # Single Agents
 from agents.strategies.single.dummy_agent import DummyAgent
@@ -37,57 +38,83 @@ dummy_act_space = gym.spaces.Box(
     dtype=np.float32
 )
 
-def create_agent(agent_name: str, config: Optional[Dict[str, Any]] = None) -> Any:
-    """
-    Creates and returns an instance of the specified trading agent.
+logger = logging.getLogger(__name__)
+
+def create_agent(
+    agent_type: str,
+    config: Optional[Dict[str, Any]] = None,
+    observation_space: Optional[gym.spaces.Box] = None,
+    action_space: Optional[gym.spaces.Box] = None,
+) -> Union[DummyAgent, PPOAgent, MeanReversionPPOAgent, MomentumPPOAgent, MultiAgentManager]:
+    """Create an agent based on type and configuration.
     
     Args:
-        agent_name: Name/type of the agent to create (e.g., "Dummy", "PPO", "MeanReversion")
-        config: Optional configuration dictionary for agent initialization
+        agent_type: Type of agent to create (e.g. "Dummy", "PPO", "MeanReversion")
+        config: Agent configuration dictionary (optional)
+        observation_space: Observation space (optional)
+        action_space: Action space (optional)
         
     Returns:
-        An instance of the specified agent
+        Created agent instance
         
     Raises:
-        ValueError: If the specified agent type is not supported
+        ValueError: If agent_type is not supported or if required config is missing
     """
+    # Initialize empty config if None
     if config is None:
         config = {}
-    
-    # Add dummy spaces for PPO-based agents if needed
-    if agent_name in ("PPO", "MeanReversion", "Momentum"):
-        if "env" not in config and ("observation_space" not in config or "action_space" not in config):
-            if agent_name == "PPO":
-                config["observation_space"] = dummy_obs_space
-                config["action_space"] = dummy_act_space
-            else:
-                # For MeanReversion and Momentum agents, observation_space is a direct field
-                config = {
-                    "observation_space": dummy_obs_space,
-                    "action_space": dummy_act_space,
-                    **config  # Keep any other config values
-                }
-    
-    # Single Agents
-    if agent_name == "Dummy":
-        return DummyAgent(**config)
-    elif agent_name == "PPO":
-        return PPOAgent(**config)
+    else:
+        # Create a copy to avoid modifying the original
+        config = config.copy()
         
-    # Multi Agents
-    elif agent_name == "MeanReversion":
-        # MeanReversionPPOAgent expects a single config argument
-        return MeanReversionPPOAgent(config)
-    elif agent_name == "Momentum":
-        # MomentumPPOAgent expects a single config argument
-        return MomentumPPOAgent(config)
-    elif agent_name == "MultiAgent":
-        # Ensure agent_configs exists for MultiAgentManager
-        if "agent_configs" not in config:
-            config["agent_configs"] = []
-        return MultiAgentManager(**config)
-        
-    raise ValueError(f"Unsupported agent type: {agent_name}")
+    # Remove observation_space and action_space from config if they exist
+    # to avoid passing them twice
+    config.pop("observation_space", None)
+    config.pop("action_space", None)
+    
+    # Use provided spaces or defaults
+    obs_space = observation_space or dummy_obs_space
+    act_space = action_space or dummy_act_space
+    
+    # Create agent based on type
+    agent_type = agent_type.lower()
+    
+    try:
+        if agent_type == "dummy":
+            return DummyAgent(
+                observation_space=obs_space,
+                action_space=act_space,
+                **config
+            )
+        elif agent_type == "ppo":
+            return PPOAgent(
+                observation_space=obs_space,
+                action_space=act_space,
+                **config
+            )
+        elif agent_type == "meanreversion":
+            return MeanReversionPPOAgent(
+                observation_space=obs_space,
+                action_space=act_space,
+                **config
+            )
+        elif agent_type == "momentum":
+            return MomentumPPOAgent(
+                observation_space=obs_space,
+                action_space=act_space,
+                **config
+            )
+        elif agent_type == "multiagent":
+            # MultiAgentManager requires a list of agent configs
+            if "agents" not in config:
+                config["agents"] = []  # Provide empty list as default
+            return MultiAgentManager(agent_configs=config["agents"])
+        else:
+            raise ValueError(f"Unsupported agent type: {agent_type}")
+            
+    except TypeError as e:
+        logger.error(f"Failed to create agent of type {agent_type}: {str(e)}")
+        raise
 
 def list_available_agents() -> Dict[str, str]:
     """

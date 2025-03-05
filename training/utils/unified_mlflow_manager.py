@@ -8,6 +8,7 @@ import logging
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 from datetime import datetime
+from contextlib import contextmanager
 
 import mlflow
 from mlflow.entities import RunStatus
@@ -36,44 +37,28 @@ class MLflowManager:
         self,
         experiment_name: str,
         tracking_dir: Optional[str] = None,
-        allow_deleted_experiment_cleanup: bool = False,
-        use_dummy_run: bool = False,
-        append_timestamp: bool = False
+        allow_deleted_experiment_cleanup: bool = True,
+        use_dummy_run: bool = True
     ):
         """Initialize MLflow manager.
         
         Args:
             experiment_name: Name of the MLflow experiment
-            tracking_dir: Directory for MLflow artifacts & DB
-            allow_deleted_experiment_cleanup: If True, forcibly remove 'deleted' experiments
-            use_dummy_run: If True, logs a dummy metric for DB initialization
-            append_timestamp: If True, appends timestamp to experiment name
+            tracking_dir: Optional directory for MLflow tracking
+            allow_deleted_experiment_cleanup: Whether to clean up deleted experiments
+            use_dummy_run: Whether to create a dummy run for validation
         """
-        # For test environments, optionally append timestamp
-        if append_timestamp and experiment_name.startswith("test_"):
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-            self.experiment_name = f"{experiment_name}_{timestamp}"
-        else:
-            self.experiment_name = experiment_name
-
+        self.experiment_name = experiment_name
+        self.tracking_dir = Path(tracking_dir or "./mlruns").absolute()
         self.allow_deleted_experiment_cleanup = allow_deleted_experiment_cleanup
         self.use_dummy_run = use_dummy_run
-
-        # Set up tracking directory
-        if tracking_dir:
-            self.tracking_dir = Path(tracking_dir).absolute()
-        else:
-            home_dir = Path.home()
-            self.tracking_dir = home_dir / ".trading_bot_mlflow"
-
-        # Create directory with proper permissions
-        os.makedirs(self.tracking_dir, mode=0o755, exist_ok=True)
-
-        # Set up MLflow tracking
-        db_path = self.tracking_dir / "mlflow.db"
-        mlflow.set_tracking_uri(f"sqlite:///{db_path}")
-
         self._active_run = None
+        
+        # Set up MLflow tracking
+        os.makedirs(self.tracking_dir, exist_ok=True)
+        mlflow.set_tracking_uri(f"file://{self.tracking_dir}")
+        
+        # Initialize experiment
         self._initialize_experiment()
 
     def _initialize_experiment(self):
@@ -81,60 +66,33 @@ class MLflowManager:
         try:
             # End any active runs first
             self.end_active_runs()
-
+            
             # Get or create experiment
             experiment = mlflow.get_experiment_by_name(self.experiment_name)
             if experiment:
-                if experiment.lifecycle_stage == "deleted":
-                    logger.info(f"Found deleted experiment: {self.experiment_name}")
-                    if self.allow_deleted_experiment_cleanup:
-                        logger.info("Cleaning up deleted experiment...")
-                        try:
-                            mlflow.delete_experiment(experiment.experiment_id)
-                        except mlflow.exceptions.MlflowException as e:
-                            logger.warning(f"Failed to delete experiment: {e}")
-                        
-                        # Clean up related directories
-                        paths_to_clean = [
-                            self.tracking_dir / ".trash",
-                            self.tracking_dir / str(experiment.experiment_id),
-                            Path(experiment.artifact_location.replace("file://", ""))
-                        ]
-                        for path in paths_to_clean:
-                            if path.exists():
-                                shutil.rmtree(path)
-                        
-                        experiment = None
-                        time.sleep(0.2)  # Wait for cleanup
-                    else:
-                        logger.warning(
-                            "Found deleted experiment but cleanup not allowed. "
-                            "This may cause unexpected behavior."
-                        )
-                        self.experiment_id = experiment.experiment_id
+                if experiment.lifecycle_stage == "deleted" and self.allow_deleted_experiment_cleanup:
+                    logger.info(f"Cleaning up deleted experiment: {self.experiment_name}")
+                    mlflow.delete_experiment(experiment.experiment_id)
+                    experiment = None
                 else:
                     self.experiment_id = experiment.experiment_id
-
-            if not experiment or experiment.lifecycle_stage == "deleted":
-                # Create new experiment
-                artifact_location = os.path.join(
-                    str(self.tracking_dir), "artifacts", self.experiment_name
-                )
-                os.makedirs(artifact_location, mode=0o755, exist_ok=True)
-                
+            
+            if not experiment:
+                artifact_location = os.path.join(str(self.tracking_dir), "artifacts", self.experiment_name)
+                os.makedirs(artifact_location, exist_ok=True)
                 self.experiment_id = mlflow.create_experiment(
                     self.experiment_name,
                     artifact_location=artifact_location
                 )
-
+            
             mlflow.set_experiment(self.experiment_name)
-
-            # Optional dummy run
+            
+            # Optional dummy run for validation
             if self.use_dummy_run:
                 with mlflow.start_run() as run:
                     mlflow.log_metric("_dummy", 0.0)
                 time.sleep(0.1)
-
+        
         except Exception as e:
             logger.error(f"Failed to initialize experiment: {str(e)}")
             raise
@@ -145,7 +103,7 @@ class MLflowManager:
             if self._active_run:
                 mlflow.end_run()
                 self._active_run = None
-
+            
             while mlflow.active_run():
                 mlflow.end_run()
         except Exception as e:
@@ -165,20 +123,20 @@ class MLflowManager:
                 )
             elif not nested:
                 self.end_run()
-
+            
             self._active_run = mlflow.start_run(
                 run_name=run_name,
                 nested=nested,
                 tags=tags,
                 experiment_id=self.experiment_id,
             )
-
+            
             if self.use_dummy_run:
                 mlflow.log_metric("_dummy", 0.0)
                 time.sleep(0.05)
-
+            
             return self._active_run
-
+        
         except Exception as e:
             logger.error(f"Failed to start run: {str(e)}")
             raise

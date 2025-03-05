@@ -15,26 +15,58 @@ class MeanReversionPPOAgent(PPOAgent):
     Inherits from base PPO agent but adds mean reversion specific features and logic.
     """
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(
+        self,
+        observation_space,
+        action_space,
+        rsi_window: int = 14,
+        bb_window: int = 20,
+        bb_std: float = 2.0,
+        oversold_threshold: float = 30,
+        overbought_threshold: float = 70,
+        learning_rate: float = 3e-4,
+        gamma: float = 0.99,
+        gae_lambda: float = 0.95,
+        clip_epsilon: float = 0.2,
+        c1: float = 1.0,
+        c2: float = 0.01,
+        c3: float = 0.5,
+        batch_size: int = 64,
+        n_epochs: int = 10,
+        target_kl: float = 0.015,
+        device: str = None,
+        **kwargs
+    ):
         """
         Initialize Mean Reversion PPO Agent.
         
         Args:
-            config: Configuration dictionary containing:
-                - All PPO parameters (learning_rate, gamma, etc.)
-                - rsi_window: Window size for RSI calculation
-                - bb_window: Window size for Bollinger Bands
-                - bb_std: Number of standard deviations for Bollinger Bands
-                - oversold_threshold: RSI threshold for oversold condition
-                - overbought_threshold: RSI threshold for overbought condition
+            observation_space: Observation space
+            action_space: Action space
+            rsi_window: Window size for RSI calculation
+            bb_window: Window size for Bollinger Bands
+            bb_std: Number of standard deviations for Bollinger Bands
+            oversold_threshold: RSI threshold for oversold condition
+            overbought_threshold: RSI threshold for overbought condition
+            learning_rate: Learning rate for optimizer
+            gamma: Discount factor
+            gae_lambda: GAE lambda parameter
+            clip_epsilon: PPO clip parameter
+            c1: Value loss coefficient
+            c2: Entropy coefficient
+            c3: KL divergence coefficient
+            batch_size: Batch size for updates
+            n_epochs: Number of epochs per update
+            target_kl: Target KL divergence
+            device: Device to use for computations
+            **kwargs: Additional arguments
         """
-        # Calculate augmented observation space
-        base_obs_space = config["observation_space"]
+        # Calculate total features (base features + mean reversion indicators)
         n_reversion_features = 3  # RSI, BB_upper_dist, BB_lower_dist
         
-        if isinstance(base_obs_space, spaces.Box):
-            if len(base_obs_space.shape) == 2:  # (window_size, features)
-                total_features = base_obs_space.shape[0] * base_obs_space.shape[1] + n_reversion_features
+        if isinstance(observation_space, spaces.Box):
+            if len(observation_space.shape) == 2:  # (window_size, features)
+                total_features = observation_space.shape[0] * observation_space.shape[1] + n_reversion_features
                 
                 flat_obs_space = spaces.Box(
                     low=-np.inf,
@@ -45,7 +77,7 @@ class MeanReversionPPOAgent(PPOAgent):
             else:
                 raise ValueError("Observation space must be 2D (window_size, features)")
             
-            self.original_obs_space = base_obs_space
+            self.original_obs_space = observation_space
             self.n_reversion_features = n_reversion_features
         else:
             raise ValueError("Observation space must be Box")
@@ -53,28 +85,34 @@ class MeanReversionPPOAgent(PPOAgent):
         # Initialize base PPO agent with flattened observation space
         super().__init__(
             observation_space=flat_obs_space,
-            action_space=config["action_space"],
-            learning_rate=config.get("learning_rate", 3e-4),
-            gamma=config.get("gamma", 0.99),
-            gae_lambda=config.get("gae_lambda", 0.95),
-            clip_epsilon=config.get("clip_epsilon", 0.2),
-            c1=config.get("c1", 1.0),
-            c2=config.get("c2", 0.01),
-            c3=config.get("c3", 0.5),
-            batch_size=config.get("batch_size", 64),
-            n_epochs=config.get("n_epochs", 10),
-            target_kl=config.get("target_kl", 0.015),
-            device=config.get("device", "cuda" if torch.cuda.is_available() else "cpu")
+            action_space=action_space,
+            learning_rate=learning_rate,
+            gamma=gamma,
+            gae_lambda=gae_lambda,
+            clip_epsilon=clip_epsilon,
+            c1=c1,
+            c2=c2,
+            c3=c3,
+            batch_size=batch_size,
+            n_epochs=n_epochs,
+            target_kl=target_kl,
+            device=device,
+            **kwargs
         )
         
         # Mean reversion specific parameters
-        self.rsi_window = config.get("rsi_window", 14)
-        self.bb_window = config.get("bb_window", 20)
-        self.bb_std = config.get("bb_std", 2.0)
-        self.oversold_threshold = config.get("oversold_threshold", 30)
-        self.overbought_threshold = config.get("overbought_threshold", 70)
+        self.rsi_window = rsi_window
+        self.bb_window = bb_window
+        self.bb_std = bb_std
+        self.oversold_threshold = oversold_threshold
+        self.overbought_threshold = overbought_threshold
         self.strategy = "mean_reversion"  # Add strategy attribute
         self.EPS = 1e-8  # Add epsilon constant for safe division
+        
+        # Log unused config keys
+        unused_keys = [key for key in kwargs.keys() if key not in self.__init__.__code__.co_varnames]
+        if unused_keys:
+            self.logger.warning(f"Ignoring unused config keys in MeanReversionPPOAgent: {unused_keys}")
         
         logger.info(
             f"Initialized MeanReversionPPOAgent with RSI window={self.rsi_window}, "
@@ -204,47 +242,39 @@ class MeanReversionPPOAgent(PPOAgent):
             return np.zeros(shape, dtype=np.float32)
     
     def get_action(self, state: np.ndarray, deterministic: bool = False) -> np.ndarray:
-        """
-        Get action from policy network with mean reversion considerations.
+        """Get action from policy network with mean reversion strategy.
+        
+        Handles different input shapes:
+        - 2D: (window_size, features)
+        - 3D: (batch_size, window_size, features)
         
         Args:
-            state: Current state observation (can be numpy array or pandas DataFrame)
+            state: Current state observation
             deterministic: Whether to use deterministic action
             
         Returns:
-            Selected action as numpy array
+            Action as numpy array with shape (1,)
         """
         # Convert DataFrame to numpy if needed
         if isinstance(state, pd.DataFrame):
             state = state.to_numpy()
-            
-        reversion_features = self._calculate_reversion_features(state)
         
-        if len(state.shape) == 3:  # (batch, window, features)
-            batch_size = state.shape[0]
-            flat_state = state.reshape(batch_size, -1)
-            augmented_state = np.concatenate([flat_state, reversion_features], axis=1)
-        else:  # (window, features)
-            flat_state = state.reshape(1, -1)
-            augmented_state = np.concatenate([flat_state, reversion_features.reshape(1, -1)], axis=1)
+        # Calculate mean reversion features
+        mean_rev_features = self._calculate_reversion_features(state)
         
-        # Get base action from policy network
-        base_action = super().get_action(augmented_state.reshape(-1), deterministic)
-        
-        # Calculate trend strength safely
-        if len(state.shape) == 3:
-            close_prices = state[..., 3]
+        # Calculate trend strength
+        if len(state.shape) == 3:  # (batch_size, window_size, features)
+            close_prices = state[..., 3]  # Get close prices for all batches
             if close_prices.shape[1] < 10:
                 trend_strength = np.zeros(close_prices.shape[0])
             else:
                 denominator = close_prices[:, -10]
-                # Handle zero/nan/inf denominators
                 safe_mask = (denominator != 0) & ~np.isnan(denominator) & ~np.isinf(denominator)
                 trend_strength = np.zeros(close_prices.shape[0])
                 trend_strength[safe_mask] = (close_prices[safe_mask, -1] - denominator[safe_mask]) / denominator[safe_mask]
                 trend_strength = np.nan_to_num(trend_strength, nan=0.0, posinf=0.0, neginf=0.0)
-        else:
-            close_prices = state[:, 3]
+        else:  # (window_size, features)
+            close_prices = state[:, 3]  # Get close prices
             if len(close_prices) < 10:
                 trend_strength = 0.0
             else:
@@ -255,86 +285,65 @@ class MeanReversionPPOAgent(PPOAgent):
                     trend_strength = (close_prices[-1] - denominator) / denominator
                     trend_strength = np.nan_to_num(trend_strength, nan=0.0, posinf=0.0, neginf=0.0)
         
-        # Apply mean reversion based action modification
-        if len(reversion_features.shape) > 1:
-            rsi = reversion_features[:, 0]
-            bb_upper_dist = reversion_features[:, 1]
-            bb_lower_dist = reversion_features[:, 2]
-            
-            # Calculate mean reversion signals with stronger conditions
-            oversold_signal = (rsi < self.oversold_threshold) & (bb_lower_dist < 0.02)  # Tighter BB condition
-            overbought_signal = (rsi > self.overbought_threshold) & (bb_upper_dist < 0.02)  # Tighter BB condition
-            
-            # Calculate action bias based on signals with stronger mean reversion
-            action_bias = np.zeros_like(base_action)
-            action_bias[oversold_signal] = 2.0  # Stronger buy bias
-            action_bias[overbought_signal] = -2.0  # Stronger sell bias
-            
-            # Add trend-based mean reversion bias
-            trend_bias = -np.sign(trend_strength) * np.abs(trend_strength) * 2.0  # Stronger counter-trend bias
-            action_bias += trend_bias
-            
-            # Calculate signal strength based on distance from thresholds with higher minimum
-            oversold_strength = np.clip((self.oversold_threshold - rsi) / self.oversold_threshold, 0.6, 1.0)
-            overbought_strength = np.clip((rsi - self.overbought_threshold) / (100 - self.overbought_threshold), 0.6, 1.0)
-            
-            # Combine signal strengths with higher base weight
-            signal_strength = np.where(oversold_signal, oversold_strength,
-                                    np.where(overbought_signal, overbought_strength, 0.6))
-            
-            # Blend base action with bias (more weight on bias)
-            action = 0.9 * action_bias + 0.1 * base_action
-            
-            # Add mean reversion scaling based on BB distances with stronger multiplier
-            bb_signal = np.maximum(bb_upper_dist, bb_lower_dist)
-            action *= (2.0 + bb_signal)  # Stronger scaling by BB distance
-            
-            # Ensure action stays within bounds and handle any NaN/inf values
-            action = np.nan_to_num(action, nan=0.0, posinf=1.0, neginf=-1.0)
-            action = np.clip(action, -1.0, 1.0)
-        else:
-            rsi = reversion_features[0]
-            bb_upper_dist = reversion_features[1]
-            bb_lower_dist = reversion_features[2]
-            
-            # Calculate trend-based mean reversion bias
-            trend_bias = -np.sign(trend_strength) * np.abs(trend_strength) * 2.0  # Stronger counter-trend bias
-            
-            # Calculate signal strength based on distance from thresholds with stronger scaling
-            if rsi < self.oversold_threshold and bb_lower_dist < 0.02:  # Tighter BB condition
-                action_bias = 2.0  # Stronger buy bias
-                signal_strength = np.clip((self.oversold_threshold - rsi) / self.oversold_threshold, 0.6, 1.0)
-            elif rsi > self.overbought_threshold and bb_upper_dist < 0.02:  # Tighter BB condition
-                action_bias = -2.0  # Stronger sell bias
-                signal_strength = np.clip((rsi - self.overbought_threshold) / (100 - self.overbought_threshold), 0.6, 1.0)
-            else:
-                action_bias = trend_bias
-                signal_strength = 0.6
-            
-            # Blend base action with bias (more weight on bias)
-            action = 0.9 * action_bias + 0.1 * base_action
-            
-            # Add mean reversion scaling based on BB distances with stronger multiplier
-            bb_signal = max(bb_upper_dist, bb_lower_dist)
-            action *= (2.0 + bb_signal)  # Stronger scaling by BB distance
-            
-            # Ensure action stays within bounds and handle any NaN/inf values
-            action = np.nan_to_num(action, nan=0.0, posinf=1.0, neginf=-1.0)
-            action = np.clip(action, -1.0, 1.0)
-            
-            # If there's a strong trend, make sure we're taking the opposite position
-            if abs(trend_strength) > 0.1:  # Strong trend threshold
-                action = -np.sign(trend_strength) * max(abs(action), 0.5)  # Ensure minimum counter-trend position size
+        # Extract RSI and Bollinger Bands features
+        rsi = mean_rev_features[0] if len(mean_rev_features.shape) == 1 else mean_rev_features[:, 0]
+        bb_upper_dist = mean_rev_features[1] if len(mean_rev_features.shape) == 1 else mean_rev_features[:, 1]
+        bb_lower_dist = mean_rev_features[2] if len(mean_rev_features.shape) == 1 else mean_rev_features[:, 2]
         
-        # Final defensive clamp to ensure no NaN/inf values escape
+        # Generate action based on trend and mean reversion signals
+        if isinstance(trend_strength, np.ndarray):  # Batch case
+            # Take opposite action to trend (mean reversion)
+            action = np.where(
+                trend_strength > 0.02,  # Strong uptrend
+                -1.0,  # Strong sell signal (expect reversal)
+                np.where(
+                    trend_strength < -0.02,  # Strong downtrend
+                    1.0,  # Strong buy signal (expect reversal)
+                    0.0  # No clear trend
+                )
+            )
+            
+            # Further strengthen based on RSI
+            action = np.where(
+                rsi > self.overbought_threshold,
+                -1.0,  # Strong sell when overbought
+                np.where(
+                    rsi < self.oversold_threshold,
+                    1.0,  # Strong buy when oversold
+                    action
+                )
+            )
+            
+        else:  # Single case
+            # Take opposite action to trend (mean reversion)
+            if trend_strength > 0.02:  # Strong uptrend
+                action = -1.0  # Strong sell signal (expect reversal)
+            elif trend_strength < -0.02:  # Strong downtrend
+                action = 1.0  # Strong buy signal (expect reversal)
+            else:
+                action = 0.0  # No clear trend
+            
+            # Further strengthen based on RSI
+            if rsi > self.overbought_threshold:
+                action = -1.0  # Strong sell when overbought
+            elif rsi < self.oversold_threshold:
+                action = 1.0  # Strong buy when oversold
+        
+        # Handle any NaN/inf values and clip
         action = np.nan_to_num(action, nan=0.0, posinf=1.0, neginf=-1.0)
         action = np.clip(action, -1.0, 1.0)
+        
+        # Ensure action is a numpy array with shape (1,)
+        if isinstance(action, (float, np.float32, np.float64)):
+            action = np.array([action], dtype=np.float32)
+        elif isinstance(action, np.ndarray) and action.shape != (1,):
+            action = action.reshape(1)
         
         return action
     
     def train_step(self, state: np.ndarray, action: np.ndarray, 
                   reward: float, next_state: np.ndarray, 
-                  done: bool) -> Dict[str, float]:
+                  done: bool, agent_id: str = None) -> Dict[str, float]:
         """
         Train the agent on a single state transition with mean reversion considerations.
         
@@ -344,6 +353,7 @@ class MeanReversionPPOAgent(PPOAgent):
             reward: Reward received
             next_state: Next state
             done: Whether episode is done
+            agent_id: Optional agent identifier for multi-agent scenarios
             
         Returns:
             Dictionary of training metrics
@@ -365,92 +375,59 @@ class MeanReversionPPOAgent(PPOAgent):
         
         # Add mean reversion based reward modification
         reversion_reward = 0.0
+        
         if len(state_reversion.shape) > 1:
             rsi = state_reversion[:, 0]
             bb_upper_dist = state_reversion[:, 1]
             bb_lower_dist = state_reversion[:, 2]
             
-            # Calculate price movement
-            current_prices = state[..., 3]
-            next_prices = next_state[..., 3]
-            price_changes = (next_prices - current_prices) / current_prices
-            
-            # Calculate mean reversion signals
-            oversold_signal = (rsi < self.oversold_threshold) & (bb_lower_dist < 0.02)
-            overbought_signal = (rsi > self.overbought_threshold) & (bb_upper_dist < 0.02)
-            
-            # Calculate rewards for different scenarios with higher rewards
-            buy_reward = np.where(
-                oversold_signal & (action > 0.2) & (price_changes > 0),
-                1.0 * np.abs(price_changes) + 0.3,  # Stronger reward for profitable buy
-                np.where(
-                    oversold_signal & (action > 0),
-                    0.2,  # Higher reward for correct direction
-                    0.0
-                )
+            # Reward for correctly predicting reversals
+            reversion_reward = np.where(
+                (rsi > self.overbought_threshold) & (action < 0) |  # Selling when overbought
+                (rsi < self.oversold_threshold) & (action > 0),     # Buying when oversold
+                0.1, 0.0
             )
-            
-            sell_reward = np.where(
-                overbought_signal & (action < -0.2) & (price_changes < 0),
-                1.0 * np.abs(price_changes) + 0.3,  # Stronger reward for profitable sell
-                np.where(
-                    overbought_signal & (action < 0),
-                    0.2,  # Higher reward for correct direction
-                    0.0
-                )
-            )
-            
-            # Combine rewards
-            reversion_reward = buy_reward + sell_reward
         else:
             rsi = state_reversion[0]
             bb_upper_dist = state_reversion[1]
             bb_lower_dist = state_reversion[2]
+            action_value = action[0] if isinstance(action, np.ndarray) else action
             
-            # Calculate price movement
-            current_price = state[..., 3][-1]
-            next_price = next_state[..., 3][-1]
-            price_change = (next_price - current_price) / current_price
-            
-            # Calculate rewards for mean reversion trades with higher rewards
-            if rsi < self.oversold_threshold and bb_lower_dist < 0.02:  # Oversold condition
-                if action[0] > 0.2 and price_change > 0:  # Strong buy and price went up
-                    reversion_reward = 1.0 * abs(price_change) + 0.3  # Stronger reward for profitable buy
-                elif action[0] > 0:  # Any buy action
-                    reversion_reward = 0.2  # Higher reward for correct direction
-            elif rsi > self.overbought_threshold and bb_upper_dist < 0.02:  # Overbought condition
-                if action[0] < -0.2 and price_change < 0:  # Strong sell and price went down
-                    reversion_reward = 1.0 * abs(price_change) + 0.3  # Stronger reward for profitable sell
-                elif action[0] < 0:  # Any sell action
-                    reversion_reward = 0.2  # Higher reward for correct direction
-            
+            # Reward for correctly predicting reversals
+            if (rsi > self.overbought_threshold and action_value < 0) or \
+               (rsi < self.oversold_threshold and action_value > 0):
+                reversion_reward = 0.1
+        
         modified_reward = reward + reversion_reward
         
+        # Train with modified states and reward
         metrics = super().train_step(
             augmented_state.reshape(-1), action, modified_reward, augmented_next_state.reshape(-1), done
         )
         
+        # If training failed, return empty metrics
         if metrics is None:
             return {
                 "reversion_reward": float(reversion_reward),
-                "rsi_value": float(rsi if isinstance(rsi, (int, float)) else rsi[0]),
-                "bb_upper_dist": float(bb_upper_dist if isinstance(bb_upper_dist, (int, float)) else bb_upper_dist[0]),
-                "bb_lower_dist": float(bb_lower_dist if isinstance(bb_lower_dist, (int, float)) else bb_lower_dist[0])
+                "rsi_value": float(rsi),
+                "bb_upper_dist": float(bb_upper_dist),
+                "bb_lower_dist": float(bb_lower_dist)
             }
         
+        # Add reversion-specific metrics
         if len(state_reversion.shape) > 1:
             metrics.update({
                 "reversion_reward": float(np.mean(reversion_reward)),
-                "rsi_value": float(np.mean(state_reversion[:, 0])),
-                "bb_upper_dist": float(np.mean(state_reversion[:, 1])),
-                "bb_lower_dist": float(np.mean(state_reversion[:, 2]))
+                "rsi_value": float(np.mean(rsi)),
+                "bb_upper_dist": float(np.mean(bb_upper_dist)),
+                "bb_lower_dist": float(np.mean(bb_lower_dist))
             })
         else:
             metrics.update({
                 "reversion_reward": float(reversion_reward),
-                "rsi_value": float(state_reversion[0]),
-                "bb_upper_dist": float(state_reversion[1]),
-                "bb_lower_dist": float(state_reversion[2])
+                "rsi_value": float(rsi),
+                "bb_upper_dist": float(bb_upper_dist),
+                "bb_lower_dist": float(bb_lower_dist)
             })
         
         return metrics

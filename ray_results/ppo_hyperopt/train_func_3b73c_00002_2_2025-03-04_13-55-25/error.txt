@@ -1,0 +1,17 @@
+Failure # 1 (occurred at 2025-03-04_13-55-26)
+[36mray::ImplicitFunc.train()[39m (pid=9940, ip=127.0.0.1, actor_id=37f9caf624087c1667892df801000000, repr=train_func)
+  File "/Users/skylar/Desktop/trading_bot/venv/lib/python3.10/site-packages/ray/tune/trainable/trainable.py", line 331, in train
+    raise skipped from exception_cause(skipped)
+  File "/Users/skylar/Desktop/trading_bot/venv/lib/python3.10/site-packages/ray/air/_internal/util.py", line 107, in run
+    self._ret = self._target(*self._args, **self._kwargs)
+  File "/Users/skylar/Desktop/trading_bot/venv/lib/python3.10/site-packages/ray/tune/trainable/function_trainable.py", line 45, in <lambda>
+    training_func=lambda: self._trainable_func(self.config),
+  File "/Users/skylar/Desktop/trading_bot/venv/lib/python3.10/site-packages/ray/tune/trainable/function_trainable.py", line 250, in _trainable_func
+    output = fn()
+  File "/Users/skylar/Desktop/trading_bot/venv/lib/python3.10/site-packages/ray/tune/trainable/util.py", line 130, in inner
+    return trainable(config, **fn_kwargs)
+  File "/Users/skylar/Desktop/trading_bot/training/hyperopt/hyperopt_ray.py", line 98, in train_func
+    results = train_pipeline(full_config)
+  File "/Users/skylar/Desktop/trading_bot/training/train_pipeline.py", line 497, in train_pipeline
+    experiment_name = f"{config.get('agent_type', 'ppo')}_{config['env']['type']}"
+KeyError: 'type'

@@ -1,4 +1,4 @@
-Metadata-Version: 2.1
+Metadata-Version: 2.2
 Name: trading_bot
 Version: 0.1
 Requires-Dist: streamlit
@@ -8,3 +8,4 @@ Requires-Dist: numpy
 Requires-Dist: ccxt
 Requires-Dist: ta
 Requires-Dist: websockets
+Dynamic: requires-dist

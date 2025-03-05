@@ -66,12 +66,12 @@ def sample_data():
 
 @pytest.fixture(scope="function")
 def mlflow_manager(test_dir):
-    """Create MLflow manager with temporary directory"""
+    """Create MLflow manager for testing"""
     manager = MLflowManager(
         "test_experiment",
         tracking_dir=test_dir,
-        append_timestamp=True,
-        allow_deleted_experiment_cleanup=True
+        allow_deleted_experiment_cleanup=True,
+        use_dummy_run=False  # Disable dummy runs for tests
     )
     yield manager
     manager.cleanup()
@@ -212,7 +212,6 @@ def test_experiment_deletion_handling(test_dir):
         "test_experiment_1",  # Different base name
         tracking_dir=test_dir,
         allow_deleted_experiment_cleanup=True,
-        append_timestamp=True
     )
     experiment_id = manager1.experiment_id
     
@@ -229,7 +228,6 @@ def test_experiment_deletion_handling(test_dir):
         "test_experiment_2",  # Different name
         tracking_dir=test_dir,
         allow_deleted_experiment_cleanup=True,
-        append_timestamp=True
     )
     
     # Verify new experiment was created

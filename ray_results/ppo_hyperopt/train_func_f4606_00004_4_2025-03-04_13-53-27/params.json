@@ -1,0 +1,31 @@
+{
+  "_full_config": {
+    "agent": {
+      "batch_size": 64,
+      "learning_rate": 0.001,
+      "type": "PPO"
+    },
+    "env": {
+      "initial_capital": 10000.0,
+      "trading_fee": 0.001,
+      "window_size": 10
+    },
+    "hyperopt": {
+      "max_epochs": 2,
+      "num_samples": 2,
+      "resources_per_trial": {
+        "cpu": 1,
+        "gpu": 0
+      }
+    },
+    "paths": {
+      "data": "/Users/skylar/Desktop/trading_bot/data",
+      "logs": "/Users/skylar/Desktop/trading_bot/logs",
+      "models": "/Users/skylar/Desktop/trading_bot/models",
+      "results": "/var/folders/76/0ctvnfx11mg4sq7ng3r0_3jh0000gn/T/tmp08tt9g3i"
+    },
+    "training": {
+      "total_timesteps": 100
+    }
+  }
+}
