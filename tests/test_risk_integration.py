@@ -257,6 +257,14 @@ def test_minimum_trade_size():
         price_data={'default': price},
         asset='default'
     )
+    
+    # Add debug output
+    print("\nDEBUG INFO:")
+    print(f"Action: {0.001}")
+    print(f"Min trade size: {risk_config.min_trade_size}")
+    print(f"Portfolio value: {backtester.get_portfolio_value({'default': price})}")
+    print(f"Result: {result}")
+    
     assert result['success'] is False
     assert "minimum" in result['reason'].lower() or result['reason'] == "trade_size_too_small"
 

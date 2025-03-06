@@ -273,12 +273,19 @@ class TestRiskManager(unittest.TestCase):
         
         portfolio_value = 10000
         positions = {
-            "BTC": 3000,
-            "ETH": 4000,
-            "SOL": 3000
+            "BTC": {"units": 1.0, "avg_price": 3000, "cost_basis": 3000},
+            "ETH": {"units": 2.0, "avg_price": 2000, "cost_basis": 4000},
+            "SOL": {"units": 30.0, "avg_price": 100, "cost_basis": 3000}
         }
         
-        portfolio_var = self.risk_manager.get_portfolio_var(positions, portfolio_value)
+        # Create a prices dictionary for current prices
+        prices = {
+            "BTC": 3000,
+            "ETH": 2000,
+            "SOL": 100
+        }
+        
+        portfolio_var = self.risk_manager.get_portfolio_var(portfolio_value, positions, prices)
         self.assertTrue(portfolio_var > 0, "Portfolio VaR should be positive")
         self.assertTrue(portfolio_var < 1, "Portfolio VaR should be less than 100%")
 

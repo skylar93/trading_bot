@@ -1,0 +1,104 @@
+# Risk-oriented Trading Environment Configuration
+# This configuration enables risk-adjusted rewards and realistic market frictions
+
+# Data configuration
+data:
+  data_path: "data/processed/btc_usdt_hourly.parquet"  # Path to the data file
+  symbol: "BTC/USDT"
+  timeframe: "1h"
+  start_date: "2022-01-01"
+  end_date: "2023-01-01"
+
+# Environment configuration
+env:
+  type: "single_asset_rl"
+  window_size: 30
+  initial_capital: 10000.0
+  trading_fee: 0.001
+  max_position_size: 1.0
+  normalize: true
+  stack_size: 4  # Number of frames to stack in the observation
+  
+  # Risk-oriented reward shaping
+  risk_reward:
+    enabled: true
+    sharpe_lookback: 30  # Number of steps for rolling Sharpe calculation
+    sharpe_weight: 0.5   # Weight of Sharpe ratio in reward (0-1)
+    drawdown_penalty: true
+    max_drawdown_threshold: 0.1  # Drawdown threshold for penalties (10%)
+  
+  # Market friction simulation
+  friction:
+    apply_slippage: true
+    slippage_factor: 0.0005  # Base slippage (0.05%)
+    partial_fills: true
+    min_fill_rate: 0.8  # Minimum fill rate for partial fills (80%)
+    volume_slippage_factor: 0.1  # Factor for volume-based slippage
+
+# Training configuration
+training:
+  algorithm: "ppo"
+  total_timesteps: 1000000
+  random_seed: 42
+  log_interval: 1000
+  save_interval: 10000
+  evaluation_interval: 20000
+  
+  # PPO specific parameters
+  ppo:
+    learning_rate: 0.0003
+    n_steps: 2048
+    batch_size: 64
+    n_epochs: 10
+    gamma: 0.99
+    gae_lambda: 0.95
+    clip_range: 0.2
+    ent_coef: 0.01
+    vf_coef: 0.5
+    max_grad_norm: 0.5
+  
+  # Hyperparameter tuning settings
+  hyperopt:
+    enabled: false
+    n_trials: 20
+    study_name: "risk_reward_tuning"
+    pruner: "median"
+    storage: "sqlite:///hyperopt_results.db"
+    parameters:
+      - name: "env.risk_reward.sharpe_weight"
+        type: "float"
+        low: 0.0
+        high: 1.0
+      - name: "env.risk_reward.max_drawdown_threshold"
+        type: "float"
+        low: 0.05
+        high: 0.2
+      - name: "env.friction.slippage_factor"
+        type: "float"
+        low: 0.0001
+        high: 0.001
+
+# Logging configuration
+logging:
+  level: "INFO"
+  log_to_file: true
+  log_dir: "logs"
+  mlflow:
+    enabled: true
+    experiment_name: "risk_reward_trading"
+    tracking_uri: "./mlruns"
+    tags:
+      version: "1.0.0"
+      env_type: "risk_oriented"
+      
+# Visualization settings
+visualization:
+  enabled: true
+  plot_trades: true
+  plot_portfolio: true
+  plot_rewards: true
+  plot_sharpe: true
+  plot_drawdowns: true
+  plot_slippage: true
+  plot_fill_rates: true
+  output_dir: "results/risk_reward_plots" 

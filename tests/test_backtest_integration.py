@@ -2,7 +2,7 @@
 Integration Test with Agents: uses a BacktestManager(settings) 
 with multiple agent names (Dummy, MeanReversion, etc.), checks 
 logs for errors, ensures valid trades and final portfolio. 
-Tests the agent-backtest pipeline from the manager’s perspective.
+Tests the agent-backtest pipeline from the manager's perspective.
 Comprehensive Integration Tests for Backtesting with Different Agents
 ---------------------------------------------------------------------
 
@@ -165,7 +165,14 @@ def test_backtest_integration(agent_name, caplog):
             assert trade["type"] == "sell", f"Negative amount but type not 'sell': {trade}"
         else:
             # Zero amount trades should have a valid reason
-            assert trade.get("reason") in ("trade_size_too_small", "insufficient_funds"), \
+            valid_reasons = (
+                "trade_size_too_small", 
+                "insufficient_funds", 
+                "price_not_available",
+                "risk_check_failed",
+                "position_limit_exceeded"
+            )
+            assert trade.get("reason") in valid_reasons, \
                 f"Zero-amount trade with no valid reason: {trade}"
     
     # Also check final portfolio is > 0

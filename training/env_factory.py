@@ -21,6 +21,7 @@ Recent Changes:
 - Added support for multi-agent environment creation
 - Enhanced data preprocessing for trading environments
 - Improved error handling and validation
+- Added support for risk-adjusted rewards and realistic frictions
 """
 
 import os
@@ -141,15 +142,32 @@ def create_env(
     
     # Create the appropriate environment
     if env_type == "single_asset_rl":
-        # Ensure required config keys exist with defaults
+        # Basic parameters
         window_size = env_config.get("window_size", 10)
         initial_capital = env_config.get("initial_capital", 10000.0)
         trading_fee = env_config.get("trading_fee", 0.001)
         max_position_size = env_config.get("max_position_size", 1.0)
         
+        # Risk-oriented reward parameters
+        risk_config = env_config.get("risk_reward", {})
+        risk_adjusted_reward = risk_config.get("enabled", True)
+        sharpe_lookback = risk_config.get("sharpe_lookback", 30)
+        sharpe_weight = risk_config.get("sharpe_weight", 0.5)
+        drawdown_penalty = risk_config.get("drawdown_penalty", True)
+        max_drawdown_penalty_threshold = risk_config.get("max_drawdown_threshold", 0.1)
+        
+        # Market friction parameters
+        friction_config = env_config.get("friction", {})
+        apply_slippage = friction_config.get("apply_slippage", True)
+        slippage_factor = friction_config.get("slippage_factor", 0.0005)
+        partial_fills = friction_config.get("partial_fills", True)
+        min_fill_rate = friction_config.get("min_fill_rate", 0.8)
+        volume_slippage_factor = friction_config.get("volume_slippage_factor", 0.1)
+        
         logger.info(
             f"Creating SingleAssetRLTradingEnv with window_size={window_size}, "
-            f"initial_capital={initial_capital}, trading_fee={trading_fee}"
+            f"initial_capital={initial_capital}, trading_fee={trading_fee}, "
+            f"risk_adjusted_reward={risk_adjusted_reward}, apply_slippage={apply_slippage}"
         )
         
         env = SingleAssetRLTradingEnv(
@@ -157,7 +175,19 @@ def create_env(
             window_size=window_size,
             initial_capital=initial_capital,
             trading_fee=trading_fee,
-            max_position_size=max_position_size
+            max_position_size=max_position_size,
+            # Risk reward parameters
+            risk_adjusted_reward=risk_adjusted_reward,
+            sharpe_lookback=sharpe_lookback,
+            sharpe_weight=sharpe_weight,
+            drawdown_penalty=drawdown_penalty,
+            max_drawdown_penalty_threshold=max_drawdown_penalty_threshold,
+            # Friction parameters
+            apply_slippage=apply_slippage,
+            slippage_factor=slippage_factor,
+            partial_fills=partial_fills,
+            min_fill_rate=min_fill_rate,
+            volume_slippage_factor=volume_slippage_factor,
         )
         
         # Apply wrappers if specified

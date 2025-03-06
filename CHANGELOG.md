@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Comprehensive test suite for risk management features:
+  - Forced liquidation tests
+  - Partial fills simulation tests
+  - Weekend close position tests
+  - Maximum holding period tests
+- Realistic market data transformation for scenario simulation in EnhancedBacktester
+- Flash crash simulation with configurable crash magnitude and recovery period
+- High volatility scenario with scaled price movements
+- Low liquidity scenario with reduced volume and greater randomness
+- Detailed scenario metrics reporting and visualization
+- Enhanced test framework for scenario comparison and validation
+- Automatic scenario results export to CSV for further analysis
+- Scenario-specific parameter preservation in test results
 - Unified training pipeline for both single-agent and multi-agent training
 - Environment factory for creating both types of environments from configuration
 - Robust evaluation functions for performance assessment
@@ -25,6 +38,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Detailed trade logging across all backtester implementations
 
 ### Changed
+- Improved partial fill implementation in MarketSimulator to be more realistic
+- Enhanced volume-based slippage calculation for better execution simulation
+- Modified scenario parameters to create more distinct market conditions
+- Increased market impact factors for extreme scenarios
+- Lowered minimum fill rates for low liquidity scenarios
+- Enhanced test visualization with separate portfolio value and execution metrics charts
+- Improved test metrics with detailed fill rate and slippage variance tracking
+- Standardized scenario parameter storage in results for better reproducibility
 - Improved training loop with checkpointing and evaluation
 - Standardized environment creation process
 - Enhanced agent creation with better configuration handling
@@ -37,6 +58,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Marked deprecated training files with 'deprecated_' prefix for clarity
 
 ### Fixed
+- Partial fill implementation now properly simulates partial executions
+- Fixed field name mismatch in trade data ('executed_amount' vs 'filled_amount')
+- Improved test resilience with proper field existence checking
+- Implemented proper data restoration after scenario execution
+- Fixed scenario differentiation in tests by improving variance calculations
+- Added proper data cloning to prevent unintended data modification
+- Fixed scenario test to properly compare metrics across different market conditions
+- Added safeguards against NaN values in scenario metrics calculations
 - Position size validation in Backtester
 - Dust position handling in multi-asset systems
 - PnL calculation accuracy in trade execution

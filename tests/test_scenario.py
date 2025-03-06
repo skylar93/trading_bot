@@ -770,4 +770,48 @@ class TestScenarioApplication(unittest.TestCase):
         ].pct_change().std()
         
         self.assertGreater(low_liq_volatility, normal_volatility,
-                          "Volatility should increase during low liquidity") 
+                          "Volatility should increase during low liquidity")
+
+    def test_apply_flash_crash_against_all_scenarios(self):
+        """Test applying flash crash to all scenarios"""
+        crash_params = {
+            "crash_at": 500,
+            "crash_size": 0.3,
+            "crash_duration": 5,
+            "recovery_duration": 10
+        }
+        
+        # Run against all scenarios and compare
+        for timestamp in self.sample_data.index:
+            window_start = max(0, np.where(self.sample_data.index == timestamp)[0][0] - 5 + 1)
+            window_end = np.where(self.sample_data.index == timestamp)[0][0] + 1
+            window_data = self.sample_data.iloc[window_start:window_end]
+            
+            action = DummyStrategy().get_action(window_data)
+            
+            # Create a copy of positions to avoid modification during iteration
+            price_dict = {asset: self.sample_data.loc[timestamp, ('$close' if '_$close' not in self.sample_data.columns else f"{asset}_$close")] for asset in self.sample_data.columns}
+            
+            self.sample_data.loc[timestamp] = price_dict
+
+    def test_apply_low_liquidity_against_all_scenarios(self):
+        """Test applying low liquidity to all scenarios"""
+        liq_params = {
+            "low_liq_start": 300,
+            "low_liq_length": 100,
+            "volume_reduction": 0.8,
+            "spread_multiplier": 3.0
+        }
+        
+        # Run against all scenarios and compare
+        for timestamp in self.sample_data.index:
+            window_start = max(0, np.where(self.sample_data.index == timestamp)[0][0] - 100 + 1)
+            window_end = np.where(self.sample_data.index == timestamp)[0][0] + 1
+            window_data = self.sample_data.iloc[window_start:window_end]
+            
+            action = DummyStrategy().get_action(window_data)
+            
+            # Create a copy of positions to avoid modification during iteration
+            price_dict = {asset: self.sample_data.loc[timestamp, ('$close' if '_$close' not in self.sample_data.columns else f"{asset}_$close")] for asset in self.sample_data.columns}
+            
+            self.sample_data.loc[timestamp] = price_dict 
