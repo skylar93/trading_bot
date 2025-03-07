@@ -15,6 +15,8 @@ import time
 from training.utils.unified_mlflow_manager import MLflowManager
 import asyncio
 import sys
+import torch
+from typing import Dict, List, Any
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +24,20 @@ logger = logging.getLogger(__name__)
 root_dir = str(Path(__file__).parent.parent)
 sys.path.insert(0, root_dir)
 
+# Configure logging for tests
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+# Set fixed seeds for reproducible tests
+@pytest.fixture(autouse=True)
+def set_random_seeds():
+    """Set fixed seeds for all tests to ensure reproducibility"""
+    np.random.seed(42)
+    torch.manual_seed(42)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(42)
 
 @pytest.fixture
 def temp_dir():
@@ -346,3 +362,106 @@ def ray_results_dir():
     
     # Clean up
     shutil.rmtree(temp_dir)
+
+
+@pytest.fixture
+def small_price_history():
+    """Generate a small price history for quick tests"""
+    rows = 50
+    rng = np.random.RandomState(42)
+    
+    # Generate price data
+    close_prices = 100 + np.cumsum(rng.normal(0, 1, rows))
+    
+    df = pd.DataFrame({
+        "$open": close_prices + rng.normal(0, 0.5, rows),
+        "$high": close_prices + rng.uniform(0, 2, rows),
+        "$low": close_prices - rng.uniform(0, 2, rows),
+        "$close": close_prices,
+        "$volume": rng.randint(100, 1000, rows)
+    })
+    
+    df.index = pd.date_range(start="2023-01-01", periods=rows, freq="D")
+    return df
+
+
+@pytest.fixture
+def market_regime_data():
+    """Generate synthetic data with different market regimes"""
+    # Create 4 distinct regimes: trending up, trending down, ranging, volatile
+    regime_length = 25  # Each regime has 25 data points
+    
+    # Trending up: positive drift
+    trending_up = 100 + np.cumsum(np.random.normal(0.1, 0.5, regime_length))
+    
+    # Trending down: negative drift
+    trending_down = 150 + np.cumsum(np.random.normal(-0.1, 0.5, regime_length))
+    
+    # Ranging: oscillating around a mean
+    ranging_base = 120 + np.sin(np.linspace(0, 4*np.pi, regime_length)) * 5
+    ranging = ranging_base + np.random.normal(0, 1, regime_length)
+    
+    # Volatile: high standard deviation
+    volatile = 130 + np.cumsum(np.random.normal(0, 2.0, regime_length))
+    
+    # Combine the regimes
+    close_prices = np.concatenate([trending_up, trending_down, ranging, volatile])
+    
+    # Create all price data
+    rng = np.random.RandomState(42)
+    rows = len(close_prices)
+    
+    df = pd.DataFrame({
+        "$open": close_prices + rng.normal(0, 1, rows),
+        "$high": close_prices + rng.uniform(0, 3, rows),
+        "$low": close_prices - rng.uniform(0, 3, rows),
+        "$close": close_prices,
+        "$volume": rng.randint(100, 5000, rows)
+    })
+    
+    # Add regime labels for easier analysis
+    regimes = ['trending_up'] * regime_length + ['trending_down'] * regime_length + \
+              ['ranging'] * regime_length + ['volatile'] * regime_length
+    df['regime'] = regimes
+    
+    df.index = pd.date_range(start="2023-01-01", periods=rows, freq="D")
+    return df
+
+
+# Helper function to create a realistic observation from price data
+def create_observation(price_data: pd.DataFrame, window_size: int, step: int) -> np.ndarray:
+    """
+    Create a realistic observation from price data
+    
+    Args:
+        price_data: DataFrame with OHLCV data
+        window_size: Size of observation window
+        step: Current step in the environment
+        
+    Returns:
+        Observation array with shape (window_size, features)
+    """
+    if step < window_size:
+        raise ValueError(f"Step {step} must be >= window_size {window_size}")
+    
+    # Extract window of price data
+    window = price_data.iloc[step-window_size:step]
+    
+    # Extract OHLCV features
+    features = window[['$open', '$high', '$low', '$close', '$volume']].values
+    
+    # Normalize features
+    open_mean, open_std = features[:, 0].mean(), features[:, 0].std()
+    high_mean, high_std = features[:, 1].mean(), features[:, 1].std()
+    low_mean, low_std = features[:, 2].mean(), features[:, 2].std()
+    close_mean, close_std = features[:, 3].mean(), features[:, 3].std()
+    volume_mean, volume_std = features[:, 4].mean(), features[:, 4].std() + 1e-8
+    
+    normalized = np.zeros_like(features)
+    normalized[:, 0] = (features[:, 0] - open_mean) / (open_std + 1e-8)
+    normalized[:, 1] = (features[:, 1] - high_mean) / (high_std + 1e-8)
+    normalized[:, 2] = (features[:, 2] - low_mean) / (low_std + 1e-8)
+    normalized[:, 3] = (features[:, 3] - close_mean) / (close_std + 1e-8)
+    normalized[:, 4] = (features[:, 4] - volume_mean) / (volume_std + 1e-8)
+    
+    return normalized
