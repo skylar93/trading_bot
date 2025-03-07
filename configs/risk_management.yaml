@@ -1,0 +1,48 @@
+# Risk Management Configuration
+# Settings for risk controls in multi-agent trading environment
+
+# Stop Loss Settings
+stop_loss:
+  use_stop_loss: true
+  stop_loss_threshold: 0.1  # 10% loss triggers stop loss
+  apply_to_agents: true     # Apply to individual agents
+  apply_to_portfolio: false # Apply to overall portfolio
+
+# Trailing Stop Settings
+trailing_stop:
+  use_trailing_stop: true
+  trailing_stop_buffer: 0.05  # 5% drop from highest point
+  apply_to_agents: true
+  apply_to_portfolio: false
+
+# Value at Risk (VaR) Settings
+var:
+  use_var: true
+  var_confidence_level: 0.95  # 95% confidence level
+  rolling_var_window: 100     # Number of periods for VaR calculation
+  action_on_var_exceed: "reduce_position"  # reduce_position or close_position
+  position_reduction_pct: 0.5  # When reducing position, reduce by this percentage
+  apply_to_agents: true
+  apply_to_portfolio: true    # Also check portfolio-wide VaR
+
+# Conditional Value at Risk (CVaR) Settings
+cvar:
+  use_cvar: false  # Not implemented in initial version
+  cvar_confidence_level: 0.95
+  action_on_cvar_exceed: "close_position"
+
+# Drawdown Protection
+drawdown:
+  max_drawdown_pct: 0.15      # 15% maximum drawdown
+  use_forced_liquidation: true  # Force liquidation on max drawdown
+  apply_to_agents: true
+  apply_to_portfolio: true
+
+# Risk Check Frequency
+check_frequency: 1  # Check every n steps
+
+# Risk Events Logging
+logging:
+  log_risk_events: true
+  log_level: "INFO"
+  include_in_mlflow: true 

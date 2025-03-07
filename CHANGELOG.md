@@ -8,6 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Extended Action Space in Multi-Asset Trading Environment:
+  - Implemented multiple action types for multi-asset trading:
+    - `discrete_amount`: Direct position size changes based on proportion of max position size
+    - `portfolio_weights`: Portfolio-based allocation with automatic rebalancing
+    - `discrete_signal`: Simple buy/hold/sell signals per asset
+  - Added portfolio constraints including minimum/maximum weights per asset
+  - Implemented automatic rebalancing with configurable frequency
+  - Added support for short selling with proper constraints
+  - Implemented shared capital management across assets
+  - Test suite for validating all action space types with visualizations
+- Integrated risk management for RL trading environments:
+  - Stop-loss implementation for position-level risk control
+  - Trailing stop functionality for dynamic loss prevention
+  - VaR (Value at Risk) calculation and position adjustment
+  - Maximum drawdown monitoring and forced liquidation
+  - Configuration-driven risk management parameters
+  - Risk events tracking and reporting
+- Comprehensive test suite for RL risk management features:
+  - Stop-loss tests for long and short positions
+  - Trailing stop tests with dynamic high/low watermarks
+  - VaR calculation and threshold checking tests
+  - Drawdown monitoring and detection tests
+  - Risk event tracking and statistics tests
+- Detailed risk configuration system with YAML support
+- Risk information in environment step() returns for agent awareness
+- Portfolio and agent-level risk control mechanisms
 - Comprehensive test suite for risk management features:
   - Forced liquidation tests
   - Partial fills simulation tests
