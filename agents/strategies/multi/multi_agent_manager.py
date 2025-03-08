@@ -184,6 +184,16 @@ class MultiAgentManager:
         self.recent_actions = {
             agent_id: [] for agent_id in self.agents if agent_id != self.meta_agent_id
         }
+        
+        # Track hidden states from sub-agents
+        self.hidden_states = {
+            agent_id: None for agent_id in self.agents if agent_id != self.meta_agent_id
+        }
+        
+        # Hidden state dimensions for each agent (to be populated dynamically)
+        self.hidden_dim = {
+            agent_id: 0 for agent_id in self.agents if agent_id != self.meta_agent_id
+        }
 
     def act(self, observations: Dict[str, np.ndarray], deterministic: bool = False) -> Dict[str, np.ndarray]:
         """
@@ -198,12 +208,20 @@ class MultiAgentManager:
         """
         # Get individual agent actions
         individual_actions = {}
+        hidden_states = {}
         
         for agent_id, agent in self.agents.items():
             if agent_id != self.meta_agent_id:
                 # Get action from this agent
                 if agent_id in observations:
-                    action = agent.get_action(observations[agent_id], deterministic)
+                    # Use the new method that provides both action and hidden state
+                    if hasattr(agent, 'get_action_with_hidden_state'):
+                        action, hidden_state = agent.get_action_with_hidden_state(observations[agent_id], deterministic)
+                    else:
+                        # Fallback for agents that don't have the new method
+                        action = agent.get_action(observations[agent_id], deterministic)
+                        # Create a dummy hidden state for compatibility
+                        hidden_state = np.zeros(10)  # 기본 크기의 더미 히든 상태
                     
                     # Ensure action has consistent shape - always make it 1D
                     if isinstance(action, np.ndarray):
@@ -212,6 +230,11 @@ class MultiAgentManager:
                         action = np.array([action])
                     
                     individual_actions[agent_id] = action
+                    hidden_states[agent_id] = hidden_state.flatten()  # Flatten for consistency
+                    
+                    # Store hidden state dimension if not already set
+                    if self.hidden_dim[agent_id] == 0:
+                        self.hidden_dim[agent_id] = hidden_state.flatten().shape[0]
                     
                     # Store action for correlation calculation
                     if len(self.recent_actions[agent_id]) >= self.performance_window:
@@ -221,59 +244,63 @@ class MultiAgentManager:
         # Update action correlations
         self._update_action_correlations()
         
+        # Store hidden states for later use
+        self.hidden_states = hidden_states
+        
         # Final actions to return
         final_actions = {}
         
         if self.ensemble_method == "meta" and self.meta_agent_id:
-            # Prepare meta-observation (concatenate all observations)
-            meta_obs = []
-            for agent_id in sorted(individual_actions.keys()):
-                if agent_id in observations:
-                    meta_obs.append(observations[agent_id])
+            # Prepare meta-observation
+            meta_observation = self.get_meta_observation(observations)
             
-            # Add market state - use the first agent's observation to extract
-            first_agent = next(iter(observations.keys()))
-            market_state = self._extract_market_state(observations[first_agent])
-            meta_obs.append(market_state)
-            
-            # Concatenate everything
-            meta_observation = np.concatenate(meta_obs)
-            
-            # Get meta-agent action
+            # Get meta-agent action using the enhanced observation
             meta_action = self.agents[self.meta_agent_id].get_action(meta_observation, deterministic)
+            
             # Ensure meta_action has consistent shape
             if isinstance(meta_action, np.ndarray):
                 meta_action = meta_action.flatten()
             else:
                 meta_action = np.array([meta_action])
             
-            if hasattr(self.agents[self.meta_agent_id], "continuous_ensemble") and self.agents[self.meta_agent_id].continuous_ensemble:
-                # Continuous weighting of actions
-                weights = meta_action
-                
-                # Normalize weights to sum to 1
-                weights = weights / (np.sum(weights) + 1e-8)
-                
-                # Apply weights to each agent's action
+            if self.agents[self.meta_agent_id].continuous_ensemble:
+                # For continuous ensemble, meta_action contains weights for each agent
+                # Apply weights to sub-agent actions
                 weighted_action = np.zeros_like(next(iter(individual_actions.values())))
                 for i, agent_id in enumerate(sorted(individual_actions.keys())):
-                    weighted_action += weights[i] * individual_actions[agent_id]
+                    if i < len(meta_action):
+                        weighted_action += meta_action[i] * individual_actions[agent_id]
                 
-                # Assign the same weighted action to all agents
+                # Store meta-action for logging
+                final_actions[self.meta_agent_id] = meta_action
+                
+                # Add weighted actions for each agent
                 for agent_id in individual_actions:
-                    final_actions[agent_id] = weighted_action
+                    final_actions[agent_id] = individual_actions[agent_id]
+                
+                # Return all actions
+                return final_actions
             else:
-                # Discrete selection - choose the agent with highest score
-                selected_agent_idx = int(meta_action[0])
-                selected_agent_id = sorted(individual_actions.keys())[selected_agent_idx % len(individual_actions)]
+                # For discrete selection, meta_action is the index of the selected agent
+                selected_idx = int(meta_action[0])
+                if selected_idx < 0:
+                    selected_idx = 0
+                if selected_idx >= len(individual_actions):
+                    selected_idx = len(individual_actions) - 1
                 
-                # Use the selected agent's action for all
+                # Get the corresponding agent_id
+                selected_agent_id = sorted(individual_actions.keys())[selected_idx]
                 selected_action = individual_actions[selected_agent_id]
-                for agent_id in individual_actions:
-                    final_actions[agent_id] = selected_action
-            
-            # Also include meta-agent's raw action
-            final_actions[self.meta_agent_id] = meta_action
+                
+                # Store meta-action for logging
+                final_actions[self.meta_agent_id] = meta_action
+                
+                # For all other agents, use their original actions
+                for agent_id, action in individual_actions.items():
+                    final_actions[agent_id] = action
+                
+                # The final action is determined by the selected agent
+                return final_actions
             
         elif self.ensemble_method == "weighted":
             # Use performance-based weights to blend actions
@@ -704,51 +731,132 @@ class MultiAgentManager:
         next_observations = []
         actions = []
         sub_agent_actions = []
+        hidden_states = []
+        next_hidden_states = []
+        
+        # Filter out meta agent from experiences
+        sub_agent_experiences = {
+            agent_id: exp for agent_id, exp in experiences.items() 
+            if agent_id != self.meta_agent_id
+        }
         
         # For tracking best-performing agent in this step
         max_reward = float('-inf')
         best_agent_index = 0
         
-        for i, (agent_id, exp) in enumerate(sorted(experiences.items())):
-            if agent_id != self.meta_agent_id:
-                if "observation" in exp and "next_observation" in exp:
-                    observations.append(exp["observation"])
-                    next_observations.append(exp["next_observation"])
-                    
-                    # Store the agent's action for meta supervision
-                    if "action" in exp:
-                        sub_agent_actions.append(exp["action"])
-                    
-                    # Track which agent performed best
-                    if "reward" in exp and exp["reward"] > max_reward:
-                        max_reward = exp["reward"]
-                        best_agent_index = i
+        for i, (agent_id, exp) in enumerate(sorted(sub_agent_experiences.items())):
+            if "observation" in exp and "next_observation" in exp:
+                # Always flatten observation
+                if isinstance(exp["observation"], np.ndarray):
+                    obs = exp["observation"].flatten()
+                else:
+                    obs = np.array([float(exp["observation"])], dtype=np.float32)
+                observations.append(obs)
+                
+                # Always flatten next_observation
+                if isinstance(exp["next_observation"], np.ndarray):
+                    next_obs = exp["next_observation"].flatten()
+                else:
+                    next_obs = np.array([float(exp["next_observation"])], dtype=np.float32)
+                next_observations.append(next_obs)
+                
+                # Store the agent's action for meta supervision
+                if "action" in exp:
+                    # Always flatten action
+                    if isinstance(exp["action"], np.ndarray):
+                        action = exp["action"].flatten()
+                    else:
+                        action = np.array([float(exp["action"])], dtype=np.float32)
+                    sub_agent_actions.append(action)
+                
+                # Store hidden states if available
+                if "hidden_state" in exp:
+                    # Always flatten hidden_state
+                    if isinstance(exp["hidden_state"], np.ndarray):
+                        hidden = exp["hidden_state"].flatten()
+                    else:
+                        hidden = np.array([float(exp["hidden_state"])], dtype=np.float32)
+                    hidden_states.append(hidden)
+                
+                # Store next hidden states if available
+                if "next_hidden_state" in exp:
+                    # Always flatten next_hidden_state
+                    if isinstance(exp["next_hidden_state"], np.ndarray):
+                        next_hidden = exp["next_hidden_state"].flatten() 
+                    else:
+                        next_hidden = np.array([float(exp["next_hidden_state"])], dtype=np.float32)
+                    next_hidden_states.append(next_hidden)
+                # If hidden states aren't in the experience but we have the agent object and latest observations
+                elif agent_id in self.agents and agent_id in self.hidden_states:
+                    # Always flatten hidden_state from self.hidden_states
+                    if isinstance(self.hidden_states[agent_id], np.ndarray):
+                        hidden = self.hidden_states[agent_id].flatten()
+                    else:
+                        hidden = np.array([float(self.hidden_states[agent_id])], dtype=np.float32)
+                    hidden_states.append(hidden)
+                
+                # Track which agent performed best
+                if "reward" in exp and exp["reward"] > max_reward:
+                    max_reward = exp["reward"]
+                    best_agent_index = i  # Use the index in the sorted list
         
         if not observations or not next_observations:
             return None
+        
+        # Validate best_agent_index is within bounds
+        num_agents = len(sub_agent_experiences)
+        if best_agent_index >= num_agents:
+            logger.warning(f"Invalid best_agent_index {best_agent_index}, capping to {num_agents-1}")
+            best_agent_index = num_agents - 1
+        
+        # All arrays should be 1D now, safe to concatenate
+        try:
+            # Concatenate observations
+            observation = np.concatenate(observations).astype(np.float32)
+            next_observation = np.concatenate(next_observations).astype(np.float32)
             
-        # Concatenate observations
-        observation = np.concatenate(observations)
-        next_observation = np.concatenate(next_observations)
+            # Concatenate hidden states if available
+            if hidden_states:
+                hidden_state_concat = np.concatenate(hidden_states).astype(np.float32)
+                observation = np.concatenate([observation, hidden_state_concat]).astype(np.float32)
+            
+            # Concatenate next hidden states if available
+            if next_hidden_states:
+                next_hidden_state_concat = np.concatenate(next_hidden_states).astype(np.float32)
+                next_observation = np.concatenate([next_observation, next_hidden_state_concat]).astype(np.float32)
+        except ValueError as e:
+            # Log detailed error info
+            logger.error(f"Failed to concatenate in _create_meta_experience: {e}")
+            # Fallback: don't include hidden states
+            observation = np.concatenate(observations).astype(np.float32)
+            next_observation = np.concatenate(next_observations).astype(np.float32)
         
         # The meta-agent's action - either discrete selection or continuous weights
         if hasattr(self.agents[self.meta_agent_id], "continuous_ensemble") and self.agents[self.meta_agent_id].continuous_ensemble:
             # For continuous ensemble, target is a one-hot encoding of the best agent
-            target = np.zeros(len(sub_agent_actions))
-            target[best_agent_index] = 1.0
+            target = np.zeros(num_agents)
+            if 0 <= best_agent_index < num_agents:
+                target[best_agent_index] = 1.0
+            else:
+                # Default to first agent if index is invalid
+                target[0] = 1.0
             action = target
         else:
             # For discrete selection, target is the index of the best agent
+            # Ensure index is valid (0 for a single agent case)
+            if num_agents == 0:
+                best_agent_index = 0
             action = np.array([best_agent_index])
-            
+        
         # Construct meta-experience
         meta_experience = {
             "observation": observation,
             "action": action,
-            "reward": max_reward,  # Meta-agent gets reward of the best agent
+            "reward": max_reward if max_reward > float('-inf') else 0.0,  # Meta-agent gets reward of the best agent
             "next_observation": next_observation,
-            "done": experiences.get(next(iter(experiences)), {}).get("done", False),
-            "sub_agent_actions": np.array(sub_agent_actions) if sub_agent_actions else None
+            "done": any(exp.get("done", False) for exp in experiences.values()) if experiences else False,
+            "sub_agent_actions": np.array(sub_agent_actions) if sub_agent_actions else None,
+            "sub_agent_hidden_states": hidden_states if hidden_states else None,
         }
         
         return meta_experience
@@ -802,41 +910,81 @@ class MultiAgentManager:
         """
         if not observations:
             # No observations, return empty array
-            return np.zeros(10)  # Default size
+            return np.zeros(10, dtype=np.float32)  # Default size
         
         # Sort agent IDs for consistent ordering
         agent_ids = sorted([aid for aid in observations.keys() if aid != self.meta_agent_id])
         
-        # Extract and flatten observations
-        obs_list = []
+        # Collect all observations first as flat arrays
+        flat_arrays = []
+        
+        # Process sub-agent observations
         for agent_id in agent_ids:
             if agent_id in observations:
                 obs = observations[agent_id]
-                flat_obs = obs.flatten() if isinstance(obs, np.ndarray) else np.array([obs])
-                obs_list.append(flat_obs)
+                # Always flatten to 1D array
+                if isinstance(obs, np.ndarray):
+                    flat_obs = obs.flatten()
+                else:
+                    flat_obs = np.array([float(obs)], dtype=np.float32)
+                flat_arrays.append(flat_obs)
         
-        # Add market state features
-        if len(obs_list) > 0 and any(len(o) > 0 for o in obs_list):
-            # Use first observation to extract market state
-            first_obs = next((o for o in obs_list if len(o) > 0), None)
-            if first_obs is not None:
-                market_state = self._extract_market_state(first_obs)
-                obs_list.append(market_state)
-        
-        # Concatenate all observations
-        if not obs_list:
-            return np.zeros(10)  # Default size
-        
-        # Ensure all elements have a common shape for concatenation
-        max_dim = max(o.shape[0] for o in obs_list)
-        padded_obs = []
-        for obs in obs_list:
-            if obs.shape[0] < max_dim:
-                # Pad with zeros
-                padded = np.zeros(max_dim)
-                padded[:obs.shape[0]] = obs
-                padded_obs.append(padded)
+        # Extract market state from the first observation if available
+        if flat_arrays:
+            first_obs = flat_arrays[0]
+            market_state = self._extract_market_state(first_obs)
+            # Always flatten market state
+            if isinstance(market_state, np.ndarray):
+                flat_market = market_state.flatten()
             else:
-                padded_obs.append(obs)
+                flat_market = np.array([float(market_state)], dtype=np.float32)
+            flat_arrays.append(flat_market)
         
-        return np.concatenate(padded_obs)
+        # If no valid observations, return default array
+        if not flat_arrays:
+            return np.zeros(10, dtype=np.float32)
+        
+        # Verify all arrays are now 1D
+        for i, arr in enumerate(flat_arrays):
+            if arr.ndim != 1:
+                # If somehow still not 1D, force it
+                flat_arrays[i] = arr.flatten()
+        
+        # Add hidden states if available
+        if hasattr(self, 'hidden_states') and self.hidden_states:
+            for agent_id in agent_ids:
+                if agent_id in self.hidden_states and self.hidden_states[agent_id] is not None:
+                    hidden = self.hidden_states[agent_id]
+                    # Always flatten hidden state
+                    if isinstance(hidden, np.ndarray):
+                        flat_hidden = hidden.flatten()
+                    else:
+                        flat_hidden = np.array([float(hidden)], dtype=np.float32)
+                    flat_arrays.append(flat_hidden)
+        
+        # All arrays should be 1D now, safe to concatenate
+        try:
+            return np.concatenate(flat_arrays).astype(np.float32)
+        except ValueError as e:
+            # Last resort in case of failure: log detailed info and return empty array
+            shapes = [arr.shape for arr in flat_arrays]
+            dims = [arr.ndim for arr in flat_arrays]
+            logger.error(f"Failed to concatenate observations despite flattening: shapes={shapes}, dims={dims}, error={e}")
+            
+            # Force everything to 1D as final attempt
+            forced_1d = []
+            for arr in flat_arrays:
+                try:
+                    forced_1d.append(arr.flatten())
+                except:
+                    # Skip arrays that cannot be flattened
+                    logger.error(f"Could not flatten array of type {type(arr)}")
+            
+            if forced_1d:
+                try:
+                    return np.concatenate(forced_1d).astype(np.float32)
+                except:
+                    pass
+                
+            # Ultimate fallback
+            return np.zeros(sum(arr.size for arr in flat_arrays), dtype=np.float32)

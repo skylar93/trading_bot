@@ -147,7 +147,8 @@ def test_multi_asset_holding_periods():
     risk_config = RiskConfig(
         max_holding_period_days=5,
         enable_stop_loss=False,  # Disable stop loss
-        max_drawdown_pct=1.0     # Disable max drawdown (100% drawdown allowed)
+        max_drawdown_pct=1.0,    # Disable max drawdown (100% drawdown allowed)
+        max_position_size=0.5    # Increase max position size to allow 30% positions
     )
     
     # Setup backtester

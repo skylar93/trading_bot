@@ -124,9 +124,9 @@ def train_single_agent(
             # Log to MLflow if available
             if mlflow_manager is not None:
                 mlflow_manager.log_metrics({
-                    "episode_reward": current_episode_reward,
-                    "episode_length": current_episode_length,
-                    "average_reward": np.mean(episode_rewards[-100:]),
+                    "episode_reward": float(current_episode_reward),
+                    "episode_length": float(current_episode_length),
+                    "average_reward": float(np.mean(episode_rewards[-100:])),
                 }, step=steps_done)
             
             # Reset for next episode
@@ -302,16 +302,20 @@ def train_multi_agent(
                 
                 # Log to MLflow if available
                 if mlflow_manager is not None:
+                    # Ensure values are native Python float for MLflow
+                    reward = float(current_episode_rewards[agent_id])
+                    avg_reward = float(np.mean(episode_rewards[agent_id][-100:]))
+                    
                     mlflow_manager.log_metrics({
-                        f"{agent_id}_episode_reward": current_episode_rewards[agent_id],
-                        f"{agent_id}_average_reward": np.mean(episode_rewards[agent_id][-100:]),
+                        f"{agent_id}_episode_reward": reward,
+                        f"{agent_id}_average_reward": avg_reward,
                     }, step=steps_done)
             
             # Also log episode length
             episode_lengths.append(current_episode_length)
             if mlflow_manager is not None:
                 mlflow_manager.log_metrics({
-                    "episode_length": current_episode_length,
+                    "episode_length": float(current_episode_length),
                 }, step=steps_done)
             
             # Reset for next episode
@@ -351,8 +355,8 @@ def train_multi_agent(
             
             # Log evaluation results for each agent
             for agent_id in agents.keys():
-                mean_eval_reward = np.mean(eval_rewards[agent_id])
-                std_eval_reward = np.std(eval_rewards[agent_id])
+                mean_eval_reward = float(np.mean(eval_rewards[agent_id]))
+                std_eval_reward = float(np.std(eval_rewards[agent_id]))
                 
                 logger.info(f"Evaluation at step {steps_done}: "
                            f"{agent_id} Mean reward: {mean_eval_reward:.2f} ± {std_eval_reward:.2f}")
@@ -388,13 +392,13 @@ def train_multi_agent(
     # Log final metrics to MLflow
     if mlflow_manager is not None:
         metrics = {
-            "training_duration": training_duration,
-            "total_episodes": episode_num,
+            "training_duration": float(training_duration),
+            "total_episodes": float(episode_num),
         }
         for agent_id in agents.keys():
             if episode_rewards[agent_id]:
-                metrics[f"{agent_id}_final_average_reward"] = np.mean(episode_rewards[agent_id][-100:])
-                metrics[f"{agent_id}_best_eval_reward"] = best_eval_rewards[agent_id]
+                metrics[f"{agent_id}_final_average_reward"] = float(np.mean(episode_rewards[agent_id][-100:]))
+                metrics[f"{agent_id}_best_eval_reward"] = float(best_eval_rewards[agent_id])
         
         mlflow_manager.log_metrics(metrics)
     

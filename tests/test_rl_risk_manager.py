@@ -12,7 +12,7 @@ Tests cover:
 import unittest
 import numpy as np
 import pandas as pd
-from envs.risk_manager import RiskManager, RiskConfig
+from risk_management import create_risk_manager
 
 
 class TestRLRiskManager(unittest.TestCase):
@@ -20,20 +20,20 @@ class TestRLRiskManager(unittest.TestCase):
     
     def setUp(self):
         """Set up test fixtures."""
-        self.config = RiskConfig(
-            use_stop_loss=True,
-            stop_loss_threshold=0.1,  # 10% loss
-            use_trailing_stop=True,
-            trailing_stop_buffer=0.05,  # 5% drop from highest
-            use_var=True,
-            var_confidence_level=0.95,
-            rolling_var_window=10,
-            action_on_var_exceed="reduce_position",
-            max_drawdown_pct=0.15,
-            use_forced_liquidation=True,
-            check_frequency=1
-        )
-        self.risk_manager = RiskManager(self.config)
+        self.config = {
+            "use_stop_loss": True,
+            "stop_loss_threshold": 0.1,  # 10% loss
+            "use_trailing_stop": True,
+            "trailing_stop_buffer": 0.05,  # 5% drop from highest
+            "use_var": True,
+            "var_confidence_level": 0.95,
+            "rolling_var_window": 10,
+            "action_on_var_exceed": "reduce_position",
+            "max_drawdown_pct": 0.15,
+            "use_forced_liquidation": True,
+            "check_frequency": 1
+        }
+        self.risk_manager = create_risk_manager("rl", self.config)
         
     def test_stop_loss_long_position(self):
         """Test stop loss for long positions."""

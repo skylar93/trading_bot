@@ -16,6 +16,7 @@ class MetaNetwork(nn.Module):
     
     Features:
     - Processes joint observations from multiple sub-agents
+    - Processes hidden state representations from sub-agents
     - Outputs either discrete agent selection or continuous weights
     - Supports both actor-critic and direct policy architectures
     - Configurable hidden layer sizes
@@ -25,8 +26,10 @@ class MetaNetwork(nn.Module):
     - Handles both discrete and continuous action spaces
     - Implements proper weight initialization
     - Supports batch processing for efficient training
+    - Processes sub-agent hidden states for enhanced decision making
     
     Recent Changes:
+    - Added support for processing sub-agent hidden state representations
     - Added support for continuous ensemble weights
     - Implemented attention mechanism for agent selection
     - Enhanced network architecture with residual connections
@@ -37,7 +40,8 @@ class MetaNetwork(nn.Module):
         observation_dim: int,
         action_dim: int,
         hidden_dim: int = 128,
-        continuous_ensemble: bool = False
+        continuous_ensemble: bool = False,
+        use_attention: bool = True
     ):
         """
         Initialize meta-network.
@@ -47,8 +51,11 @@ class MetaNetwork(nn.Module):
             action_dim: Dimension of action space
             hidden_dim: Dimension of hidden layers
             continuous_ensemble: Whether to output continuous weights
+            use_attention: Whether to use attention for integrating sub-agent hidden states
         """
         super().__init__()
+        
+        self.use_attention = use_attention
         
         # Common feature extractor
         self.feature_extractor = nn.Sequential(
@@ -57,6 +64,13 @@ class MetaNetwork(nn.Module):
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU()
         )
+        
+        # Attention mechanism for integrating sub-agent hidden states
+        if use_attention:
+            self.attention_key = nn.Linear(hidden_dim, hidden_dim)
+            self.attention_query = nn.Linear(hidden_dim, hidden_dim)
+            self.attention_value = nn.Linear(hidden_dim, hidden_dim)
+            self.attention_output = nn.Linear(hidden_dim, hidden_dim)
         
         # Actor network
         if continuous_ensemble:
@@ -191,17 +205,20 @@ class MetaAgent(BaseAgent):
     - Coordinates decisions from multiple sub-agents
     - Can select best agent or blend their actions
     - Learns from experience which agent performs best in different situations
+    - Processes sub-agent hidden state representations for enhanced decision making
     - Adapts to changing market conditions
     - Supports both discrete selection and continuous weighting
     
     Implementation Notes:
     - Uses PPO algorithm for training
     - Maintains history of agent performance
+    - Processes sub-agent internal representations
     - Implements proper exploration-exploitation balance
     - Handles both discrete and continuous action spaces
     - Supports online learning from streaming data
     
     Recent Changes:
+    - Added support for processing sub-agent hidden state representations
     - Added support for continuous ensemble weights
     - Implemented attention mechanism for agent selection
     - Enhanced reward shaping for better agent selection
@@ -222,6 +239,7 @@ class MetaAgent(BaseAgent):
         entropy_coef: float = 0.01,
         max_grad_norm: float = 0.5,
         continuous_ensemble: bool = False,
+        use_attention: bool = True,
         **kwargs
     ):
         """
@@ -240,11 +258,13 @@ class MetaAgent(BaseAgent):
             entropy_coef: Entropy coefficient
             max_grad_norm: Maximum gradient norm
             continuous_ensemble: Whether to use continuous ensemble weights
+            use_attention: Whether to use attention for integrating sub-agent hidden states
         """
         super().__init__(observation_space, action_space)
         
         self.device = torch.device(device)
         self.continuous_ensemble = continuous_ensemble
+        self.use_attention = use_attention
         
         # PPO hyperparameters
         self.learning_rate = learning_rate
@@ -260,7 +280,8 @@ class MetaAgent(BaseAgent):
             observation_dim=observation_space.shape[0],
             action_dim=action_space.shape[0] if continuous_ensemble else 1,
             hidden_dim=hidden_dim,
-            continuous_ensemble=continuous_ensemble
+            continuous_ensemble=continuous_ensemble,
+            use_attention=use_attention
         ).to(self.device)
         
         # Initialize optimizer
@@ -289,12 +310,16 @@ class MetaAgent(BaseAgent):
         Get action from the agent.
         
         Args:
-            observation: Observation array
+            observation: Observation array, which may include sub-agent hidden states
+                         if provided by the MultiAgentManager
             deterministic: Whether to use deterministic action selection
             
         Returns:
-            Action array
+            Action array representing either a discrete agent selection or continuous weights
         """
+        # The MetaAgent itself doesn't expose its hidden state through a tuple return.
+        # Instead, it processes the hidden states of sub-agents that are included in the observation.
+        
         # Convert observation to tensor
         obs_tensor = torch.FloatTensor(observation).unsqueeze(0).to(self.device)
         
@@ -312,7 +337,8 @@ class MetaAgent(BaseAgent):
         Train the agent on a single experience.
         
         Args:
-            experience: Experience dictionary
+            experience: Experience dictionary which may include sub-agent hidden states
+                        in the observation if provided by the MultiAgentManager
             
         Returns:
             Dictionary of training metrics
@@ -341,8 +367,12 @@ class MetaAgent(BaseAgent):
                 log_prob = torch.sum(torch.log(action_output + 1e-8) * action_tensor, dim=-1, keepdim=True)
             else:
                 # For discrete selection, compute log probability from categorical
+                # Ensure action is within valid range (0 to n-1 where n is number of logits)
+                n_categories = action_output.size(-1)
+                valid_action = torch.clamp(action_tensor.long(), 0, max(0, n_categories - 1))
+                
                 dist = torch.distributions.Categorical(logits=action_output)
-                log_prob = dist.log_prob(action_tensor.view(-1)).view(-1, 1)
+                log_prob = dist.log_prob(valid_action.view(-1)).view(-1, 1)
         
         # Store experience
         self.observations.append(observation)

@@ -183,26 +183,31 @@ class AssetSpecificAgent:
     
     def act(self, observation: np.ndarray, deterministic: bool = False) -> np.ndarray:
         """
-        Determine the action to take based on the current observation.
+        Determine the trading action for assets.
         
         Args:
-            observation: Current observation from the environment
-            deterministic: Whether to act deterministically
+            observation: Observation array
+            deterministic: Whether to use deterministic action selection
             
         Returns:
-            Action to take
+            Action array
         """
-        raise NotImplementedError("Subclasses must implement this method")
+        # 하위 호환성을 위해 액션만 반환
+        action, _ = self.act_with_hidden_state(observation, deterministic)
+        return action
     
-    def update(self, experience: Dict[str, Any]) -> Dict[str, float]:
+    def act_with_hidden_state(self, observation: np.ndarray, deterministic: bool = False) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Update the agent's policy based on experience.
+        Determine the trading action and return the internal hidden state.
         
         Args:
-            experience: Dictionary containing experience data
+            observation: Observation array
+            deterministic: Whether to use deterministic action selection
             
         Returns:
-            Dictionary of training metrics
+            Tuple of (action_np, hidden_state_np):
+                - action_np: The action to take
+                - hidden_state_np: The internal hidden state representation
         """
         raise NotImplementedError("Subclasses must implement this method")
     
@@ -243,6 +248,36 @@ class AssetSpecificAgent:
         # Implement market regime detection logic
         # This could be based on volatility, trend indicators, etc.
         return "unknown"
+    
+    def get_action(self, observation: np.ndarray, deterministic: bool = False) -> np.ndarray:
+        """
+        Get action from the agent.
+        
+        Args:
+            observation: Observation array
+            deterministic: Whether to use deterministic action selection
+            
+        Returns:
+            Action array
+        """
+        # 하위 호환성을 위해 액션만 반환
+        action, _ = self.get_action_with_hidden_state(observation, deterministic)
+        return action
+    
+    def get_action_with_hidden_state(self, observation: np.ndarray, deterministic: bool = False) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Get action and hidden state from the agent.
+        
+        Args:
+            observation: Observation array
+            deterministic: Whether to use deterministic action selection
+            
+        Returns:
+            Tuple of (action_np, hidden_state_np):
+                - action_np: The action to take
+                - hidden_state_np: The internal hidden state representation
+        """
+        return self.act_with_hidden_state(observation, deterministic)
 
 
 class CryptoAgent(AssetSpecificAgent):
@@ -349,11 +384,51 @@ class CryptoAgent(AssetSpecificAgent):
         return obs_tensor
     
     def act(self, observation: np.ndarray, deterministic: bool = False) -> np.ndarray:
-        """Determine the trading action for crypto assets."""
+        """
+        Determine the trading action for crypto assets.
+        
+        Args:
+            observation: Observation array
+            deterministic: Whether to use deterministic action selection
+            
+        Returns:
+            Action array
+        """
+        # 하위 호환성을 위해 액션만 반환
+        action, _ = self.act_with_hidden_state(observation, deterministic)
+        return action
+    
+    def act_with_hidden_state(self, observation: np.ndarray, deterministic: bool = False) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Determine the trading action for crypto assets and return the internal hidden state.
+        
+        Args:
+            observation: Observation array
+            deterministic: Whether to use deterministic action selection
+            
+        Returns:
+            Tuple of (action_np, hidden_state_np):
+                - action_np: The action to take
+                - hidden_state_np: The internal hidden state representation
+        """
         # Preprocess the observation
         obs_tensor = self.preprocess_observation(observation)
         
-        # Get action from policy network
+        # Extract hidden state representation from policy network
+        # We'll capture the output of the second-last layer
+        hidden_state = None
+        # Process through layers up to the second-last layer to get hidden representation
+        with torch.no_grad():
+            # Pass through the first layers to get hidden representation
+            # For MLP networks, we'll extract after the penultimate layer
+            hidden_state = obs_tensor
+            for i, module in enumerate(self.policy_net):
+                hidden_state = module(hidden_state)
+                # Stop before the final layer to capture hidden representation
+                if i == len(self.policy_net) - 2:  # Second-last layer
+                    break
+        
+        # Get action from policy network (full forward pass)
         with torch.no_grad():
             policy_output = self.policy_net(obs_tensor)
             means, log_stds = torch.chunk(policy_output, 2, dim=-1)
@@ -381,11 +456,13 @@ class CryptoAgent(AssetSpecificAgent):
             # Scale down action in highly volatile markets for risk management
             action = action * 0.7  # Reduce position size in volatile conditions
         
-        # Convert to numpy array
+        # Convert to numpy arrays
         action_np = action.cpu().numpy()
+        hidden_state_np = hidden_state.cpu().numpy()
+        
         self.state["last_action"] = action_np
         
-        return action_np
+        return action_np, hidden_state_np
     
     def update(self, experience: Dict[str, Any]) -> Dict[str, float]:
         """Update the agent's policy based on crypto-specific experience."""
@@ -593,33 +670,106 @@ class EquityAgent(AssetSpecificAgent):
         return obs_tensor
     
     def act(self, observation: np.ndarray, deterministic: bool = False) -> np.ndarray:
-        """Determine the trading action for equity assets."""
-        # Similar structure to CryptoAgent.act(), but with equity specifics
+        """
+        Determine the trading action for equity assets.
+        
+        Args:
+            observation: Observation array
+            deterministic: Whether to use deterministic action selection
+            
+        Returns:
+            Action array
+        """
+        # 하위 호환성을 위해 액션만 반환
+        action, _ = self.act_with_hidden_state(observation, deterministic)
+        return action
+    
+    def act_with_hidden_state(self, observation: np.ndarray, deterministic: bool = False) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Determine the trading action for equity assets and return the internal hidden state.
+        
+        Args:
+            observation: Observation array
+            deterministic: Whether to use deterministic action selection
+            
+        Returns:
+            Tuple of (action_np, hidden_state_np):
+                - action_np: The action to take
+                - hidden_state_np: The internal hidden state representation
+        """
+        # Preprocess the observation
         obs_tensor = self.preprocess_observation(observation)
         
+        # Extract hidden state representation from policy network
+        # We'll capture the output of the second-last layer
+        hidden_state = None
+        # Process through layers up to the second-last layer to get hidden representation
+        with torch.no_grad():
+            # Pass through the first layers to get hidden representation
+            hidden_state = obs_tensor
+            for i, module in enumerate(self.policy_net):
+                hidden_state = module(hidden_state)
+                # Stop before the final layer to capture hidden representation
+                if i == len(self.policy_net) - 2:  # Second-last layer
+                    break
+        
+        # Get action from policy network (full forward pass)
         with torch.no_grad():
             policy_output = self.policy_net(obs_tensor)
             means, log_stds = torch.chunk(policy_output, 2, dim=-1)
             
+            # Apply tanh to bound action means
             means = torch.tanh(means)
+            
+            # Process log_stds with appropriate bounds
             stds = F.softplus(log_stds) + 1e-6
             
+            # Sample from distribution if not deterministic
             if deterministic:
                 action = means
             else:
                 normal = torch.distributions.Normal(means, stds)
                 action = normal.sample()
                 action = torch.clamp(action, -1.0, 1.0)
-        
-        # Apply equity-specific adjustments
-        market_regime = self.analyze_market_regime(observation)
-        self.state["market_regime"] = market_regime
-        
-        # Convert to numpy array
+                
+        # Additional equity-specific logic...
+        if self.use_fundamentals:
+            # Adjust based on fundamental factors if available in the observation
+            fundamental_idx = self.get_fundamental_indices(observation)
+            if fundamental_idx is not None and len(fundamental_idx) > 0:
+                fundamental_values = observation[fundamental_idx]
+                
+                # Simple adjustment based on PE ratio or other fundamentals
+                # Reduce position if fundamentals are poor
+                if hasattr(self, 'fundamental_threshold'):
+                    threshold = self.fundamental_threshold
+                else:
+                    threshold = 0.0  # 기본값
+                
+                if np.mean(fundamental_values) < threshold:
+                    action = action * 0.8
+                    
+        # Convert to numpy arrays
         action_np = action.cpu().numpy()
+        hidden_state_np = hidden_state.cpu().numpy()
+        
         self.state["last_action"] = action_np
         
-        return action_np
+        return action_np, hidden_state_np
+    
+    def get_fundamental_indices(self, observation: np.ndarray) -> np.ndarray:
+        """
+        Get indices of fundamental data in observation array.
+        
+        Args:
+            observation: Observation array
+            
+        Returns:
+            Array of indices corresponding to fundamental data
+        """
+        # 간단하게 observation의 끝부분을 fundamentals로 간주
+        # 실제 구현에서는 정확한 인덱스 위치를 반환해야 함
+        return np.arange(len(observation) - 5, len(observation)) if len(observation) > 5 else np.array([])
     
     def update(self, experience: Dict[str, Any]) -> Dict[str, float]:
         """Update the agent's policy based on equity-specific experience."""

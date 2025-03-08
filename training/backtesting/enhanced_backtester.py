@@ -174,7 +174,8 @@ class EnhancedBacktester(BaseBacktester):
         timestamp: pd.Timestamp,
         action: float,
         price_data: Dict[str, float],
-        asset: str = "default"
+        asset: str = "default",
+        is_forced_liquidation: bool = False
     ) -> Dict[str, Any]:
         """
         Execute a trade with realistic market conditions.
@@ -187,6 +188,7 @@ class EnhancedBacktester(BaseBacktester):
             action: Desired fraction [0,1] of portfolio to hold in asset
             price_data: Current prices for each asset
             asset: Asset symbol to trade
+            is_forced_liquidation: Whether this is a forced liquidation trade
             
         Returns:
             Dict with execution results
@@ -435,7 +437,17 @@ class EnhancedBacktester(BaseBacktester):
                 
             # Risk manager post-update
             if self.risk_manager:
-                self.risk_manager.update_after_trade(timestamp)
+                # Get position details for risk manager
+                position_size = self.positions[asset]['units'] if asset in self.positions else 0.0
+                entry_price = self.positions[asset]['avg_price'] if asset in self.positions else current_price
+                
+                self.risk_manager.update_after_trade(
+                    timestamp=timestamp,
+                    asset=asset,
+                    entry_price=entry_price,
+                    position_size=position_size,
+                    trailing=self.risk_manager.config.use_trailing_stop
+                )
                 
         else:
             # For unsuccessful trades

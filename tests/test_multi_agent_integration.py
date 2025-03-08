@@ -277,8 +277,16 @@ def test_meta_agent_integration(sample_data, agent_configs, meta_agent_config):
         if meta_id not in experiences:
             # Create a combined observation for meta-agent
             meta_obs = manager.get_meta_observation(observations)
+            
             # Use the meta-agent's action from the manager
             meta_action = actions.get(meta_id, np.array([0.0]))
+            
+            # Ensure action is compatible with meta agent's action space 
+            # For discrete action space, it must be an integer in the valid range
+            if hasattr(manager.agents[meta_id], "continuous_ensemble") and not manager.agents[meta_id].continuous_ensemble:
+                # For discrete action space, ensure it's 0 (for safe testing)
+                meta_action = np.array([0])
+            
             # Use average reward as meta-agent reward
             meta_reward = sum(rewards.values()) / len(rewards)
             

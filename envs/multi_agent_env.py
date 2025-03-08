@@ -9,6 +9,7 @@ from datetime import datetime
 import yaml
 import os
 from envs.risk_manager import RiskManager, RiskConfig
+from risk_management import create_risk_manager, create_risk_config
 
 logger = logging.getLogger(__name__)
 
@@ -468,36 +469,75 @@ class MultiAgentTradingEnv(gym.Env):
                 logger.debug(f"Action correlations at step {self.current_step}: {self.action_correlations}")
 
     def _init_risk_manager(self, risk_config_dict: Dict):
-        """
-        Initialize risk manager from config dictionary.
-        
-        Args:
-            risk_config_dict: Risk configuration dictionary from YAML
-        """
-        # Use .get() with defaults to handle missing keys
+        """Initialize risk manager from configuration dictionary."""
+        # If no risk config provided, don't initialize risk manager
+        if risk_config_dict is None:
+            self.risk_manager = None
+            return
+            
+        # Get all subsections
         stop_loss = risk_config_dict.get('stop_loss', {})
         trailing_stop = risk_config_dict.get('trailing_stop', {})
         var_config = risk_config_dict.get('var', {})
         drawdown = risk_config_dict.get('drawdown', {})
+        correlation = risk_config_dict.get('correlation', {})
+        check_freq = risk_config_dict.get('check_frequency', {})
+        portfolio_stop_loss = risk_config_dict.get('portfolio_stop_loss', {})
+        portfolio_trailing_stop = risk_config_dict.get('portfolio_trailing_stop', {})
+        portfolio_var = risk_config_dict.get('portfolio_var', {})
         
-        config = RiskConfig(
-            use_stop_loss=stop_loss.get('use_stop_loss', True),
-            stop_loss_threshold=stop_loss.get('stop_loss_threshold', 0.1),
-            use_trailing_stop=trailing_stop.get('use_trailing_stop', False),
-            trailing_stop_buffer=trailing_stop.get('trailing_stop_buffer', 0.05),
-            use_var=var_config.get('use_var', False),
-            var_confidence_level=var_config.get('var_confidence_level', 0.95),
-            rolling_var_window=var_config.get('rolling_var_window', 100),
-            action_on_var_exceed=var_config.get('action_on_var_exceed', 'reduce_position'),
-            max_drawdown_pct=drawdown.get('max_drawdown_pct', 0.15),
-            use_forced_liquidation=drawdown.get('use_forced_liquidation', False),
-            check_frequency=risk_config_dict.get('check_frequency', 1)
-        )
+        # Create the risk configuration dictionary
+        config = {
+            # Stop loss settings
+            "use_stop_loss": stop_loss.get('use_stop_loss', False),
+            "stop_loss_threshold": stop_loss.get('threshold', 0.1),
+            
+            # Trailing stop settings
+            "use_trailing_stop": trailing_stop.get('use_trailing_stop', False),
+            "trailing_stop_buffer": trailing_stop.get('buffer', 0.05),
+            
+            # VaR settings
+            "use_var": var_config.get('use_var', False),
+            "var_confidence_level": var_config.get('confidence_level', 0.95),
+            "rolling_var_window": var_config.get('window', 100),
+            "action_on_var_exceed": var_config.get('action_on_exceed', "reduce_position"),
+            
+            # Drawdown protection
+            "max_drawdown_pct": drawdown.get('max_drawdown_pct', 0.15),
+            "use_forced_liquidation": drawdown.get('use_forced_liquidation', False),
+            
+            # Check frequency
+            "check_frequency": check_freq.get('steps', 1),
+            
+            # Correlation settings
+            "use_correlation": correlation.get('use_correlation', False),
+            "correlation_window": correlation.get('window', 50),
+            "correlation_threshold": correlation.get('threshold', 0.7),
+            "correlation_risk_reduction": correlation.get('risk_reduction', 0.5),
+            
+            # Portfolio-level stop loss
+            "use_portfolio_stop_loss": portfolio_stop_loss.get('use_portfolio_stop_loss', False),
+            "portfolio_stop_loss_threshold": portfolio_stop_loss.get('threshold', 0.15),
+            
+            # Portfolio-level trailing stop
+            "use_portfolio_trailing_stop": portfolio_trailing_stop.get('use_portfolio_trailing_stop', False),
+            "portfolio_trailing_stop_buffer": portfolio_trailing_stop.get('portfolio_trailing_stop_buffer', 0.08),
+            
+            # Portfolio-level VaR
+            "use_portfolio_var": portfolio_var.get('use_portfolio_var', False),
+            "portfolio_var_threshold": portfolio_var.get('portfolio_var_threshold', 0.02),
+            "use_parametric_var": portfolio_var.get('use_parametric_var', True)
+        }
         
-        self.risk_manager = RiskManager(config)
+        # Initialize the risk manager using the factory
+        self.risk_manager = create_risk_manager("rl", config)
         self.apply_risk_to_agents = stop_loss.get('apply_to_agents', True)
         self.apply_risk_to_portfolio = stop_loss.get('apply_to_portfolio', False)
         self.position_reduction_pct = var_config.get('position_reduction_pct', 0.5)
+        self.portfolio_reduction_pct = portfolio_var.get('reduction_pct', 0.3)
+        self.portfolio_action_on_var_exceed = portfolio_var.get('action_on_exceed', 'reduce_all')
+        self.portfolio_action_on_stop_loss = portfolio_stop_loss.get('action_on_trigger', 'close_all')
+        self.portfolio_action_on_trailing_stop = portfolio_trailing_stop.get('action_on_trigger', 'close_all')
         
         logger.info(f"Risk manager initialized with config: {config}")
 
@@ -530,7 +570,7 @@ class MultiAgentTradingEnv(gym.Env):
             agent_id: [self.balances[agent_id]] 
             for agent_id in self.agents
         }
-        
+
         # Reset action correlation tracking
         self.action_correlations = {
             agent_id: {other_id: 0.0 for other_id in self.agents if other_id != agent_id}
@@ -548,8 +588,8 @@ class MultiAgentTradingEnv(gym.Env):
                 "balance": self.balances[agent_id],
                 "position": self.positions[agent_id],
                 "portfolio_value": self.balances[agent_id],
-            }
-        
+        }
+
         # Initialize capital allocation for shared capital mode
         if self.shared_capital:
             # Calculate total capital from all agents
@@ -646,16 +686,119 @@ class MultiAgentTradingEnv(gym.Env):
                         # Calculate scaled action that requires less capital
                         scaled_action = original_action * scale_factor
                         actions[agent_id][0] = scaled_action
+        
+        # Calculate and record asset returns for correlation and portfolio VaR
+        if self.risk_manager and (hasattr(self, 'apply_risk_to_portfolio') and self.apply_risk_to_portfolio):
+            # For this simple example, we only have one asset: "default"
+            # In a multi-asset environment, you would capture returns for all assets
+            
+            # Current asset prices
+            asset_prices = {"default": current_price}
+            
+            # Calculate asset returns if we have historical prices
+            asset_returns = {}
+            
+            if hasattr(self, 'prev_price') and self.prev_price > 0:
+                asset_returns["default"] = (current_price / self.prev_price) - 1
+            else:
+                asset_returns["default"] = 0.0
+                
+            # Store current price for next step
+            self.prev_price = current_price
+            
+            # Record asset data for correlation and portfolio VaR
+            self.risk_manager.record_asset_data(asset_prices, asset_returns)
+        
+        # Check portfolio-level risk constraints
+        portfolio_stop_loss_triggered = False
+        portfolio_trailing_stop_triggered = False
+        portfolio_var_exceeded = False
+        
+        if self.risk_manager and hasattr(self, 'apply_risk_to_portfolio') and self.apply_risk_to_portfolio:
+            # Portfolio-wide stop loss
+            if self.risk_manager.check_portfolio_stop_loss():
+                portfolio_stop_loss_triggered = True
+                logger.warning("Portfolio-wide stop loss triggered")
+                
+            # Portfolio-wide trailing stop    
+            if self.risk_manager.check_portfolio_trailing_stop():
+                portfolio_trailing_stop_triggered = True
+                logger.warning("Portfolio-wide trailing stop triggered")
+                
+            # Portfolio VaR check
+            position_sizes = {f"agent_{i}": self.positions[agent_id] for i, agent_id in enumerate(self.agents)}
+            prices = {f"agent_{i}": current_price for i, agent_id in enumerate(self.agents)}
+            
+            # Calculate current portfolio return
+            if prev_total_value > 0:
+                portfolio_return = (sum(self.balances[agent_id] + (self.positions[agent_id] * current_price) 
+                                     for agent_id in self.agents) / prev_total_value) - 1
+            else:
+                portfolio_return = 0
+                
+            if self.risk_manager.check_portfolio_var_exceed(position_sizes, prices, portfolio_return):
+                portfolio_var_exceeded = True
+                logger.warning("Portfolio VaR threshold exceeded")
 
-        # Process each agent's action
-        for agent_id in self.agents:
-            action = actions[agent_id][0]  # Extract scalar action
-            config = self.agent_configs[agent_id]
+        # Apply portfolio-wide risk actions if triggered
+        if portfolio_stop_loss_triggered or portfolio_trailing_stop_triggered:
+            action_type = self.portfolio_action_on_stop_loss if portfolio_stop_loss_triggered else self.portfolio_action_on_trailing_stop
+            
+            if action_type == "close_all":
+                # Close all positions
+                for agent_id in self.agents:
+                    if abs(self.positions[agent_id]) > 1e-8:
+                        revenue = self.positions[agent_id] * current_price * (1 - self.trading_fee)
+                        self.balances[agent_id] += revenue
+                        self.positions[agent_id] = 0
+                        
+                        # Override action to do nothing
+                        actions[agent_id][0] = 0.0
+                        
+                logger.warning(f"Portfolio risk: Closed all positions due to {'stop loss' if portfolio_stop_loss_triggered else 'trailing stop'}")
+                
+        elif portfolio_var_exceeded:
+            if self.portfolio_action_on_var_exceed == "close_all":
+                # Close all positions
+                for agent_id in self.agents:
+                    if abs(self.positions[agent_id]) > 1e-8:
+                        revenue = self.positions[agent_id] * current_price * (1 - self.trading_fee)
+                        self.balances[agent_id] += revenue
+                        self.positions[agent_id] = 0
+                        
+                        # Override action to do nothing
+                        actions[agent_id][0] = 0.0
+                        
+                logger.warning("Portfolio risk: Closed all positions due to VaR threshold")
+                
+            elif self.portfolio_action_on_var_exceed == "reduce_all":
+                # Reduce all positions by portfolio_reduction_pct
+                for agent_id in self.agents:
+                    if abs(self.positions[agent_id]) > 1e-8:
+                        reduction = self.positions[agent_id] * self.portfolio_reduction_pct
+                        revenue = reduction * current_price * (1 - self.trading_fee)
+                        self.balances[agent_id] += revenue
+                        self.positions[agent_id] -= reduction
+                        
+                        # Reduce action proportionally
+                        if actions[agent_id][0] > 0:
+                            actions[agent_id][0] *= (1 - self.portfolio_reduction_pct)
+                            
+                logger.warning(f"Portfolio risk: Reduced all positions by {self.portfolio_reduction_pct:.1%} due to VaR threshold")
 
-            # Store action in history for correlation tracking
-            if len(self.action_history[agent_id]) >= 20:  # Keep last 20 actions
+        # Update action history for correlation tracking
+        for agent_id, action in actions.items():
+            # Track action history for correlation calculation
+            if len(self.action_history[agent_id]) >= self.correlation_window:
                 self.action_history[agent_id].pop(0)
-            self.action_history[agent_id].append(action)
+            
+            # Ensure action is a scalar for action history tracking
+            scalar_action = action[0] if isinstance(action, np.ndarray) and action.size > 0 else action
+            self.action_history[agent_id].append(scalar_action)
+        
+        # Process each agent's action
+        for agent_id, action in actions.items():
+            config = self.agent_configs[agent_id]
 
             # Calculate transaction costs (with agent-specific multiplier)
             fee_multiplier = config.get("fee_multiplier", 1.0)
@@ -724,6 +867,19 @@ class MultiAgentTradingEnv(gym.Env):
                 # Override action to do nothing for this step
                 action = 0.0
 
+            # Apply correlation-based position sizing adjustment if buying
+            correlation_adjustment = 1.0
+            if action > 0 and self.risk_manager and self.risk_manager.config.use_correlation:
+                # Get position sizes for correlation check
+                position_sizes = {f"agent_{i}": self.positions[other_id] for i, other_id in enumerate(self.agents)}
+                correlation_adjustment = self.risk_manager.get_correlation_adjustment(f"agent_{self.agents.index(agent_id)}", position_sizes)
+                
+                if correlation_adjustment < 1.0:
+                    # Adjust action based on correlation
+                    original_action = action
+                    action = action * correlation_adjustment
+                    logger.info(f"Correlation adjustment for {agent_id}: {original_action:.3f} -> {action:.3f}")
+
             # Execute agent's action if not overridden by risk management
             if abs(action) > 1e-5:  # Non-zero action
                 if action > 0:  # Buy
@@ -773,7 +929,7 @@ class MultiAgentTradingEnv(gym.Env):
             
             # Track portfolio value
             self.portfolio_values[agent_id].append(portfolio_value)
-            
+
             # Calculate and store return for VaR
             if len(self.portfolio_values[agent_id]) >= 2:
                 ret = (portfolio_value / self.portfolio_values[agent_id][-2]) - 1
@@ -790,6 +946,7 @@ class MultiAgentTradingEnv(gym.Env):
                 "reward": reward,
                 "portfolio_value": portfolio_value,
             }
+            
             self._add_to_shared_buffer(experience)
 
             # Update return values
@@ -798,17 +955,23 @@ class MultiAgentTradingEnv(gym.Env):
             dones[agent_id] = self.current_step >= len(self.data) - 1
             truncated[agent_id] = False
             
-            # Add risk info to infos
+            # Create info dictionary
             infos[agent_id] = {
-                "portfolio_value": portfolio_value,
-                "position": self.positions[agent_id],
-                "balance": self.balances[agent_id],
+                "balance": float(self.balances[agent_id]),
+                "position": float(self.positions[agent_id]),
+                "portfolio_value": float(portfolio_value),
+                "action": action,
+                "current_price": float(current_price),
+                "historical_returns": self.agent_returns[agent_id] if agent_id in self.agent_returns else [],
+                "risk_events": {},
             }
+            
             if self.risk_manager:
                 infos[agent_id]["risk_events"] = {
                     "stop_loss": should_stop_loss,
                     "trailing_stop": should_trailing_stop,
-                    "var_action": var_action
+                    "var_action": var_action,
+                    "correlation_adjustment": correlation_adjustment < 1.0
                 }
 
         # Calculate total portfolio value across all agents
@@ -868,6 +1031,12 @@ class MultiAgentTradingEnv(gym.Env):
             risk_events_info = self.risk_manager.get_risk_events_info()
             for agent_id in self.agents:
                 infos[agent_id]["risk_stats"] = risk_events_info
+            
+            # Add correlation matrix if available
+            corr_matrix = self.risk_manager.get_correlation_matrix()
+            if corr_matrix is not None:
+                # Convert to dictionary for JSON serialization
+                infos["correlation_matrix"] = corr_matrix.to_dict()
 
         return observations, rewards, dones, truncated, infos
 

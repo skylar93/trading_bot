@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Meta-agent enhancement with sub-agent hidden states:
+  - New methods `act_with_hidden_state()` and `get_action_with_hidden_state()` for extracting internal states
+  - Extended meta-agent architecture to process sub-agent hidden representations
+  - Improved meta-agent observation processing with attention mechanism
+  - Robust handling of heterogeneous observation spaces and hidden state dimensions
+  - Added comprehensive flattening logic for consistent array dimensions 
+  - Support for a variety of network architectures across sub-agents
+  - Enhanced test cases for meta-agent integration with hidden states
+  - Documentation in `docs/META_AGENT_WITH_HIDDEN_STATES.md`
 - Extended Action Space in Multi-Asset Trading Environment:
   - Implemented multiple action types for multi-asset trading:
     - `discrete_amount`: Direct position size changes based on proportion of max position size
@@ -62,6 +71,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Detailed architecture documentation for backtesting systems
 - Position history tracking in BacktestEngine
 - Detailed trade logging across all backtester implementations
+- Cross-asset correlation analysis and position adjustment:
+  - Real-time correlation matrix calculation between assets
+  - Correlation-based position size reduction for highly correlated assets
+  - Asset correlation visualization in environment info dictionary
+- Enhanced portfolio risk management:
+  - Portfolio-level stop loss and trailing stop functionality
+  - Multi-asset portfolio VaR/CVaR calculation with covariance matrix
+  - Parametric and historical VaR calculation methods
+  - Portfolio-wide risk actions (reduce all/close all positions)
+- Comprehensive test suites for correlation and portfolio risk:
+  - Correlation matrix calculation tests
+  - Position size adjustment based on correlation
+  - Portfolio VaR calculation with diversified portfolios
+  - Portfolio stop loss and trailing stop tests
 
 ### Changed
 - Improved partial fill implementation in MarketSimulator to be more realistic
@@ -82,8 +105,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated docstrings to support automatic documentation generation
 - Organized training files: moved hyperopt_ray.py to training/hyperopt directory
 - Marked deprecated training files with 'deprecated_' prefix for clarity
+- Refactored Risk Management System:
+  - Created abstract base class `RiskManagerBase` for common risk management interfaces
+  - Implemented specialized `RLRiskManager` for RL environments and `BacktestingRiskManager` for backtesting
+  - Added factory pattern for easy risk manager creation via `create_risk_manager()` and `create_risk_config()`
+  - Moved to dedicated `risk_management` package
+  - Enhanced documentation for risk management components
+  - Standardized risk management interfaces across different trading contexts
+  - Added backward compatibility layer for existing code and tests
+  - Ensured all tests pass with the new architecture
 
 ### Fixed
+- Fixed dimension mismatch in MetaAgent with hidden states implementation:
+  - Robust flattening of observation arrays in get_meta_observation method
+  - Consistent array shape handling in _create_meta_experience method
+  - Dimension verification before array concatenation
+- Fixed Categorical distribution range error in MetaAgent's train_step method:
+  - Added action tensor clamping to valid indices (0 to n-1)
+  - Improved error handling when processing tensors with invalid shapes
+  - Better logging of tensor dimensions during meta-observation creation
 - Partial fill implementation now properly simulates partial executions
 - Fixed field name mismatch in trade data ('executed_amount' vs 'filled_amount')
 - Improved test resilience with proper field existence checking
@@ -107,7 +147,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added robust sanitization of feature values in FeatureGenerator to ensure valid numerical outputs
 - Enhanced momentum and mean reversion feature calculations with better division-by-zero protection
 - Improved observation handling in environments to ensure consistent shapes and valid values
-- Added value clipping for extreme feature values to prevent model instability
+- Added value clipping for extreme feature values to prevent model instability 
+- Fixed risk management integration in backtesting:
+  - Corrected test assertions in multi-asset mode to account for risk-based trade rejections
+  - Updated buy/sell sequence test to verify position size reduction instead of complete closure
+  - Fixed partial fills implementation to properly handle minimum trade size constraints
+  - Enhanced forced liquidation test with direct trade execution verification
+  - Improved market crash scenario test to handle special cases where risk management prevents losses
+  - Added special handling for negative drawdown values in risk comparison tests
+  - Ensured consistent behavior between BacktestingRiskManager and RiskManager implementations
 
 ## [0.1.0] - 2024-01-08
 

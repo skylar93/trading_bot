@@ -53,11 +53,18 @@ agent.train(env)
 
 2. **Backtesting**
 ```python
-from training.utils.risk_backtest import RiskAwareBacktester
-from training.utils.risk_config import RiskConfig
+from training.backtesting.base_backtester import BaseBacktester
+from training.backtesting.risk_manager import RiskConfig
+
+# Configure risk parameters
+risk_config = RiskConfig(
+    max_position_size=0.2,
+    stop_loss_pct=0.02,
+    max_drawdown_pct=0.15
+)
 
 # Run backtest
-backtester = RiskAwareBacktester(data, risk_config)
+backtester = BaseBacktester(data=data, risk_config=risk_config)
 results = backtester.run(agent)
 ```
 

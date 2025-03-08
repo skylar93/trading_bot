@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional, Any
 import logging
-from training.backtesting.risk_aware_backtester import RiskAwareBacktester
+from training.backtesting.base_backtester import BaseBacktester
 from training.backtesting.risk_manager import RiskManager, RiskConfig
 from agents.strategies.agent_factory import create_agent
 
@@ -160,7 +160,7 @@ class BacktestManager:
             }
             self.logger.info("Risk config: %s", risk_config_summary)
             
-            backtester = RiskAwareBacktester(
+            backtester = BaseBacktester(
                 data=data,
                 risk_config=self.risk_config,
                 initial_capital=self.settings.get("initial_balance", 10000.0),

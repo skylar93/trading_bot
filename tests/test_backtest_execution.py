@@ -7,7 +7,6 @@ Not testing advanced risk or scenario logic here.
 import pandas as pd
 import numpy as np
 from training.backtesting.base_backtester import BaseBacktester
-from training.backtesting.risk_aware_backtester import RiskAwareBacktester
 from training.backtesting.risk_manager import RiskConfig
 
 def create_test_settings():
