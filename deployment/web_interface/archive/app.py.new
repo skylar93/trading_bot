@@ -1,0 +1,73 @@
+"""Main application entry point for Trading Bot UI"""
+
+import os
+import sys
+
+# Add project root to Python path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+sys.path.insert(0, project_root)
+
+import streamlit as st
+import logging
+
+# Import relative to the current package
+from deployment.web_interface.utils.config_manager import load_config
+from deployment.web_interface.utils.state import init_session_state
+from deployment.web_interface.components.data_management import show_data_management
+from deployment.web_interface.components.model_settings import show_model_settings
+from deployment.web_interface.components.training import show_training
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('trading_bot.log')
+    ]
+)
+logger = logging.getLogger(__name__)
+
+def init_app():
+    """Initialize the application"""
+    st.set_page_config(
+        page_title="Trading Bot",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+    
+    # Initialize config and session state
+    config = load_config(project_root)
+    init_session_state()
+    
+    return config
+
+def show_page(page_name: str, config):
+    """Show the selected page"""
+    if page_name == "Data Management":
+        show_data_management()
+    elif page_name == "Model Settings":
+        show_model_settings(config, project_root)
+    elif page_name == "Training":
+        show_training()
+
+def main():
+    """Main application entry point"""
+    try:
+        config = init_app()
+        st.title("Trading Bot Control Panel")
+
+        # Navigation
+        page = st.sidebar.selectbox(
+            "Navigation",
+            ["Data Management", "Model Settings", "Training"]
+        )
+
+        # Show selected page
+        show_page(page, config)
+
+    except Exception as e:
+        logger.error("Application error", exc_info=True)
+        st.error(f"An error occurred: {str(e)}")
+
+if __name__ == "__main__":
+    main()

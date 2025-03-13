@@ -9,13 +9,47 @@ from datetime import datetime
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import asyncio
-from typing import Dict, List, Optional
-from envs.realtime_env import RealtimeTradingEnvironment
+from typing import Dict, List, Optional, Tuple
+from envs.live_trading_env import LiveTradingEnvironment
 from agents.strategies.single.ppo_agent import PPOAgent
+import logging
 
 
 class RealTimeTrading:
-    """Manages real-time trading functionality"""
+    """
+    Manager for real-time trading that coordinates:
+    1. Environment - LiveTradingEnvironment (RL interface, state, orders)
+    2. Agent - Trained RL model that computes actions
+    3. UI - Streamlit interface for visualization and control
+    
+    This class is responsible for:
+    - Loading and initializing the trading environment
+    - Loading trained agent models
+    - Running the main trading loop
+    - Updating the UI with latest trading information
+    - Managing trading state (start/stop)
+    
+    It does NOT handle:
+    - Order creation/execution (done by environment)
+    - Market data fetching (done by environment)
+    - Action space definition (defined by environment)
+    
+    Features:
+    - Asynchronous trading loop
+    - Real-time UI updates
+    - Portfolio tracking and visualization
+    - Trade history recording
+    
+    Implementation Notes:
+    - Uses Streamlit for UI components
+    - Manages asyncio tasks for the trading loop
+    - Properly separates environment and manager responsibilities
+    
+    Recent Changes:
+    - Updated to use LiveTradingEnvironment instead of RealtimeTradingEnvironment
+    - Improved error handling and recovery
+    - Enhanced UI components for better monitoring
+    """
 
     def __init__(self):
         """Initialize real-time trading manager"""
@@ -24,23 +58,50 @@ class RealTimeTrading:
         self.trading_data = []
         self.portfolio_history = []
         self.is_trading = False
+        self.trading_task = None
 
     def initialize_trading(
         self,
         symbol: str = "BTC/USDT",
-        timeframe: str = "1m",
         initial_balance: float = 10000.0,
+        trading_fee: float = 0.001,
+        window_size: int = 60,
+        exchange_id: str = "binance",
+        test_mode: bool = True,
     ):
-        """Initialize trading environment and agent"""
+        """
+        Initialize trading environment and agent
+        
+        Args:
+            symbol: Trading pair symbol (e.g., "BTC/USDT")
+            initial_balance: Starting account balance
+            trading_fee: Fee per trade (e.g., 0.001 for 0.1%)
+            window_size: Size of observation window
+            exchange_id: Exchange to use (e.g., "binance")
+            test_mode: Whether to run in test mode (paper trading)
+        
+        Returns:
+            bool: True if initialization is successful, False otherwise
+        """
         try:
-            self.env = RealtimeTradingEnvironment(
+            # Initialize the environment
+            self.env = LiveTradingEnvironment(
                 symbol=symbol,
-                timeframe=timeframe,
                 initial_balance=initial_balance,
+                trading_fee=trading_fee,
+                window_size=window_size,
+                exchange_id=exchange_id,
+                test_mode=test_mode,
             )
 
             # Load trained agent
             self.agent = PPOAgent.load_from_checkpoint()
+            
+            # Reset trading data
+            self.trading_data = []
+            self.portfolio_history = []
+            
+            st.success(f"Trading initialized for {symbol}")
             return True
 
         except Exception as e:
@@ -48,25 +109,59 @@ class RealTimeTrading:
             return False
 
     async def start_trading(self):
-        """Start real-time trading"""
+        """Start the trading loop"""
         if not self.env or not self.agent:
-            st.error("Trading environment not initialized!")
+            st.error("Trading environment not initialized. Please initialize first.")
             return False
-
-        try:
-            await self.env.start_trading()
-            self.is_trading = True
+        
+        if self.is_trading:
+            st.warning("Trading is already running")
             return True
-
+            
+        try:
+            # Reset the environment to get initial observation
+            obs, info = await self.env.reset()
+            
+            # Mark as trading
+            self.is_trading = True
+            
+            # Start trading loop as a task
+            self.trading_task = asyncio.create_task(self.trading_loop(obs))
+            
+            st.success("Trading started successfully")
+            return True
+            
         except Exception as e:
             st.error(f"Failed to start trading: {str(e)}")
+            self.is_trading = False
             return False
 
     async def stop_trading(self):
-        """Stop real-time trading"""
-        if self.env and self.is_trading:
-            await self.env.stop_trading()
+        """Stop the trading loop and cleanup resources"""
+        if not self.is_trading:
+            st.warning("Trading is not running")
+            return True
+            
+        try:
+            # Stop trading loop
             self.is_trading = False
+            
+            # Wait for trading task to complete
+            if self.trading_task and not self.trading_task.done():
+                await asyncio.wait_for(self.trading_task, timeout=5.0)
+                
+            # Cleanup environment resources
+            await self.env.cleanup()
+            
+            st.success("Trading stopped successfully")
+            return True
+            
+        except asyncio.TimeoutError:
+            st.warning("Timeout while waiting for trading to stop, resources may not be fully cleaned up")
+            return False
+        except Exception as e:
+            st.error(f"Error stopping trading: {str(e)}")
+            return False
 
     def _create_price_chart(self) -> Optional[go.Figure]:
         """Create real-time price chart"""
@@ -272,45 +367,56 @@ class RealTimeTrading:
                 ).background_gradient(subset=["return"], cmap="RdYlGn")
             )
 
-    async def trading_loop(self):
-        """Main trading loop"""
+    async def trading_loop(self, initial_obs: np.ndarray):
+        """
+        Main trading loop that coordinates the environment and agent
+        
+        Args:
+            initial_obs: Initial observation from environment reset
+        """
+        obs = initial_obs
+        
         while self.is_trading:
             try:
-                # Get current state
-                observation = await self.env._get_realtime_observation()
-
-                # Get action from agent
-                action = self.agent.compute_action(observation)
-
-                # Execute trade
-                observation, reward, done, _, info = await self.env.step(
-                    action
-                )
-
-                # Record trading data
+                # 1. Get action from agent
+                action = self.agent.compute_action(obs)
+                
+                # 2. Execute action in environment
+                obs, reward, done, truncated, info = await self.env.step(action)
+                
+                # 3. Record trading data for UI
                 self.trading_data.append(
                     {
                         "timestamp": datetime.now(),
-                        "price": info["current_price"],
-                        "action": action,
+                        "price": info.get("current_price", 0),
+                        "action": float(action[0]),  # Convert to scalar
                         "position": info["position"],
                         "portfolio_value": info["portfolio_value"],
+                        "reward": reward
                     }
                 )
-
-                # Update portfolio history
+                
+                # 4. Update portfolio history
                 self.portfolio_history.append(
                     {
                         "timestamp": datetime.now(),
                         "portfolio_value": info["portfolio_value"],
                     }
                 )
-
-                # UI update (in production, should be less frequent)
+                
+                # 5. Update UI (could be less frequent in production)
                 self.update_web_interface()
-
-                await asyncio.sleep(1)  # Rate limit
+                
+                # 6. Reset if episode is done
+                if done or truncated:
+                    st.info("Trading episode complete, resetting environment")
+                    obs, info = await self.env.reset()
+                
+                # 7. Rate limiting
+                await asyncio.sleep(1)
 
             except Exception as e:
                 st.error(f"Trading error: {str(e)}")
+                logger = logging.getLogger(__name__)
+                logger.exception("Exception in trading loop")
                 await asyncio.sleep(5)  # Wait before retry

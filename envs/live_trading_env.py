@@ -45,7 +45,37 @@ class Order:
         self.updated_at = datetime.now()
 
 class LiveTradingEnvironment(gym.Env):
-    """Live Trading Environment that extends the base TradingEnvironment"""
+    """
+    Live Trading Environment for Reinforcement Learning.
+    
+    This environment implements the standard Gymnasium interface and handles:
+    1. State management: balance, position, active orders
+    2. Market data: real-time or mock price data
+    3. Order execution: creating, monitoring, and canceling orders
+    4. Reward calculation: portfolio value changes
+    
+    The environment does NOT handle:
+    - Agent loading or action computation (managed by RealTimeTrading)
+    - UI updates or visualization (managed by RealTimeTrading)
+    - Trading loops or execution flow (managed by RealTimeTrading)
+    
+    Features:
+    - Async support for real-time trading
+    - Support for both live trading and test mode
+    - Order status monitoring and management
+    - Portfolio value tracking and reward calculation
+    
+    Implementation Notes:
+    - Uses ccxt for exchange API integration
+    - Uses WebSocketLoader for real-time data streaming
+    - Implements gymnasium.Env interface with reset() and step()
+    - Provides detailed info dictionary with position, balance, and portfolio value
+    
+    Recent Changes:
+    - Removed manager-like code (main function)
+    - Improved error handling in order management
+    - Enhanced position and portfolio calculations
+    """
 
     def __init__(
         self,
@@ -882,21 +912,13 @@ class LiveTradingEnvironment(gym.Env):
     def _get_info(self) -> Dict:
         """Get current information"""
         try:
-            # Apply position threshold
-            position = 0.0 if abs(self.position) < 1e-6 else round(self.position, 8)
-            
-            # Calculate portfolio value
+            # Get the latest data point
             portfolio_value = self.portfolio_value
-            
-            # Ensure values are valid
-            if not np.isfinite(position):
-                position = 0.0
-            if not np.isfinite(portfolio_value):
-                portfolio_value = self.balance
             
             return {
                 'balance': round(float(self.balance), 8),
-                'position': float(position),
+                'position': round(float(self.position), 8),
+                'active_orders': [order.id for order in self.active_orders],
                 'portfolio_value': round(float(portfolio_value), 8)
             }
         except Exception as e:
@@ -906,25 +928,3 @@ class LiveTradingEnvironment(gym.Env):
                 'position': 0.0,
                 'portfolio_value': float(self.initial_balance)
             }
-
-
-# Example usage
-async def main():
-    # Create environment
-    env = LiveTradingEnvironment()
-
-    # Run a simple loop
-    obs, info = env.reset()
-    for i in range(100):
-        action = env.action_space.sample()  # Random action
-        obs, reward, terminated, truncated, info = env.step(action)
-        print(
-            f"Step {i}: Reward = {reward:.4f}, Portfolio = {info['portfolio_value']:.2f}"
-        )
-        await asyncio.sleep(1)  # Wait for next update
-
-    env.close()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())

@@ -178,6 +178,29 @@ class MLflowManager:
             raise mlflow.exceptions.MlflowException("No active run")
         mlflow.log_params(params)
 
+    def log_metric(self, key: str, value: float, step: Optional[int] = None):
+        """Log a single metric to MLflow.
+        
+        Args:
+            key: Metric name
+            value: Metric value
+            step: Step value
+        """
+        if not mlflow.active_run():
+            raise mlflow.exceptions.MlflowException("No active run")
+        mlflow.log_metric(key, value, step=step)
+        
+    def set_tag(self, key: str, value: str):
+        """Set a tag in the current run.
+        
+        Args:
+            key: Tag name
+            value: Tag value
+        """
+        if not mlflow.active_run():
+            raise mlflow.exceptions.MlflowException("No active run")
+        mlflow.set_tag(key, value)
+
     def log_model(self, model: nn.Module, artifact_path: str):
         """Log PyTorch model to MLflow."""
         if not mlflow.active_run():

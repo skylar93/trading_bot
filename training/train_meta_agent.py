@@ -20,8 +20,8 @@ import gym
 
 from envs.multi_agent_env import MultiAgentTradingEnv
 from agents.strategies.multi.multi_agent_manager import MultiAgentManager
-from utils.data_loader import load_and_prepare_data
-from agents.agent_factory import create_agent
+from data.utils.data_loader import load_and_prepare_data
+from agents.strategies.agent_factory import create_agent
 
 # Configure logging
 logging.basicConfig(

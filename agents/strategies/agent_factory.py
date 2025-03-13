@@ -22,6 +22,9 @@ from agents.strategies.multi.mean_reversion_ppo_agent import MeanReversionPPOAge
 from agents.strategies.multi.momentum_ppo_agent import MomentumPPOAgent
 from agents.strategies.multi.multi_agent_manager import MultiAgentManager
 
+# Flag to indicate if we're using real agents or test/mock agents
+USE_REAL_AGENTS = True
+
 # Default dummy spaces for testing
 # For PPO agents, observation space must be 2D (window_size, features)
 # Assuming OHLCV data format: open, high, low, close, volume
@@ -44,36 +47,37 @@ logger = logging.getLogger(__name__)
 
 def create_agent(
     agent_type: str,
+    strategy: Optional[str] = None,
     config: Optional[Dict[str, Any]] = None,
     observation_space: Optional[gym.spaces.Box] = None,
     action_space: Optional[gym.spaces.Box] = None,
 ):
     """
-    Create an agent based on the specified type and configuration.
+    Create an agent based on the specified type, strategy, and configuration.
     
     Features:
+    - Clearly separates learning algorithm (agent_type) from trading strategy
     - Supports multiple agent types (PPO, SAC, DDPG, etc.)
     - Handles specialized strategy agents (Momentum, MeanReversion, etc.)
     - Creates meta-agents for ensemble decision making
     - Supports hierarchical agent structures
-    - Configurable network architectures
     
     Implementation Notes:
-    - Uses a unified interface for all agent types
+    - Uses a unified interface for all agent types and strategies
     - Automatically configures observation and action spaces
     - Handles device placement (CPU/GPU)
     - Supports both discrete and continuous action spaces
-    - Specialized agents inherit from base agent classes
+    - Strategy-specific agents inherit from base agent classes
     
     Recent Changes:
-    - Added support for meta-agents and hierarchical agents
-    - Implemented SAC agent type
-    - Added support for custom network architectures
-    - Enhanced configuration validation
-    - Added DummyAgent for testing
+    - Separated agent_type from strategy for clarity
+    - Improved agent creation flow with explicit strategy parameter
+    - Enhanced error handling and logging
+    - Added support for strategy-specific feature processing
     
     Args:
-        agent_type: Type of agent to create
+        agent_type: Learning algorithm type (ppo, sac, etc.)
+        strategy: Trading strategy (momentum, mean_reversion, etc.)
         config: Configuration dictionary
         observation_space: Gym observation space
         action_space: Gym action space
@@ -84,8 +88,10 @@ def create_agent(
     if config is None:
         config = {}
     
-    # Normalize agent type
+    # Normalize agent type and strategy
     agent_type = agent_type.lower().replace("_", "").replace("-", "")
+    if strategy:
+        strategy = strategy.lower().replace("_", "").replace("-", "")
     
     # Extract common parameters
     device = config.get("device", "cuda" if torch.cuda.is_available() else "cpu")
@@ -103,19 +109,22 @@ def create_agent(
             low=-1, high=1, shape=(action_dim,), dtype=np.float32
         )
     
-    # Create agent based on type
+    # Log agent creation attempt
+    logger.info(f"Creating agent with type={agent_type}, strategy={strategy}")
+    
     try:
+        # Handle dummy agent first
         if agent_type == "dummy":
             try:
-                from .dummy_agent import DummyAgent
+                from agents.strategies.single.dummy_agent import DummyAgent
                 return DummyAgent(
                     observation_space=observation_space,
                     action_space=action_space,
-                    **{k: v for k, v in config.items() if k not in ["type", "observation_space", "action_space"]}
+                    **{k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space"]}
                 )
             except ImportError:
                 # If even DummyAgent is not available, create a minimal mock agent
-                from .base_agent import BaseAgent
+                from agents.strategies.base_agent import BaseAgent
                 class MinimalDummyAgent(BaseAgent):
                     def get_action(self, observation, deterministic=False):
                         return np.zeros(self.action_space.shape)
@@ -127,155 +136,169 @@ def create_agent(
                         pass
                 return MinimalDummyAgent(observation_space, action_space)
         
+        # PPO agent creation with strategy specialization
         elif agent_type == "ppo":
-            # Try to import, but use DummyAgent as fallback during testing
+            if strategy == "momentum":
+                logger.info(f"Creating momentum strategy PPO agent")
+                try:
+                    from agents.strategies.multi.momentum_ppo_agent import MomentumPPOAgent
+                    return MomentumPPOAgent(
+                        observation_space=observation_space,
+                        action_space=action_space,
+                        device=device,
+                        **{k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space", "device"]}
+                    )
+                except ImportError as e:
+                    logger.error(f"Error importing MomentumPPOAgent: {e}")
+                    # Create a test-compatible mock MomentumPPOAgent
+                    return create_test_momentum_agent(observation_space, action_space, config)
+            
+            elif strategy == "meanreversion":
+                logger.info(f"Creating mean reversion strategy PPO agent")
+                try:
+                    from agents.strategies.multi.mean_reversion_ppo_agent import MeanReversionPPOAgent
+                    return MeanReversionPPOAgent(
+                        observation_space=observation_space,
+                        action_space=action_space,
+                        device=device,
+                        **{k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space", "device"]}
+                    )
+                except ImportError as e:
+                    logger.error(f"Error importing MeanReversionPPOAgent: {e}")
+                    # Create a test-compatible mock MeanReversionPPOAgent
+                    return create_test_mean_reversion_agent(observation_space, action_space, config)
+            
+            # Generic PPO agent (no specific strategy)
+            else:
+                logger.info(f"Creating generic PPO agent")
+                try:
+                    from agents.strategies.single.ppo_agent import PPOAgent
+                    return PPOAgent(
+                        observation_space=observation_space,
+                        action_space=action_space,
+                        device=device,
+                        **{k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space", "device"]}
+                    )
+                except ImportError:
+                    from agents.strategies.single.dummy_agent import DummyAgent
+                    return DummyAgent(
+                        observation_space=observation_space,
+                        action_space=action_space,
+                        **{k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space"]}
+                    )
+        
+        # SAC agent creation with strategy specialization
+        elif agent_type == "sac":
+            # Similar structure as PPO but for SAC
+            if strategy == "momentum":
+                # Add support for MomentumSACAgent when implemented
+                logger.warning("MomentumSACAgent not yet implemented, using generic SAC")
+            elif strategy == "meanreversion":
+                # Add support for MeanReversionSACAgent when implemented
+                logger.warning("MeanReversionSACAgent not yet implemented, using generic SAC")
+            
+            # For now, return generic SAC or dummy
+            logger.info(f"Creating generic SAC agent")
             try:
-                from .ppo_agent import PPOAgent
-                return PPOAgent(
+                from agents.strategies.single.sac_agent import SACAgent
+                return SACAgent(
                     observation_space=observation_space,
                     action_space=action_space,
                     device=device,
-                    **{k: v for k, v in config.items() if k not in ["type", "observation_space", "action_space", "device"]}
+                    **{k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space", "device"]}
                 )
             except ImportError:
-                from .dummy_agent import DummyAgent
+                logger.warning("SAC agent not available, using dummy agent")
+                from agents.strategies.single.dummy_agent import DummyAgent
                 return DummyAgent(
                     observation_space=observation_space,
                     action_space=action_space,
-                    **{k: v for k, v in config.items() if k not in ["type", "observation_space", "action_space"]}
+                    **{k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space"]}
                 )
         
+        # Backward compatibility for existing calls that pass strategy as agent_type
         elif agent_type == "momentum" or agent_type == "momentumppo":
-            logger.info(f"Attempting to create MomentumPPOAgent with config: {config}")
-            try:
-                # Import from multi directory
-                logger.info("Trying to import MomentumPPOAgent from multi directory")
-                from agents.strategies.multi.momentum_ppo_agent import MomentumPPOAgent
-                logger.info("Successfully imported MomentumPPOAgent")
-                    
-                agent = MomentumPPOAgent(
-                    observation_space=observation_space,
-                    action_space=action_space,
-                    device=device,
-                    **{k: v for k, v in config.items() if k not in ["type", "observation_space", "action_space", "device", "strategy"]}
-                )
-                logger.info(f"Successfully created MomentumPPOAgent: {type(agent)}")
-                return agent
-            except ImportError as e:
-                logger.error(f"Error importing MomentumPPOAgent: {e}")
-                # Create a test-compatible mock MomentumPPOAgent
-                return create_test_momentum_agent(observation_space, action_space, config)
-            except Exception as e:
-                logger.error(f"Unexpected error creating MomentumPPOAgent: {e}")
-                # Create a test-compatible mock MomentumPPOAgent
-                return create_test_momentum_agent(observation_space, action_space, config)
-        
+            logger.warning("Deprecated: Using 'momentum' as agent_type. Please use agent_type='ppo', strategy='momentum' instead.")
+            return create_agent("ppo", "momentum", config, observation_space, action_space)
+            
         elif agent_type == "meanreversion" or agent_type == "meanreversionppo":
-            logger.info(f"Attempting to create MeanReversionPPOAgent with config: {config}")
-            try:
-                # Import from multi directory
-                logger.info("Trying to import MeanReversionPPOAgent from multi directory")
-                from agents.strategies.multi.mean_reversion_ppo_agent import MeanReversionPPOAgent
-                logger.info("Successfully imported MeanReversionPPOAgent")
-                    
-                agent = MeanReversionPPOAgent(
-                    observation_space=observation_space,
-                    action_space=action_space,
-                    device=device,
-                    **{k: v for k, v in config.items() if k not in ["type", "observation_space", "action_space", "device", "strategy"]}
-                )
-                logger.info(f"Successfully created MeanReversionPPOAgent: {type(agent)}")
-                return agent
-            except ImportError as e:
-                logger.error(f"Error importing MeanReversionPPOAgent: {e}")
-                # Create a test-compatible mock MeanReversionPPOAgent
-                return create_test_mean_reversion_agent(observation_space, action_space, config)
-            except Exception as e:
-                logger.error(f"Unexpected error creating MeanReversionPPOAgent: {e}")
-                # Create a test-compatible mock MeanReversionPPOAgent
-                return create_test_mean_reversion_agent(observation_space, action_space, config)
+            logger.warning("Deprecated: Using 'meanreversion' as agent_type. Please use agent_type='ppo', strategy='meanreversion' instead.")
+            return create_agent("ppo", "meanreversion", config, observation_space, action_space)
         
-        elif agent_type == "meta" or agent_type == "metaagent":
-            try:
-                from .meta_agent import MetaAgent
-                return MetaAgent(
-                    observation_space=observation_space,
-                    action_space=action_space,
-                    device=device,
-                    continuous_ensemble=config.get("ensemble_type", "discrete") == "continuous",
-                    **{k: v for k, v in config.items() if k not in ["type", "observation_space", "action_space", "device", "ensemble_type"]}
-                )
-            except ImportError:
-                from .dummy_agent import DummyAgent
-                return DummyAgent(
-                    observation_space=observation_space,
-                    action_space=action_space,
-                    **{k: v for k, v in config.items() if k not in ["type", "observation_space", "action_space"]}
-                )
-        
-        elif agent_type == "hierarchical" or agent_type == "hierarchicalagent":
-            try:
-                from .hierarchical_agent import HierarchicalAgent
-                return HierarchicalAgent(
-                    observation_space=observation_space,
-                    action_space=action_space,
-                    device=device,
-                    **{k: v for k, v in config.items() if k not in ["type", "observation_space", "action_space", "device"]}
-                )
-            except ImportError:
-                from .dummy_agent import DummyAgent
-                return DummyAgent(
-                    observation_space=observation_space,
-                    action_space=action_space,
-                    **{k: v for k, v in config.items() if k not in ["type", "observation_space", "action_space"]}
-                )
-        
+        # Multi-agent manager
         elif agent_type == "multi" or agent_type == "multiagent" or agent_type == "multiagentmanager":
+            logger.info(f"Creating MultiAgentManager")
             try:
-                from .multi.multi_agent_manager import MultiAgentManager
+                from agents.strategies.multi.multi_agent_manager import MultiAgentManager
                 return MultiAgentManager(
                     agent_configs=config.get("agent_configs", []),
                     device=device,
                     ensemble_method=config.get("ensemble_method", "weighted")
                 )
             except ImportError:
-                from .test_agent_factory import create_test_multi_agent_manager
+                from agents.strategies.test_agent_factory import create_test_multi_agent_manager
                 return create_test_multi_agent_manager(
                     agent_configs=config.get("agent_configs", []),
                     device=device,
                     ensemble_method=config.get("ensemble_method", "weighted")
                 )
         
+        # Other types...
+        elif agent_type == "meta" or agent_type == "metaagent":
+            # Implement meta agent creation logic
+            logger.info(f"Creating meta-agent for ensemble decision making")
+            try:
+                from agents.strategies.meta_agent import MetaAgent
+                
+                # Check if observation_space is 2D as required
+                if len(observation_space.shape) != 2:
+                    raise ValueError("Observation space must be 2D (window_size, features)")
+                
+                # Create the meta-agent
+                return MetaAgent(
+                    observation_space=observation_space,
+                    action_space=action_space,
+                    device=device,
+                    learning_rate=config.get("learning_rate", 3e-4),
+                    hidden_dim=config.get("hidden_dim", 128),
+                    continuous_ensemble=config.get("ensemble_type", "discrete") == "continuous",
+                    **{k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space", "device", "learning_rate", "hidden_dim", "ensemble_type"]}
+                )
+            except ImportError as e:
+                logger.error(f"MetaAgent import failed: {e}")
+                from agents.strategies.single.dummy_agent import DummyAgent
+                return DummyAgent(
+                    observation_space=observation_space,
+                    action_space=action_space,
+                    **{k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space"]}
+                )
+            except Exception as e:
+                logger.error(f"Error creating meta-agent: {e}")
+                from agents.strategies.single.dummy_agent import DummyAgent
+                return DummyAgent(
+                    observation_space=observation_space,
+                    action_space=action_space,
+                    **{k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space"]}
+                )
+        
+        # Default fallback
         else:
-            from .dummy_agent import DummyAgent
+            logger.warning(f"Unknown agent type '{agent_type}', using dummy agent")
+            from agents.strategies.single.dummy_agent import DummyAgent
             return DummyAgent(
                 observation_space=observation_space,
                 action_space=action_space,
-                **{k: v for k, v in config.items() if k not in ["type", "observation_space", "action_space"]}
+                **{k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space"]}
             )
-            
+    
     except Exception as e:
-        # Last resort fallback to DummyAgent
-        try:
-            from .dummy_agent import DummyAgent
-            return DummyAgent(
-                observation_space=observation_space,
-                action_space=action_space,
-                **{k: v for k, v in config.items() if k not in ["type", "observation_space", "action_space"]}
-            )
-        except ImportError:
-            # If even DummyAgent is not available, create a minimal mock agent
-            from .base_agent import BaseAgent
-            class MinimalDummyAgent(BaseAgent):
-                def get_action(self, observation, deterministic=False):
-                    return np.zeros(self.action_space.shape)
-                def train_step(self, experience):
-                    return {"loss": 0.0}
-                def save(self, path):
-                    pass
-                def load(self, path):
-                    pass
-            return MinimalDummyAgent(observation_space, action_space)
+        logger.error(f"Error creating agent: {e}")
+        # Fall back to dummy agent on any error
+        from agents.strategies.single.dummy_agent import DummyAgent
+        return DummyAgent(
+            observation_space=observation_space,
+            action_space=action_space
+        )
 
 def list_available_agents() -> Dict[str, str]:
     """

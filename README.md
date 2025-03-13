@@ -51,7 +51,42 @@ env = TradingEnv(data)
 agent.train(env)
 ```
 
-2. **Backtesting**
+2. **Multi-Agent Training with Manager**
+
+The system supports training multiple agents simultaneously with coordination through the `MultiAgentManager`. This approach enables:
+
+- Ensemble decision making across multiple strategies
+- Experience sharing between agents
+- Meta-agent learning for optimal agent selection/weighting
+- Coordinated checkpointing and evaluation
+
+```bash
+# Run with default configuration
+python run_multi_agent_manager.py
+
+# Specify configuration and ensemble method
+python run_multi_agent_manager.py --config config/multi_agent_config.yaml --ensemble-method meta
+```
+
+Configuration example (in `config/multi_agent_config.yaml`):
+```yaml
+env:
+  type: "multi_agent_rl"
+  use_manager: true  # Enable MultiAgentManager
+  ensemble_method: "meta"  # Options: "weighted", "best", "meta"
+  
+  # Sub-agent configurations
+  multi_agent_configs:
+    - id: "momentum_agent"
+      agent_type: "ppo"
+      strategy: "momentum"
+    
+    - id: "mean_reversion_agent"
+      agent_type: "ppo"
+      strategy: "mean_reversion"
+```
+
+3. **Backtesting**
 ```python
 from training.backtesting.base_backtester import BaseBacktester
 from training.backtesting.risk_manager import RiskConfig
@@ -68,7 +103,7 @@ backtester = BaseBacktester(data=data, risk_config=risk_config)
 results = backtester.run(agent)
 ```
 
-3. **Live Trading**
+4. **Live Trading**
 ```python
 from trading.live import LiveTradingEnvironment
 

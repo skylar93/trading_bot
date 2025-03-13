@@ -47,7 +47,7 @@ def test_observation_space():
         df=df,
         assets=['BTC', 'ETH', 'SOL'],
         window_size=10,
-        normalize_observations=True,
+        normalization_method='zscore',
         format_3d=False
     )
     
@@ -70,7 +70,7 @@ def test_observation_space():
         df=df,
         assets=['BTC', 'ETH', 'SOL'],
         window_size=10,
-        normalize_observations=True,
+        normalization_method='zscore',
         format_3d=True
     )
     
@@ -115,7 +115,6 @@ def test_normalization():
             df=df,
             assets=['BTC', 'ETH'],
             window_size=10,
-            normalize_observations=True,
             normalization_method=method
         )
         
@@ -282,7 +281,7 @@ def visualize_observations():
         df=df,
         assets=['BTC', 'ETH'],
         window_size=10,
-        normalize_observations=True
+        normalization_method='zscore'
     )
     
     # Reset environment

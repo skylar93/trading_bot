@@ -4,11 +4,20 @@ Backtest utilities for the Trading Bot UI
 
 import pandas as pd
 import numpy as np
+import os
 from typing import Dict, List, Optional, Any
 import logging
 from training.backtesting.base_backtester import BaseBacktester
 from training.backtesting.risk_manager import RiskManager, RiskConfig
 from agents.strategies.agent_factory import create_agent
+from datetime import datetime
+
+# Global timestamp for consistent log naming across the application
+TIMESTAMP = datetime.now().strftime('%Y%m%d_%H%M%S')
+
+def get_log_filename(prefix="backtest_debug"):
+    """Get a consistent log filename with timestamp"""
+    return f"{prefix}_{TIMESTAMP}.log"
 
 def setup_logging():
     """Configure logging with proper handlers and levels"""
@@ -31,19 +40,36 @@ def setup_logging():
     console_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     console_handler.setFormatter(console_formatter)
     
-    # Configure file handler for DEBUG level
-    file_handler = logging.FileHandler('backtest_debug.log')
+    # Create logs directory if it doesn't exist
+    log_dir = 'logs'
+    os.makedirs(log_dir, exist_ok=True)
+    
+    # Use the consistent log filename with timestamp
+    log_filename = os.path.join(log_dir, get_log_filename())
+    
+    # Configure file handler for DEBUG level with new file for each run
+    file_handler = logging.FileHandler(log_filename, mode='w')  # 'w' mode to overwrite
     file_handler.setLevel(logging.DEBUG)
     file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     file_handler.setFormatter(file_formatter)
+    
+    # Also maintain the main backtest_debug.log but with overwrite mode
+    main_log_file = 'backtest_debug.log'
+    main_file_handler = logging.FileHandler(main_log_file, mode='w')  # 'w' mode to overwrite
+    main_file_handler.setLevel(logging.DEBUG)
+    main_file_handler.setFormatter(file_formatter)
     
     # Set up logger
     logger.setLevel(logging.DEBUG)
     logger.addHandler(console_handler)
     logger.addHandler(file_handler)
+    logger.addHandler(main_file_handler)
     
     # Prevent propagation to root logger to avoid duplicate logs
     logger.propagate = False
+    
+    # Log initialization information
+    logger.info(f"Logging initialized. Log file: {log_filename}")
     
     return logger
 
@@ -58,9 +84,13 @@ class BacktestManager:
         self.logger = logger  # Use the singleton logger instance
         self.logger.debug("Initializing BacktestManager with settings: %s", settings)
         
+        # Get risk parameters or use defaults
+        risk_params = settings.get("risk_params", {})
+        
         self.risk_config = RiskConfig(
-            max_position_size=settings["max_position_size"] / 100.0,
-            stop_loss_pct=settings["stop_loss"] / 100.0,
+            max_position_size=risk_params.get("max_position_size", 0.5),
+            stop_loss_pct=risk_params.get("stop_loss", 0.05),
+            min_trade_size=risk_params.get("min_trade_size", 0.01),  # Use provided value or default to 1%
             max_drawdown_pct=0.15,
             daily_trade_limit=1000,
             var_confidence_level=0.95,
@@ -75,6 +105,20 @@ class BacktestManager:
         self.logger.debug("Creating agent: %s with config: %s", agent_name, agent_config)
         self.agent = create_agent(agent_name, config=agent_config)
         self.logger.info("Agent created: %s", agent_name)
+        
+        # If a model path is provided, load the trained model
+        model_path = settings.get("model_path")
+        if model_path and os.path.exists(model_path):
+            try:
+                self.logger.info(f"Loading trained model from: {model_path}")
+                self.agent.load(model_path)
+                self.logger.info(f"Successfully loaded trained model from: {model_path}")
+            except Exception as e:
+                self.logger.error(f"Failed to load model from {model_path}: {str(e)}", exc_info=True)
+                self.logger.warning("Continuing with untrained model")
+        elif model_path:
+            self.logger.warning(f"Model path provided but file not found: {model_path}")
+            self.logger.warning("Continuing with untrained model")
         
     def load_market_data(self) -> Optional[pd.DataFrame]:
         """Load market data for backtesting"""

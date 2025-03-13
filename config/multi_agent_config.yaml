@@ -1,0 +1,82 @@
+env:
+  type: "multi_agent_rl"
+  initial_balance: 10000.0
+  trading_fee: 0.001
+  window_size: 60
+  normalize: true
+  stack_size: 4
+  max_position_size: 1.0
+  shared_capital: false
+  capital_reallocation_freq: 20
+  
+  # Multi-agent specific configuration
+  use_manager: true  # Set to true to use MultiAgentManager
+  ensemble_method: "meta"  # Options: "weighted", "best", "meta"
+  
+  # Sub-agent configurations
+  multi_agent_configs:
+    - id: "momentum_agent"
+      agent_type: "ppo"
+      strategy: "momentum"
+      observation_size: 300  # window_size * features
+      hyperparameters:
+        learning_rate: 0.0003
+        hidden_dim: 128
+        gamma: 0.99
+    
+    - id: "mean_reversion_agent"
+      agent_type: "ppo"
+      strategy: "mean_reversion"
+      observation_size: 300
+      hyperparameters:
+        learning_rate: 0.0003
+        hidden_dim: 128
+        gamma: 0.99
+  
+  # Meta-agent configuration (used when ensemble_method is "meta")
+  meta_config:
+    id: "meta_agent"
+    type: "meta"
+    model: "ppo"
+    observation_size: 650  # Will be auto-calculated if not specified
+    action_dim: 2  # Number of sub-agents
+    continuous_ensemble: true  # Use continuous weights instead of discrete selection
+    learning_rate: 0.0003
+    hidden_dim: 128
+    gamma: 0.99
+    use_attention: true
+
+data:
+  exchange: "binance"
+  symbols: ["BTC/USDT"]
+  timeframe: "1h"
+  start_date: "2023-01-01"
+  end_date: "2023-12-31"
+  test_start_date: "2023-11-01"  # For evaluation
+  cache_dir: "data/raw"
+
+training:
+  total_timesteps: 100000
+  checkpoint_interval: 10000
+  eval_interval: 5000
+  log_interval: 10
+  early_stop: 20
+  batch_size: 64
+
+# Shared experience buffer configuration
+shared_experience:
+  enabled: true
+  buffer_size: 10000
+  min_reward_threshold: 0.2
+
+paths:
+  model_dir: "models"
+  checkpoint_dir: "checkpoints"
+  data_dir: "data"
+  log_dir: "logs"
+
+# MLflow configuration
+mlflow:
+  tracking_uri: "sqlite:///mlflow.db"
+  experiment_name: "multi_agent_training"
+  run_name: "manager_meta_agent" 

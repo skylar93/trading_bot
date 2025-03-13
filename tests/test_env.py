@@ -32,8 +32,11 @@ def env_config():
 
 def test_env_shapes(sample_data, env_config):
     """Test observation and action shapes from the environment."""
+    # Create environment config dictionary with the env key
+    config = {"env": env_config}
+    
     # Create environment
-    env = create_env(env_config, sample_data)
+    env = create_env(config, sample_data)
     
     # Test reset
     obs, _ = env.reset()
@@ -60,7 +63,10 @@ def test_env_shapes(sample_data, env_config):
         
 def test_env_edge_cases(sample_data, env_config):
     """Test environment behavior in edge cases."""
-    env = create_env(env_config, sample_data)
+    # Create environment config dictionary with the env key
+    config = {"env": env_config}
+    
+    env = create_env(config, sample_data)
     
     # Test invalid actions
     obs, _ = env.reset()

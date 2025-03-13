@@ -482,7 +482,18 @@ class MeanReversionPPOAgent(PPOAgent):
         # Filter for experiences that align with mean reversion strategy
         filtered_buffer = []
         for exp in shared_buffer:
-            state, action, reward, next_state, done = exp
+            # Support both dictionary and tuple formats for backward compatibility
+            if isinstance(exp, dict):
+                # Dictionary format
+                state = exp["state"]
+                action = exp["action"]
+                reward = exp["reward"]
+                next_state = exp["next_state"]
+                done = exp.get("done", False)
+            else:
+                # Tuple format (legacy)
+                state, action, reward, next_state, done = exp
+            
             state_reversion = self._calculate_reversion_features(state)
             
             if len(state_reversion.shape) > 1:

@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Integration of MultiAgentManager for coordinated multi-agent training:
+  - Added `train_multi_agent_with_manager` function in train_pipeline.py
+  - Created configuration option for using manager vs individual agents
+  - Enhanced training pipeline to support meta-agent ensemble methods
+  - Added proper checkpointing and loading for manager and sub-agents
+  - Created `evaluate_with_manager` function for deterministic evaluation
+  - Added configuration templates for multi-agent manager training
+  - Created dedicated run script (run_multi_agent_manager.py) for easy execution
+  - Added documentation in `docs/MULTI_AGENT_MANAGER.md`
+  - Implemented easy toggles for ensemble methods (weighted, best, meta)
+  - Enhanced README.md with manager-based training examples
+- Multi-asset trading UI enhancement:
+  - Added "Asset Mode" selection (single/multi) in the Streamlit training interface
+  - Implemented multi-select for choosing multiple trading assets
+  - Added agent-specific asset assignment in multi-agent mode
+  - Added support for four environment types:
+    - `single_asset_rl` - Single asset, single agent
+    - `multi_asset_rl` - Multiple assets, single agent
+    - `multi_agent_rl` - Single asset, multiple agents
+    - `multi_asset_multi_agent_rl` - Multiple assets, multiple agents
+  - Enhanced training manager to handle multi-asset configurations
+  - Updated configuration summary display to show selected assets
+  - Improved agent display to show assigned assets in multi-asset mode
+  - Added proper configuration handling for TrainingManager integration
 - Meta-agent enhancement with sub-agent hidden states:
   - New methods `act_with_hidden_state()` and `get_action_with_hidden_state()` for extracting internal states
   - Extended meta-agent architecture to process sub-agent hidden representations
@@ -85,6 +109,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Position size adjustment based on correlation
   - Portfolio VaR calculation with diversified portfolios
   - Portfolio stop loss and trailing stop tests
+- Streamlit UI refactoring to separate concerns:
+  - Created `RealTimeTradingManager` to handle live trading logic
+  - Created `BacktestPresenter` to handle backtest logic
+  - Refactored UI pages to focus only on presentation
+  - Improved code organization and maintainability
+  - Archived deprecated UI code
+- New Model Training UI in Streamlit
+  - Support for both single-agent and multi-agent training
+  - Comprehensive training parameter configuration
+  - Real-time training progress visualization
+  - Integration with MLflow for experiment tracking
+  - Seamless navigation between training and backtesting
 
 ### Changed
 - Improved partial fill implementation in MarketSimulator to be more realistic
@@ -120,10 +156,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Robust flattening of observation arrays in get_meta_observation method
   - Consistent array shape handling in _create_meta_experience method
   - Dimension verification before array concatenation
+- Fixed experience sharing between different agent types in multi-agent environments:
+  - Enhanced `learn_from_shared_experience` method in MomentumPPOAgent to handle both tuple and dictionary formats
+  - Fixed tensor dimension handling in state normalization to ensure proper input sizes
+  - Added padding mechanism to handle state size mismatches between agents
+  - Improved robustness of the training pipeline by ensuring consistent return value formats
 - Fixed Categorical distribution range error in MetaAgent's train_step method:
   - Added action tensor clamping to valid indices (0 to n-1)
   - Improved error handling when processing tensors with invalid shapes
   - Better logging of tensor dimensions during meta-observation creation
+- Fixed multi-agent trading system tests:
+  - Enhanced data handling to properly convert datetime columns to numeric values
+  - Improved shared experience buffer implementation to work correctly in test environments
+  - Fixed meta-agent integration with environment by ensuring proper agent ID registration
+  - Updated train_pipeline to accept direct data input for testing
+  - Made _is_valuable_experience method more lenient for test data
+  - Ensured proper population of shared buffer during tests
 - Partial fill implementation now properly simulates partial executions
 - Fixed field name mismatch in trade data ('executed_amount' vs 'filled_amount')
 - Improved test resilience with proper field existence checking

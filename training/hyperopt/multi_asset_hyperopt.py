@@ -546,8 +546,8 @@ def generate_optimization_analysis(
     for feature in risk_features:
         if feature in df.columns:
             # Calculate mean performance with and without the feature
-            with_feature = df[df[feature] == True][metric].mean()
-            without_feature = df[df[feature] == False][metric].mean()
+            with_feature = df[df[feature] == True][metric].mean(numeric_only=True)
+            without_feature = df[df[feature] == False][metric].mean(numeric_only=True)
             
             # Calculate effect size (percentage difference)
             if without_feature != 0:

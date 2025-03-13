@@ -416,11 +416,17 @@ class MomentumPPOAgent(PPOAgent):
         relevant_exp = []
         
         for exp in shared_buffer:
-            state = exp["state"]
-            action = exp["action"]
-            reward = exp["reward"]
-            next_state = exp["next_state"]
-            done = exp.get("done", False)
+            # Support both dictionary and tuple formats for backward compatibility
+            if isinstance(exp, dict):
+                # Dictionary format
+                state = exp["state"]
+                action = exp["action"]
+                reward = exp["reward"]
+                next_state = exp["next_state"]
+                done = exp.get("done", False)
+            else:
+                # Tuple format (legacy)
+                state, action, reward, next_state, done = exp
             
             # Ensure state has correct shape (window_size, features)
             if len(state.shape) == 1:
@@ -441,9 +447,22 @@ class MomentumPPOAgent(PPOAgent):
                     flat_state = state.reshape(1, -1)  # Make it 2D
                     flat_next_state = next_state.reshape(1, -1)  # Make it 2D
                     
-                    # Normalize states with clipping
-                    normalized_state = np.clip(self._normalize_state(flat_state.reshape(-1)), -10, 10)
-                    normalized_next_state = np.clip(self._normalize_state(flat_next_state.reshape(-1)), -10, 10)
+                    # Convert numpy arrays to torch tensors before calling _normalize_state
+                    flat_state_tensor = torch.tensor(flat_state, dtype=torch.float32)
+                    flat_next_state_tensor = torch.tensor(flat_next_state, dtype=torch.float32)
+                    
+                    # Ensure state has the expected dimension (163)
+                    if flat_state_tensor.shape[-1] != self.obs_dim:
+                        # Pad the tensor with zeros if necessary
+                        state_size = flat_state_tensor.shape[-1]
+                        if state_size < self.obs_dim:
+                            padding_size = self.obs_dim - state_size
+                            pad_tensor = torch.zeros(padding_size, dtype=torch.float32)
+                            flat_state_tensor = torch.cat([flat_state_tensor.reshape(-1), pad_tensor])
+                            flat_next_state_tensor = torch.cat([flat_next_state_tensor.reshape(-1), pad_tensor])
+                    
+                    normalized_state = np.clip(self._normalize_state(flat_state_tensor.reshape(-1)).numpy(), -10, 10)
+                    normalized_next_state = np.clip(self._normalize_state(flat_next_state_tensor.reshape(-1)).numpy(), -10, 10)
                     
                     # Normalize momentum features
                     normalized_momentum = np.clip(momentum_features / (np.abs(momentum_features).max() + 1e-8), -1, 1)
@@ -476,9 +495,22 @@ class MomentumPPOAgent(PPOAgent):
                     flat_state = state.reshape(1, -1)  # Make it 2D
                     flat_next_state = next_state.reshape(1, -1)  # Make it 2D
                     
-                    # Normalize states with clipping
-                    normalized_state = np.clip(self._normalize_state(flat_state.reshape(-1)), -10, 10)
-                    normalized_next_state = np.clip(self._normalize_state(flat_next_state.reshape(-1)), -10, 10)
+                    # Convert numpy arrays to torch tensors before calling _normalize_state
+                    flat_state_tensor = torch.tensor(flat_state, dtype=torch.float32)
+                    flat_next_state_tensor = torch.tensor(flat_next_state, dtype=torch.float32)
+                    
+                    # Ensure state has the expected dimension (163)
+                    if flat_state_tensor.shape[-1] != self.obs_dim:
+                        # Pad the tensor with zeros if necessary
+                        state_size = flat_state_tensor.shape[-1]
+                        if state_size < self.obs_dim:
+                            padding_size = self.obs_dim - state_size
+                            pad_tensor = torch.zeros(padding_size, dtype=torch.float32)
+                            flat_state_tensor = torch.cat([flat_state_tensor.reshape(-1), pad_tensor])
+                            flat_next_state_tensor = torch.cat([flat_next_state_tensor.reshape(-1), pad_tensor])
+                    
+                    normalized_state = np.clip(self._normalize_state(flat_state_tensor.reshape(-1)).numpy(), -10, 10)
+                    normalized_next_state = np.clip(self._normalize_state(flat_next_state_tensor.reshape(-1)).numpy(), -10, 10)
                     
                     # Normalize momentum features
                     normalized_momentum = np.clip(momentum_features / (np.abs(momentum_features).max() + 1e-8), -1, 1)

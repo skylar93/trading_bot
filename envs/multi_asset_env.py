@@ -394,7 +394,7 @@ class MultiAssetTradingEnv(gym.Env):
                 # Z-score normalization (mean=0, std=1)
                 for col in norm_df.columns:
                     if norm_df[col].std() > 0:  # Avoid division by zero
-                        norm_df[col] = (norm_df[col] - norm_df[col].mean()) / norm_df[col].std()
+                        norm_df.loc[:, col] = (norm_df[col] - norm_df[col].mean()) / norm_df[col].std()
             
             elif self.normalization_method == 'minmax':
                 # Min-max normalization (0 to 1 range)
@@ -402,19 +402,19 @@ class MultiAssetTradingEnv(gym.Env):
                     min_val = norm_df[col].min()
                     max_val = norm_df[col].max()
                     if max_val > min_val:  # Avoid division by zero
-                        norm_df[col] = (norm_df[col] - min_val) / (max_val - min_val)
+                        norm_df.loc[:, col] = (norm_df[col] - min_val) / (max_val - min_val)
             
             elif self.normalization_method == 'log':
                 # Log normalization
                 for col in norm_df.columns:
                     if (norm_df[col] > 0).all():  # Check for positive values
-                        norm_df[col] = np.log(norm_df[col])
+                        norm_df.loc[:, col] = np.log(norm_df[col])
             
             elif self.normalization_method == 'percent_change':
                 # Percent change from first value
                 for col in norm_df.columns:
                     if norm_df[col].iloc[0] != 0:  # Avoid division by zero
-                        norm_df[col] = norm_df[col].pct_change().fillna(0)
+                        norm_df.loc[:, col] = norm_df[col].pct_change().fillna(0)
             
             else:
                 logger.warning(f"Unknown normalization method: {self.normalization_method}")

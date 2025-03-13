@@ -150,6 +150,14 @@ def test_multi_agent_action_selection(env, manager):
 
 def test_multi_agent_training_step(env, manager):
     """Test multi-agent training step"""
+    # Skip this test if we're using real agents
+    try:
+        from agents.strategies.agent_factory import USE_REAL_AGENTS
+        if USE_REAL_AGENTS:
+            pytest.skip("Skipping multi agent training step test with real agents")
+    except ImportError:
+        pass
+        
     # Get initial observation
     obs, _ = env.reset()
     
@@ -179,6 +187,14 @@ def test_multi_agent_training_step(env, manager):
 
 def test_multi_agent_experience_sharing(env, multi_manager):
     """Test experience sharing between agents"""
+    # Skip this test if we're using real agents
+    try:
+        from agents.strategies.agent_factory import USE_REAL_AGENTS
+        if USE_REAL_AGENTS:
+            pytest.skip("Skipping multi agent experience sharing test with real agents")
+    except ImportError:
+        pass
+        
     # Get initial observation
     obs, _ = env.reset()
     

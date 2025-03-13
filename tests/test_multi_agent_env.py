@@ -279,6 +279,124 @@ def test_steps_with_shared_capital(sample_data, agent_configs):
         assert actions[agent_id][0] < original_actions[agent_id][0], \
             "Actions should be scaled down when capital is constrained"
 
+def test_independent_agent_state(sample_data, agent_configs):
+    """
+    Test that agents maintain independent states, balances, positions, and rewards.
+    
+    This test verifies:
+    1. Each agent has its own balance that updates independently
+    2. Each agent has its own position that updates independently
+    3. Each agent gets its own reward calculated independently
+    4. Each agent's done state is determined independently
+    """
+    # Create environment with independent capital (shared_capital=False)
+    env = MultiAgentTradingEnv(
+        data=sample_data, 
+        agent_configs=agent_configs, 
+        window_size=20,
+        shared_capital=False  # Important: independent capital
+    )
+    
+    # Reset environment
+    obs, info = env.reset()
+    
+    # Verify each agent has its own initial balance
+    assert env.balances["momentum_agent"] == 5000.0
+    assert env.balances["meanrev_agent"] == 5000.0
+    
+    # Have agents take opposite actions
+    actions = {
+        "momentum_agent": np.array([0.8]),  # Strong buy
+        "meanrev_agent": np.array([-0.6])   # Moderate sell
+    }
+    
+    # Execute step
+    next_obs, rewards, dones, truncated, infos = env.step(actions)
+    
+    # Verify each agent has different balances and positions after action
+    assert env.balances["momentum_agent"] < 5000.0, "Buy action should decrease balance"
+    assert env.positions["momentum_agent"] > 0.0, "Buy action should increase position"
+    
+    assert env.balances["meanrev_agent"] == 5000.0, "Sell with no position should not change balance"
+    assert env.positions["meanrev_agent"] == 0.0, "Sell with no position should remain at 0"
+    
+    # Take additional steps with more diverse actions
+    for _ in range(5):
+        # First agent keeps buying, second agent does nothing
+        actions = {
+            "momentum_agent": np.array([0.5]), 
+            "meanrev_agent": np.array([0.0])
+        }
+        next_obs, rewards, dones, truncated, infos = env.step(actions)
+    
+    # Verify agents maintained separate states
+    assert env.balances["momentum_agent"] < env.balances["meanrev_agent"], \
+        "First agent should have less balance after buying"
+    assert env.positions["momentum_agent"] > 0.0, \
+        "First agent should have positive position"
+    assert env.positions["meanrev_agent"] == 0.0, \
+        "Second agent should still have zero position"
+    
+    # Check if rewards are calculated independently
+    # Have one agent make profit, one make loss in next step
+    current_price = float(env.data.iloc[env.current_step]["$close"])
+    next_price = float(env.data.iloc[env.current_step + 1]["$close"])
+    
+    # If price will rise, have second agent buy
+    if next_price > current_price:
+        actions = {
+            "momentum_agent": np.array([-0.5]),  # Sell (loss if price rises)
+            "meanrev_agent": np.array([0.5])     # Buy (profit if price rises)
+        }
+    else:
+        # If price will fall, have second agent sell
+        actions = {
+            "momentum_agent": np.array([0.5]),   # Buy (loss if price falls)
+            "meanrev_agent": np.array([-0.5])    # Sell (no change with no position)
+        }
+    
+    next_obs, rewards, dones, truncated, infos = env.step(actions)
+    
+    # Verify independence of rewards and infos
+    assert "momentum_agent" in rewards
+    assert "meanrev_agent" in rewards
+    assert "momentum_agent" in infos
+    assert "meanrev_agent" in infos
+    
+    # Verify independence of portfolio values in infos
+    assert infos["momentum_agent"]["portfolio_value"] != infos["meanrev_agent"]["portfolio_value"], \
+        "Agents should have different portfolio values"
+    
+    # Test bankruptcy condition for one agent
+    # Set one agent's balance and position to near zero
+    env.balances["momentum_agent"] = 0.01
+    env.positions["momentum_agent"] = 0.0
+    
+    # Take a step to trigger potential bankruptcy check
+    actions = {
+        "momentum_agent": np.array([0.0]), 
+        "meanrev_agent": np.array([0.0])
+    }
+    next_obs, rewards, dones, truncated, infos = env.step(actions)
+    
+    # Verify the near-bankrupt agent is not marked as done yet (because portfolio value > 0)
+    assert not dones["momentum_agent"], "Agent shouldn't be done just from low balance"
+    
+    # Now make the agent actually bankrupt
+    env.balances["momentum_agent"] = 0.0
+    env.positions["momentum_agent"] = 0.0
+    
+    # Take a step to trigger bankruptcy
+    next_obs, rewards, dones, truncated, infos = env.step(actions)
+    
+    # Verify one agent is done due to bankruptcy, but other agent continues
+    assert dones["momentum_agent"], "Bankrupt agent should be done"
+    assert not dones["meanrev_agent"], "Non-bankrupt agent should not be done"
+    
+    # Finally, check the observation spaces are properly maintained
+    assert next_obs["momentum_agent"].shape == (20, env._get_n_features("momentum_agent"))
+    assert next_obs["meanrev_agent"].shape == (20, env._get_n_features("meanrev_agent"))
+
 def test_full_episode(sample_data, agent_configs):
     """Test running a full episode with multiple agents"""
     # Create environment
