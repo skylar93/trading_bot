@@ -792,6 +792,10 @@ class MultiAgentTradingEnv(gym.Env):
         
         # Process each agent's action independently
         for agent_id, action in actions.items():
+            # Skip agents that are not in our agent_configs (like meta_agent)
+            if agent_id not in self.agent_configs:
+                continue
+                
             config = self.agent_configs[agent_id]
 
             # Calculate transaction costs (with agent-specific multiplier)

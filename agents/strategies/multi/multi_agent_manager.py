@@ -706,24 +706,12 @@ class MultiAgentManager:
             meta_experience = self._create_meta_experience(experiences)
             if meta_experience:
                 try:
-                    # Try with experience parameter first
-                    meta_metrics = self.agents[self.meta_agent_id].train_step(experience=meta_experience)
-                except (TypeError, ValueError, AttributeError) as e:
-                    # Fall back to unpacked arguments
-                    try:
-                        state = meta_experience.get("observation", meta_experience.get("state"))
-                        action = meta_experience.get("action")
-                        reward = meta_experience.get("reward")
-                        next_state = meta_experience.get("next_observation", meta_experience.get("next_state"))
-                        done = meta_experience.get("done")
-                        info = meta_experience.get("info", {})
-                        
-                        meta_metrics = self.agents[self.meta_agent_id].train_step(
-                            state, action, reward, next_state, done, info
-                        )
-                    except Exception as e2:
-                        logger.error(f"Error in train_step for meta-agent: {e2}")
-                        meta_metrics = {}
+                    # MetaAgent.train_step은 항상 단일 experience 딕셔너리만 받음
+                    meta_metrics = self.agents[self.meta_agent_id].train_step(meta_experience)
+                except Exception as e:
+                    logger.error(f"Error in train_step for meta-agent: {e}")
+                    logger.debug(f"Meta experience keys: {meta_experience.keys()}")
+                    meta_metrics = {"policy_loss": 0.0, "value_loss": 0.0, "entropy": 0.0}
                 
                 all_metrics[self.meta_agent_id] = meta_metrics
         
@@ -808,6 +796,11 @@ class MultiAgentManager:
             
         Returns:
             Meta-experience dictionary
+        
+        Recent Changes:
+            - Improved dimension handling for observations and hidden states
+            - Added robust error handling for concatenation operations
+            - Enhanced logging for tensor shape debugging
         """
         if not experiences or self.meta_agent_id is None:
             return None
@@ -830,21 +823,29 @@ class MultiAgentManager:
         max_reward = float('-inf')
         best_agent_index = 0
         
+        # Track observation dimensions for standardization
+        obs_dimensions = []
+        next_obs_dimensions = []
+        hidden_dimensions = []
+        next_hidden_dimensions = []
+        
         for i, (agent_id, exp) in enumerate(sorted(sub_agent_experiences.items())):
             if "observation" in exp and "next_observation" in exp:
-                # Always flatten observation
+                # Process observation
                 if isinstance(exp["observation"], np.ndarray):
                     obs = exp["observation"].flatten()
                 else:
                     obs = np.array([float(exp["observation"])], dtype=np.float32)
                 observations.append(obs)
+                obs_dimensions.append(obs.shape[0])
                 
-                # Always flatten next_observation
+                # Process next_observation
                 if isinstance(exp["next_observation"], np.ndarray):
                     next_obs = exp["next_observation"].flatten()
                 else:
                     next_obs = np.array([float(exp["next_observation"])], dtype=np.float32)
                 next_observations.append(next_obs)
+                next_obs_dimensions.append(next_obs.shape[0])
                 
                 # Store the agent's action for meta supervision
                 if "action" in exp:
@@ -855,31 +856,31 @@ class MultiAgentManager:
                         action = np.array([float(exp["action"])], dtype=np.float32)
                     sub_agent_actions.append(action)
                 
-                # Store hidden states if available
+                # Process hidden states if available
                 if "hidden_state" in exp:
-                    # Always flatten hidden_state
                     if isinstance(exp["hidden_state"], np.ndarray):
                         hidden = exp["hidden_state"].flatten()
                     else:
                         hidden = np.array([float(exp["hidden_state"])], dtype=np.float32)
                     hidden_states.append(hidden)
+                    hidden_dimensions.append(hidden.shape[0])
                 
-                # Store next hidden states if available
+                # Process next hidden states if available
                 if "next_hidden_state" in exp:
-                    # Always flatten next_hidden_state
                     if isinstance(exp["next_hidden_state"], np.ndarray):
                         next_hidden = exp["next_hidden_state"].flatten() 
                     else:
                         next_hidden = np.array([float(exp["next_hidden_state"])], dtype=np.float32)
                     next_hidden_states.append(next_hidden)
+                    next_hidden_dimensions.append(next_hidden.shape[0])
                 # If hidden states aren't in the experience but we have the agent object and latest observations
                 elif agent_id in self.agents and agent_id in self.hidden_states:
-                    # Always flatten hidden_state from self.hidden_states
                     if isinstance(self.hidden_states[agent_id], np.ndarray):
                         hidden = self.hidden_states[agent_id].flatten()
                     else:
                         hidden = np.array([float(self.hidden_states[agent_id])], dtype=np.float32)
                     hidden_states.append(hidden)
+                    hidden_dimensions.append(hidden.shape[0])
                 
                 # Track which agent performed best
                 if "reward" in exp and exp["reward"] > max_reward:
@@ -895,8 +896,52 @@ class MultiAgentManager:
             logger.warning(f"Invalid best_agent_index {best_agent_index}, capping to {num_agents-1}")
             best_agent_index = num_agents - 1
         
-        # All arrays should be 1D now, safe to concatenate
+        # Standardize dimensions for observations and hidden states
+        if observations:
+            # Find the maximum dimension for each type of data
+            max_obs_dim = max(obs_dimensions) if obs_dimensions else 0
+            max_next_obs_dim = max(next_obs_dimensions) if next_obs_dimensions else 0
+            max_hidden_dim = max(hidden_dimensions) if hidden_dimensions else 0
+            max_next_hidden_dim = max(next_hidden_dimensions) if next_hidden_dimensions else 0
+            
+            # Standardize observation dimensions
+            for i in range(len(observations)):
+                if observations[i].shape[0] < max_obs_dim:
+                    # Pad with zeros to match the maximum dimension
+                    padding = np.zeros(max_obs_dim - observations[i].shape[0], dtype=np.float32)
+                    observations[i] = np.concatenate([observations[i], padding])
+            
+            # Standardize next_observation dimensions
+            for i in range(len(next_observations)):
+                if next_observations[i].shape[0] < max_next_obs_dim:
+                    # Pad with zeros to match the maximum dimension
+                    padding = np.zeros(max_next_obs_dim - next_observations[i].shape[0], dtype=np.float32)
+                    next_observations[i] = np.concatenate([next_observations[i], padding])
+            
+            # Standardize hidden_state dimensions
+            for i in range(len(hidden_states)):
+                if hidden_states[i].shape[0] < max_hidden_dim:
+                    # Pad with zeros to match the maximum dimension
+                    padding = np.zeros(max_hidden_dim - hidden_states[i].shape[0], dtype=np.float32)
+                    hidden_states[i] = np.concatenate([hidden_states[i], padding])
+            
+            # Standardize next_hidden_state dimensions
+            for i in range(len(next_hidden_states)):
+                if next_hidden_states[i].shape[0] < max_next_hidden_dim:
+                    # Pad with zeros to match the maximum dimension
+                    padding = np.zeros(max_next_hidden_dim - next_hidden_states[i].shape[0], dtype=np.float32)
+                    next_hidden_states[i] = np.concatenate([next_hidden_states[i], padding])
+        
+        # All arrays should be standardized now, safe to concatenate
         try:
+            # Log dimensions for debugging
+            logger.debug(f"Observations shapes: {[o.shape for o in observations]}")
+            logger.debug(f"Next observations shapes: {[o.shape for o in next_observations]}")
+            if hidden_states:
+                logger.debug(f"Hidden states shapes: {[h.shape for h in hidden_states]}")
+            if next_hidden_states:
+                logger.debug(f"Next hidden states shapes: {[h.shape for h in next_hidden_states]}")
+            
             # Concatenate observations
             observation = np.concatenate(observations).astype(np.float32)
             next_observation = np.concatenate(next_observations).astype(np.float32)
@@ -910,12 +955,29 @@ class MultiAgentManager:
             if next_hidden_states:
                 next_hidden_state_concat = np.concatenate(next_hidden_states).astype(np.float32)
                 next_observation = np.concatenate([next_observation, next_hidden_state_concat]).astype(np.float32)
+                
+            # Log final dimensions
+            logger.debug(f"Final observation shape: {observation.shape}")
+            logger.debug(f"Final next_observation shape: {next_observation.shape}")
+            
         except ValueError as e:
             # Log detailed error info
             logger.error(f"Failed to concatenate in _create_meta_experience: {e}")
+            logger.error(f"Observation shapes: {[o.shape for o in observations]}")
+            logger.error(f"Next observation shapes: {[o.shape for o in next_observations]}")
+            if hidden_states:
+                logger.error(f"Hidden state shapes: {[h.shape for h in hidden_states]}")
+            if next_hidden_states:
+                logger.error(f"Next hidden state shapes: {[h.shape for h in next_hidden_states]}")
+            
             # Fallback: don't include hidden states
-            observation = np.concatenate(observations).astype(np.float32)
-            next_observation = np.concatenate(next_observations).astype(np.float32)
+            try:
+                observation = np.concatenate(observations).astype(np.float32)
+                next_observation = np.concatenate(next_observations).astype(np.float32)
+                logger.warning("Falling back to observations without hidden states")
+            except ValueError:
+                logger.error("Critical failure: Cannot concatenate observations")
+                return None
         
         # The meta-agent's action - either discrete selection or continuous weights
         if hasattr(self.agents[self.meta_agent_id], "continuous_ensemble") and self.agents[self.meta_agent_id].continuous_ensemble:

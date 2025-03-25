@@ -134,6 +134,31 @@ Below is a revised `development_guid.md` that incorporates the core principles, 
    - Document any test expectation changes
    - Use proper test isolation and cleanup
 
+### Async & Paper Trading
+- **Async Methods**: Clearly name asynchronous functions (e.g., `async def initialize()`, `async def run_stream()`).
+- **Mocking Real-Time Data**: Mock WebSocket or external calls in tests. Document how to do so consistently.
+- **Cleanup**: Ensure every async component has a `cleanup()` or `teardown()` method.
+
+### Reinforcement Learning Implementation
+- **PPO Implementation**: 
+  - Always collect experiences over a rollout period (not single-step updates)
+  - Store old log probabilities during experience collection
+  - Calculate proper ratio using current and old log probabilities
+  - Perform multiple epochs of optimization on collected data
+  - Implement early stopping using KL divergence
+  - Use GAE for advantage estimation
+  - Reset buffer after policy update
+- **RL Training Pipeline**:
+  - Separate experience collection from policy updates
+  - Use `update_if_buffer_ready()` after collecting sufficient steps
+  - Monitor policy metrics during training (loss, KL divergence, entropy)
+  - Evaluate policy periodically with deterministic actions
+
+### Hyperparameter Optimization (Ray Tune)
+- **Ray Configuration**: Use `storage_path` for Ray's result directories (avoid `local_dir`).
+- **Loggers**: Update code to the current Ray Tune API; do not revert to older parameters.
+- **Version Control**: Document the Ray Tune version and features in use.
+
 ```markdown
 # Development Guide
 
@@ -189,6 +214,21 @@ This development guide defines the core principles, naming and formatting rules,
 - **Async Methods**: Clearly name asynchronous functions (e.g., `async def initialize()`, `async def run_stream()`).
 - **Mocking Real-Time Data**: Mock WebSocket or external calls in tests. Document how to do so consistently.
 - **Cleanup**: Ensure every async component has a `cleanup()` or `teardown()` method.
+
+### Reinforcement Learning Implementation
+- **PPO Implementation**: 
+  - Always collect experiences over a rollout period (not single-step updates)
+  - Store old log probabilities during experience collection
+  - Calculate proper ratio using current and old log probabilities
+  - Perform multiple epochs of optimization on collected data
+  - Implement early stopping using KL divergence
+  - Use GAE for advantage estimation
+  - Reset buffer after policy update
+- **RL Training Pipeline**:
+  - Separate experience collection from policy updates
+  - Use `update_if_buffer_ready()` after collecting sufficient steps
+  - Monitor policy metrics during training (loss, KL divergence, entropy)
+  - Evaluate policy periodically with deterministic actions
 
 ### Hyperparameter Optimization (Ray Tune)
 - **Ray Configuration**: Use `storage_path` for Ray's result directories (avoid `local_dir`).
@@ -295,57 +335,4 @@ If the codebase requires a major refactoring to align with these guidelines, fol
    - Ensure `mlflow_runs/` directory, parquet format, consistent experiment naming.
 
 7. **Async & Paper Trading**:
-   - Files: `paper_trading.py`, WebSocket mocks  
-   - Fix async patterns, ensure cleanup, follow naming conventions.
-
-8. **Hyperopt & Ray Tune**:
-   - Files: `hyperopt_tuner.py`, tests  
-   - Use `storage_path`, follow latest Ray API.
-
-9. **Integration Tests & CI/CD**:
-   - Run integration tests after each step.
-   - Confirm consistent naming, formatting, and directory structures.
-
-10. **Documentation**:
-    - Update `README.md` and `DEVELOPMENT_GUIDELINES.md` to reflect all changes.
-    - Add a changelog or migration guide.
-
----
-
-## Debugging Checklist
-
-1. **Logs**:
-   - Check DEBUG logs for warnings and errors.
-   - Look at execution times and memory usage logs.
-
-2. **Data Validation**:
-   - Ensure `$` prefix in columns.
-   - Check for NaNs and invalid ranges.
-
-3. **Component Isolation**:
-   - Test individual components (data loader, feature generator, agent).
-   - Run unit tests to pinpoint the issue.
-
-4. **Integration Checks**:
-   - Verify that data flows correctly through the pipeline.
-   - Ensure no shape or naming mismatches occur between components.
-
-5. **Performance Reviews**:
-   - Check if caching is effective.
-   - Profile memory and CPU/GPU usage.
-
----
-
-## Common Issues & Solutions
-
-- **Missing Features**:  
-  Check feature generator output, log missing columns, update pipeline accordingly.
-
-- **NaN Values**:  
-  Fill forward/backward and log warnings.
-
-- **Data Range Errors**:  
-  Validate `$high >= $low`, correct any data anomalies.
-
-- **Performance Slowdown**:  
-  Monitor execution time, optimize batch sizes, leverage Ray for parallel processing.
+   - Files: `

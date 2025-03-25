@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 # Import dependencies with fallback for testing
 try:
-    from agents.strategies.hierarchical_agent import HierarchicalAgent, ManagerNetwork, WorkerNetwork
+    from agents.strategies.advanced.hierarchical_agent import HierarchicalAgent, ManagerNetwork, WorkerNetwork
     USE_REAL_AGENTS = True
 except ImportError:
     logging.warning("Using mock hierarchical agent for testing")

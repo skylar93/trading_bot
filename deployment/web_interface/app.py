@@ -6,6 +6,9 @@ import os
 import sys
 import asyncio
 from datetime import datetime
+import pandas as pd
+import logging
+from pathlib import Path
 
 # Add project root to Python path
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -18,58 +21,64 @@ from pages.Model_Training import model_training_page
 from utils.state import init_session_state
 from utils.backtest import logger, get_log_filename  # Import the shared logger and filename function
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler(f"logs/backtest_debug_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+    ]
+)
+logger = logging.getLogger(__name__)
+
 async def main():
-    """Main application entry point with error handling"""
-    try:
-        # Create logs directory
-        os.makedirs("logs", exist_ok=True)
-
-        # Initialize session state
-        init_session_state()
-
-        # Configure page
-        st.set_page_config(
-            page_title="Trading Bot",
-            layout="wide",
-            initial_sidebar_state="expanded"
-        )
-
-        # Log that the application has started
-        logger.info("Streamlit application started")
-
-        # Display log file location in the sidebar for debugging
-        log_path = os.path.join("logs", get_log_filename())
-        
-        with st.sidebar.expander("📋 Debug Info"):
-            st.info(f"Log file: {os.path.abspath(log_path)}")
-            st.info(f"Main log: {os.path.abspath('backtest_debug.log')}")
-
-        # Navigation
-        page = st.sidebar.selectbox(
-            "Select Page",
-            ["Backtest Results", "Live Trading", "Model Training", "Settings"]
-        )
-
-        # Content based on selected page
-        if page == "Live Trading":
-            await render_live_trading()
-
-        elif page == "Backtest Results":
-            backtest_results_page()
-            
-        elif page == "Model Training":
-            await model_training_page()
-
-        elif page == "Settings":
-            st.subheader("Settings")
-            st.info("Settings page under construction")
-
-        # Log successful execution
-        logger.info(f"Successfully rendered {page} page")
-
-    except Exception as e:
-        logger.error(f"Main application error: {str(e)}", exc_info=True)
-        st.error("An unexpected error occurred. Please check the logs for more information.")
+    """
+    Main entry point for the Streamlit application.
+    """
+    st.set_page_config(
+        page_title="Trading Bot UI",
+        page_icon="📈",
+        layout="wide",
+        initial_sidebar_state="expanded",
+    )
+    
+    # Initialize session state
+    init_session_state()
+    
+    logger.info("Streamlit application started")
+    
+    # Set up the sidebar
+    st.sidebar.title("Trading Bot UI")
+    
+    # Navigation in sidebar
+    page = st.sidebar.radio(
+        "Navigation", 
+        ["Dashboard", "Backtest", "Model Training", "Live Trading"]
+    )
+    
+    # Display the selected page
+    if page == "Dashboard":
+        st.title("Trading Bot Dashboard")
+        # Dashboard content here
+    
+    elif page == "Backtest":
+        from pages.Backtest import backtest_page
+        await backtest_page()
+    
+    elif page == "Model Training":
+        await model_training_page()
+    
+    elif page == "Live Trading":
+        st.title("Live Trading")
+        # Live trading content here
+    
+    # Add footer to sidebar
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### Trading Bot UI")
+    st.sidebar.markdown("v0.1.0")
+    
+    logger.info("Successfully rendered page: " + page)
 
 if __name__ == "__main__":
     asyncio.run(main())

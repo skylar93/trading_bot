@@ -33,6 +33,7 @@ class MetaNetwork(nn.Module):
     - Added support for continuous ensemble weights
     - Implemented attention mechanism for agent selection
     - Enhanced network architecture with residual connections
+    - Improved dimension handling with standardized input processing
     """
     
     def __init__(
@@ -56,6 +57,7 @@ class MetaNetwork(nn.Module):
         super().__init__()
         
         self.use_attention = use_attention
+        self.observation_dim = observation_dim
         
         # Common feature extractor
         self.feature_extractor = nn.Sequential(
@@ -109,41 +111,65 @@ class MetaNetwork(nn.Module):
                 nn.init.orthogonal_(module.weight, gain=np.sqrt(2))
                 nn.init.zeros_(module.bias)
     
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _standardize_input(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Forward pass through the network.
+        Standardize input tensor to expected dimension.
         
         Args:
-            x: Input tensor
+            x: Input tensor of any shape
             
         Returns:
-            Tuple of (action_output, value)
+            Standardized tensor of shape (batch_size, observation_dim)
         """
-        # Check if input tensor has the right shape
-        if x.dim() > 2:
-            # If we have a batch of sequences, flatten to (batch_size, -1)
-            batch_size = x.size(0)
-            x = x.reshape(batch_size, -1)
-        elif x.dim() == 1:
+        # Log original shape for debugging
+        original_shape = x.shape
+        logger.debug(f"Original input shape: {original_shape}")
+        
+        # Ensure 2D tensor (batch_size, features)
+        if x.dim() == 1:
             # If we have a single vector, add batch dimension
             x = x.unsqueeze(0)
-            
-        # Ensure the input dimension matches the expected dimension
-        expected_dim = self.feature_extractor[0].in_features
+            logger.debug(f"Added batch dimension: {x.shape}")
+        elif x.dim() > 2:
+            # If we have a batch of sequences or higher dimensions, flatten to (batch_size, -1)
+            batch_size = x.size(0)
+            x = x.reshape(batch_size, -1)
+            logger.debug(f"Flattened to 2D: {x.shape}")
+        
+        # Handle dimension mismatch with expected observation dimension
+        expected_dim = self.observation_dim
         if x.size(-1) != expected_dim:
             logger.warning(
                 f"Input dimension mismatch: got {x.size(-1)}, expected {expected_dim}. "
                 f"Reshaping input to match expected dimension."
             )
-            # Reshape or pad/truncate to match expected dimension
+            
             if x.size(-1) > expected_dim:
-                # Truncate
+                # If input is larger, truncate to expected dimension
                 x = x[..., :expected_dim]
+                logger.debug(f"Truncated to expected dimension: {x.shape}")
             else:
-                # Pad with zeros
+                # If input is smaller, pad with zeros
                 padding = torch.zeros(*x.shape[:-1], expected_dim - x.size(-1), device=x.device)
                 x = torch.cat([x, padding], dim=-1)
+                logger.debug(f"Padded to expected dimension: {x.shape}")
         
+        return x
+    
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Forward pass through the network.
+        
+        Args:
+            x: Input tensor of shape (batch_size, observation_dim) or any shape that can be standardized
+            
+        Returns:
+            Tuple of (action_output, value)
+        """
+        # Standardize input to ensure correct dimensions
+        x = self._standardize_input(x)
+        
+        # Extract features
         features = self.feature_extractor(x)
         
         # Actor output
@@ -342,6 +368,11 @@ class MetaAgent(BaseAgent):
             
         Returns:
             Dictionary of training metrics
+            
+        Recent Changes:
+            - Improved dimension handling for actions and observations
+            - Added robust error handling for tensor shape mismatches
+            - Enhanced logging for tensor shape debugging
         """
         # Extract experience
         observation = experience.get("observation")
@@ -354,23 +385,63 @@ class MetaAgent(BaseAgent):
             logger.warning("Missing required experience data for training")
             return {"policy_loss": 0.0, "value_loss": 0.0, "entropy": 0.0}
         
+        # Log input shapes for debugging
+        logger.debug(f"train_step input shapes - observation: {observation.shape}, action: {action.shape if hasattr(action, 'shape') else 'scalar'}")
+        
         # Convert to tensors
         obs_tensor = torch.FloatTensor(observation).unsqueeze(0).to(self.device)
-        action_tensor = torch.FloatTensor(action).unsqueeze(0).to(self.device)
+        
+        # Handle action tensor conversion based on type
+        if isinstance(action, np.ndarray):
+            # For array actions, maintain shape
+            action_tensor = torch.FloatTensor(action).to(self.device)
+            # Ensure action has batch dimension
+            if action_tensor.dim() == 1:
+                action_tensor = action_tensor.unsqueeze(0)
+        else:
+            # For scalar actions, convert to tensor with batch dimension
+            action_tensor = torch.FloatTensor([action]).unsqueeze(0).to(self.device)
         
         # Get log probability and value
         with torch.no_grad():
             action_output, value = self.network(obs_tensor)
             
             if self.continuous_ensemble:
+                # Ensure action dimensions match
+                if action_output.shape[-1] != action_tensor.shape[-1]:
+                    logger.warning(f"Action shape mismatch: output {action_output.shape}, action {action_tensor.shape}")
+                    
+                    # Standardize dimensions
+                    if action_output.shape[-1] > action_tensor.shape[-1]:
+                        # Pad action_tensor with zeros
+                        padding = torch.zeros(
+                            *action_tensor.shape[:-1], 
+                            action_output.shape[-1] - action_tensor.shape[-1], 
+                            device=action_tensor.device
+                        )
+                        action_tensor = torch.cat([action_tensor, padding], dim=-1)
+                        logger.debug(f"Padded action_tensor to shape: {action_tensor.shape}")
+                    else:
+                        # Truncate action_tensor
+                        action_tensor = action_tensor[..., :action_output.shape[-1]]
+                        logger.debug(f"Truncated action_tensor to shape: {action_tensor.shape}")
+                
                 # For continuous ensemble, compute log probability
                 log_prob = torch.sum(torch.log(action_output + 1e-8) * action_tensor, dim=-1, keepdim=True)
             else:
                 # For discrete selection, compute log probability from categorical
                 # Ensure action is within valid range (0 to n-1 where n is number of logits)
                 n_categories = action_output.size(-1)
-                valid_action = torch.clamp(action_tensor.long(), 0, max(0, n_categories - 1))
                 
+                # Handle different action formats
+                if action_tensor.dim() > 1 and action_tensor.size(-1) > 1:
+                    # For one-hot encoded actions, convert to indices
+                    valid_action = torch.argmax(action_tensor, dim=-1).long()
+                else:
+                    # For scalar or single-dimension actions, clamp to valid range
+                    valid_action = torch.clamp(action_tensor.long().view(-1), 0, max(0, n_categories - 1))
+                
+                # Create categorical distribution and compute log probability
                 dist = torch.distributions.Categorical(logits=action_output)
                 log_prob = dist.log_prob(valid_action.view(-1)).view(-1, 1)
         
@@ -400,6 +471,11 @@ class MetaAgent(BaseAgent):
         
         Returns:
             Dictionary of training metrics
+            
+        Recent Changes:
+            - Standardized tensor shapes for log probabilities and advantages
+            - Improved dimension handling for actions
+            - Enhanced error handling and logging
         """
         # Convert buffers to tensors
         observations = torch.FloatTensor(np.array(self.observations)).to(self.device)
@@ -409,8 +485,22 @@ class MetaAgent(BaseAgent):
         rewards = torch.FloatTensor(np.array(self.rewards)).to(self.device)
         dones = torch.FloatTensor(np.array(self.dones)).to(self.device)
         
+        # Log tensor shapes for debugging
+        logger.debug(f"_update_policy tensor shapes - observations: {observations.shape}, actions: {actions.shape}")
+        logger.debug(f"old_log_probs: {old_log_probs.shape}, old_values: {old_values.shape}")
+        
+        # Ensure old_log_probs has the right shape (batch_size, 1)
+        if old_log_probs.dim() == 1:
+            old_log_probs = old_log_probs.unsqueeze(1)
+            logger.debug(f"Reshaped old_log_probs to: {old_log_probs.shape}")
+        
         # Compute returns and advantages
         returns, advantages = self._compute_gae(rewards, old_values, dones)
+        
+        # Ensure advantages has the right shape (batch_size, 1)
+        if advantages.dim() == 1:
+            advantages = advantages.unsqueeze(1)
+            logger.debug(f"Reshaped advantages to: {advantages.shape}")
         
         # Normalize advantages
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
@@ -426,14 +516,60 @@ class MetaAgent(BaseAgent):
         
         # Compute policy loss
         if self.continuous_ensemble:
+            # Ensure action dimensions match
+            if action_output.shape[-1] != actions.shape[-1]:
+                logger.warning(f"Action shape mismatch in update: output {action_output.shape}, actions {actions.shape}")
+                
+                # Standardize dimensions
+                if action_output.shape[-1] > actions.shape[-1]:
+                    # Pad actions with zeros
+                    padding = torch.zeros(
+                        *actions.shape[:-1], 
+                        action_output.shape[-1] - actions.shape[-1], 
+                        device=actions.device
+                    )
+                    actions = torch.cat([actions, padding], dim=-1)
+                    logger.debug(f"Padded actions to shape: {actions.shape}")
+                else:
+                    # Truncate actions
+                    actions = actions[..., :action_output.shape[-1]]
+                    logger.debug(f"Truncated actions to shape: {actions.shape}")
+            
             # For continuous ensemble, compute log probability
             log_probs = torch.sum(torch.log(action_output + 1e-8) * actions, dim=-1, keepdim=True)
             entropy = -torch.sum(action_output * torch.log(action_output + 1e-8), dim=-1).mean()
         else:
             # For discrete selection, compute log probability from categorical
+            # Handle different action formats
+            if actions.dim() > 1 and actions.size(-1) > 1:
+                # For one-hot encoded actions, convert to indices
+                action_indices = torch.argmax(actions, dim=-1).long()
+            else:
+                # For scalar or single-dimension actions, clamp to valid range
+                n_categories = action_output.size(-1)
+                action_indices = torch.clamp(actions.long().view(-1), 0, max(0, n_categories - 1))
+            
+            # Create categorical distribution and compute log probability
             dist = torch.distributions.Categorical(logits=action_output)
-            log_probs = dist.log_prob(actions.view(-1)).view(-1, 1)
+            log_probs = dist.log_prob(action_indices).view(-1, 1)
             entropy = dist.entropy().mean()
+        
+        # Ensure log_probs and old_log_probs have the same shape
+        if log_probs.shape != old_log_probs.shape:
+            logger.warning(f"Log prob shape mismatch: current {log_probs.shape}, old {old_log_probs.shape}")
+            
+            # Standardize to 2D (batch_size, 1)
+            log_probs = log_probs.view(-1, 1)
+            old_log_probs = old_log_probs.view(-1, 1)
+            logger.debug(f"Standardized log_probs to: {log_probs.shape}, old_log_probs to: {old_log_probs.shape}")
+        
+        # Ensure advantages has the right shape for the computation
+        if advantages.shape != log_probs.shape:
+            logger.warning(f"Advantages shape mismatch: advantages {advantages.shape}, log_probs {log_probs.shape}")
+            
+            # Standardize to match log_probs shape
+            advantages = advantages.view(*log_probs.shape)
+            logger.debug(f"Standardized advantages to shape: {advantages.shape}")
         
         # Compute ratio and clipped loss
         ratio = torch.exp(log_probs - old_log_probs)

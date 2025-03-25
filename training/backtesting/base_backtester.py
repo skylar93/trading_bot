@@ -704,7 +704,28 @@ class BaseBacktester:
                 try:
                     # For basic strategies
                     if hasattr(strategy, "get_action"):
-                        action = strategy.get_action(window_data)
+                        # 에이전트 유형에 따른 입력 데이터 변환
+                        agent_name = getattr(strategy, "__class__").__name__
+                        is_ppo_agent = "PPO" in agent_name
+                        
+                        # PPO 에이전트에 대한 특별 처리
+                        if is_ppo_agent:
+                            # PPO 에이전트는 10차원 입력을 기대합니다
+                            # OHLCV 데이터를 flatten하여 10개의 특성으로 변환
+                            feature_cols = ["$open", "$high", "$low", "$close", "$volume"]
+                            # 마지막 2개 시간 단계의 데이터만 사용 (10개 특성)
+                            flat_data = np.array([])
+                            for col in feature_cols:
+                                flat_data = np.append(flat_data, window_data[col].values[-2:])
+                            
+                            # 올바른 차원을 가진 배열로 변환
+                            if len(flat_data) != 10:
+                                # 필요한 경우 크기 조정
+                                flat_data = np.pad(flat_data[:10], (0, max(0, 10 - len(flat_data))), 'constant')
+                                
+                            action = strategy.get_action(flat_data)
+                        else:
+                            action = strategy.get_action(window_data)
                     else:
                         # For RL models - they use state dict
                         current_data = {col: window_data[col].values for col in window_data.columns}

@@ -89,6 +89,12 @@ class MultiAssetTradingEnv(gym.Env):
             portfolio_constraints: Dictionary of constraints for portfolio weights
         """
         super().__init__()
+
+        # Initialize logger
+        self.logger = logging.getLogger(self.__class__.__name__)
+        
+        # Initialize logger
+        self.logger = logging.getLogger(self.__class__.__name__)
         
         self.window_size = window_size
         self.initial_balance = initial_balance
@@ -134,9 +140,6 @@ class MultiAssetTradingEnv(gym.Env):
         
         # Initialize risk manager
         self.risk_manager = risk_manager
-        
-        # Setup logger
-        self.logger = logging.getLogger(self.__class__.__name__)
         
         # Process and validate input DataFrames
         self.asset_dfs = self._process_dfs(self._input_dfs)

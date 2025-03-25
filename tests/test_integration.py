@@ -144,7 +144,6 @@ def test_config_to_training_flow(test_config, sample_data):
             assert len(results["episode_rewards"]) > 0
 
 @pytest.mark.integration
-@pytest.mark.skip(reason="Requires MLflow setup")
 def test_checkpoint_resume_flow(test_config, sample_data):
     """
     Test that we can resume training from a checkpoint.

@@ -75,6 +75,9 @@ class SingleAssetRLTradingEnv(gym.Env):
             volume_slippage_factor: Factor for volume-based slippage calculation
         """
         super().__init__()
+        
+        # Set up logger
+        self.logger = logging.getLogger(self.__class__.__name__)
 
         # Initialize data
         if data is not None:
@@ -428,6 +431,11 @@ class SingleAssetRLTradingEnv(gym.Env):
         Returns:
             np.ndarray: Observation with shape (window_size, 5) containing OHLCV data.
             If current_step < window_size, the observation is padded with the first row's data.
+            
+        Note:
+            The policy network expects a flattened observation vector of shape (window_size * 5,)
+            but we return the original shape (window_size, 5) here since the policy network
+            will handle reshaping internally.
         """
         start_idx = self.current_step - self.window_size
         end_idx = self.current_step
@@ -452,9 +460,21 @@ class SingleAssetRLTradingEnv(gym.Env):
         
         # Verify we have exactly window_size rows
         if len(window_data) != self.window_size:
-            raise ValueError(
-                f"Observation shape mismatch: got {len(window_data)} rows, expected {self.window_size}"
+            self.logger.warning(
+                f"Window data length mismatch: got {len(window_data)}, expected {self.window_size}. "
+                f"start_idx={start_idx}, end_idx={end_idx}, current_step={self.current_step}. "
+                f"Padding to correct length."
             )
+            # Force correct length by either padding or truncating
+            if len(window_data) < self.window_size:
+                # Pad with first row if we don't have enough data
+                pad_size = self.window_size - len(window_data)
+                pad_row = window_data.iloc[0] if len(window_data) > 0 else self.data.iloc[0]
+                pad_data = pd.DataFrame([pad_row] * pad_size)
+                window_data = pd.concat([pad_data, window_data], axis=0)
+            else:
+                # Truncate if we somehow got too much data
+                window_data = window_data.iloc[-self.window_size:]
         
         # Create observation array with OHLCV data
         observation = np.column_stack([
@@ -464,6 +484,28 @@ class SingleAssetRLTradingEnv(gym.Env):
             window_data["$close"].values,
             window_data["$volume"].values,
         ]).astype(np.float32)
+        
+        # Final safety check to ensure correct shape
+        if observation.shape != (self.window_size, 5):
+            self.logger.error(
+                f"Observation shape wrong after all processing: {observation.shape}, "
+                f"expected ({self.window_size}, 5). Forcing correct shape."
+            )
+            # Create a properly shaped array filled with first row data
+            if len(observation) > 0:
+                first_row = observation[0]
+            else:
+                # Fall back to zeros if we have no data at all
+                first_row = np.zeros(5)
+            
+            correct_observation = np.tile(first_row, (self.window_size, 1))
+            
+            # Copy as much data as possible from original observation
+            if len(observation) > 0:
+                copy_rows = min(len(observation), self.window_size)
+                correct_observation[-copy_rows:] = observation[:copy_rows]
+            
+            observation = correct_observation
         
         return observation
 

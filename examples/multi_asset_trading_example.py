@@ -37,7 +37,7 @@ from envs.multi_asset_env import MultiAssetTradingEnv
 from envs.multi_agent_env import MultiAgentTradingEnv
 from envs.capital_manager import CapitalManager, MultiAssetCapitalManager
 from agents.strategies.asset_specific_agents import AssetSpecificAgentFactory
-from networks.multi_asset_policy import MultiAssetLSTMPolicy, MultiAssetAttentionPolicy
+from agents.models.architectures.multi_asset_policy import MultiAssetLSTMPolicy, MultiAssetAttentionPolicy
 from data.utils.multi_asset_data_loader import MultiAssetDataLoader
 
 def load_example_data(start_date='2023-01-01', end_date='2023-01-31'):

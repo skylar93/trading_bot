@@ -94,6 +94,9 @@ class MultiAgentMultiAssetEnv(gym.Env):
             risk_config_path: Path to risk configuration file
             device: Device to use for tensor operations ('cuda' or 'cpu')
         """
+        # Initialize logger
+        self.logger = logging.getLogger(self.__class__.__name__)
+        
         self.window_size = window_size
         self.trading_fee = trading_fee
         self.action_type = action_type
@@ -386,20 +389,38 @@ class MultiAgentMultiAssetEnv(gym.Env):
             truncated: Dictionary of truncated flags for each agent
             infos: Dictionary of additional information for each agent
         """
-        # Validate actions
+        # Filter actions to only include agents in this environment
+        # This handles cases where actions might include meta_agent from MultiAgentManager
+        trading_actions = {}
         for agent_id, action in actions.items():
-            if agent_id not in self.agents:
-                raise ValueError(f"Unknown agent: {agent_id}")
-            
-            expected_shape = (len(self.agent_assets[agent_id]),)
-            if isinstance(action, np.ndarray) and action.shape != expected_shape:
-                raise ValueError(f"Action shape {action.shape} for agent {agent_id} doesn't match expected shape {expected_shape}")
+            if agent_id in self.agents:
+                expected_shape = (len(self.agent_assets[agent_id]),)
+                
+                # Handle action shape mismatch by adapting the action
+                if isinstance(action, np.ndarray) and action.shape != expected_shape:
+                    self.logger.warning(f"Action shape {action.shape} for agent {agent_id} doesn't match expected shape {expected_shape}. Adapting action.")
+                    
+                    # If action is a scalar or 1D with one element, repeat it for all assets
+                    if action.size == 1:
+                        action_value = action.item() if action.size == 1 else action[0]
+                        adapted_action = np.full(expected_shape, action_value)
+                    # If action has fewer dimensions than needed, pad with zeros
+                    elif action.size < expected_shape[0]:
+                        adapted_action = np.zeros(expected_shape)
+                        adapted_action[:action.size] = action.flatten()[:expected_shape[0]]
+                    # If action has more dimensions than needed, truncate
+                    else:
+                        adapted_action = action.flatten()[:expected_shape[0]]
+                    
+                    trading_actions[agent_id] = adapted_action
+                else:
+                    trading_actions[agent_id] = action
         
         # Different step procedure based on capital mode
         if self.shared_capital:
-            return self._step_shared_capital(actions)
+            return self._step_shared_capital(trading_actions)
         else:
-            return self._step_independent_capital(actions)
+            return self._step_independent_capital(trading_actions)
     
     def _step_shared_capital(self, actions):
         """

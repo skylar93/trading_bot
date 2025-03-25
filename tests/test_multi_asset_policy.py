@@ -12,7 +12,7 @@ from gymnasium.spaces import Box
 # Add project root to Python path
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
-from networks.multi_asset_policy import MultiAssetLSTMPolicy, MultiAssetAttentionPolicy
+from agents.models.architectures.multi_asset_policy import MultiAssetLSTMPolicy, MultiAssetAttentionPolicy
 
 # Set random seeds for reproducibility
 np.random.seed(42)

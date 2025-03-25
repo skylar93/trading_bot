@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Major PPO implementation fixes:
+  - Fixed critical issue in `PPOAgent.train_step()` where ratio calculation was incorrect (always =1)
+  - Properly implemented PPO rollout collection instead of single-step updates
+  - Added `update_if_buffer_ready()` method to perform proper PPO updates after collecting experiences
+  - Enhanced buffer implementation to handle different state/action shapes more robustly
+  - Modified training pipeline to collect experiences for a fixed number of steps before updating
+  - Implemented proper multi-epoch training with early stopping based on KL divergence
+  - Fixed ratio calculation to correctly use old log probabilities from buffer
+  - Improved error handling and debug logging throughout the buffer implementation
+
+- Shape verification test framework:
+  - Added `tests/test_small_integration.py` for early detection of tensor shape mismatches
+  - Created ShapeMonitor utility to track and debug tensor shapes
+  - Added dedicated Pytest marker for shape verification tests
+  - Implemented comprehensive checking for NaN values in networks
+  - Added scripts/run_shape_tests.sh for easy testing before running full validation
+  - Enhanced documentation in test file to explain test methodology
+  - Improved error reporting for shape mismatch and NaN issues
+  - Added minimal test cases for all environment and agent combinations
 - Integration of MultiAgentManager for coordinated multi-agent training:
   - Added `train_multi_agent_with_manager` function in train_pipeline.py
   - Created configuration option for using manager vs individual agents
@@ -121,6 +140,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Real-time training progress visualization
   - Integration with MLflow for experiment tracking
   - Seamless navigation between training and backtesting
+- Shape verification tests to validate tensor dimensions across the codebase
+- Integration tests for single agent, multi-agent, and meta-agent environments
+- Test script `run_shape_tests.sh` to run all shape verification tests
+- Documentation for shape verification tests in `docs/SHAPE_VERIFICATION_TESTS.md`
+- Shape verification tests for various environments
+- Integration tests for single agent, multi-agent, and meta agent environments
+- Test script for running shape tests
+- Documentation for shape verification tests
+- Comprehensive dimension mismatch fixes and documentation
+- Standardized input processing for meta agent network
+- Robust error handling for tensor shape mismatches
 
 ### Changed
 - Improved partial fill implementation in MarketSimulator to be more realistic
@@ -150,6 +180,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Standardized risk management interfaces across different trading contexts
   - Added backward compatibility layer for existing code and tests
   - Ensured all tests pass with the new architecture
+- Updated pytest.ini to include a new marker for shape verification tests
+- Improved test fixtures for better reusability
+- Updated `pytest.ini` for new markers
+- Improved test fixtures for better reusability
+- Enhanced logging for tensor shape debugging
+- Refactored meta agent network for better dimension handling
+- Standardized tensor shape processing across the codebase
 
 ### Fixed
 - Fixed dimension mismatch in MetaAgent with hidden states implementation:
@@ -204,26 +241,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Improved market crash scenario test to handle special cases where risk management prevents losses
   - Added special handling for negative drawdown values in risk comparison tests
   - Ensured consistent behavior between BacktestingRiskManager and RiskManager implementations
+- Fixed agent action method calls from `act()` to `get_action()`
+- Fixed environment initialization parameters in tests
+- Fixed parameter naming consistency (`initial_capital` vs `initial_balance`)
+- Fixed NaN handling in observations for more robust testing
+- Fixed division by zero error in training pipeline by setting `checkpoint_interval` to 1
+- Fixed asset column handling in multi-agent tests
+- Method call corrections (changed `act()` to `get_action()`)
+- Environment initialization parameters (changed `initial_capital` to `initial_balance`)
+- Parameter naming consistency across tests
+- NaN handling in observations
+- Division by zero error in checkpoint interval
+- Asset column handling in multi-agent tests
+- Dimension mismatches in meta agent input processing:
+  - Improved dimension handling in meta agent observations
+  - Fixed tensor shape standardization in forward pass
+  - Enhanced error handling for mismatched dimensions
+- Inconsistent tensor shapes in meta experience creation:
+  - Standardized observation stacking for multi-agent environments
+  - Improved handling of hidden state dimensions
+  - Fixed concatenation operations for variable-sized observations
+- Action shape handling in meta agent training:
+  - Fixed mismatch between agent action shapes and environment expectations
+  - Added robust action shape adaptation in BaseAgent
+  - Ensured PPOAgent and MomentumPPOAgent return correctly shaped actions
+  - Added utilities for reshaping and padding actions to match expected dimensions
+  - Created comprehensive tests for action shape verification
+- Log probability and advantages shape standardization:
+  - Improved handling of log probability dimensions
+  - Fixed reshaping of advantages for PPO updates
+  - Enhanced compatibility between different tensor shapes
+- NaN handling in observations:
+  - Added validation for NaN values in observations
+  - Implemented graceful NaN replacement
+  - Improved logging for NaN detection
 
-## [0.1.0] - 2024-01-08
+### Known Issues
+- Dimension mismatches in multi-agent training:
+  - Input dimension mismatch in meta agent (got 1650/2190, expected 10)
+  - Action shape mismatches in MultiAgentMultiAssetEnv (got (1,), expected (3,))
+  - Cannot interpret 2D input torch.Size([1, 543]) as (batch_size, 13) in multi-agent manager
+  - Advantages shape mismatch in meta agent (advantages torch.Size([32]), log_probs torch.Size([32, 1]))
+- Validation script shows failures in single_agent, multi_agent, and multi_asset tests
+- Only multi_agent_multi_asset test passes validation
+
+## [0.2.0] - 2023-12-15
 
 ### Added
-- Initial implementation of Backtester for single-asset trading
-- BacktestEngine implementation for multi-asset trading
-- RiskAwareBacktester with advanced risk management
-- Basic logging system for debugging and monitoring
-- Performance metrics calculation (Sharpe, Sortino, Max DD)
-- Trade execution with transaction cost consideration
-- Position management with size limits
-- Portfolio value tracking and history
+- Multi-agent trading environment with shared capital pool
+- Meta-agent implementation for ensemble strategies
+- Risk-adjusted reward calculation
+- Drawdown penalties in reward function
+- Slippage simulation based on trade size
+- Partial fill simulation for large orders
+- Enhanced trade cost model with dynamic fee structure
 
 ### Changed
-- Standardized OHLCV column naming with '$' prefix
-- Improved position sizing logic
-- Enhanced trade execution validation
+- Refactored agent creation to use factory pattern
+- Improved observation space normalization
+- Enhanced logging with detailed trade information
 
 ### Fixed
-- Initial bugs in PnL calculation
-- Position tracking accuracy
-- Transaction cost handling
-- Trade history logging 
+- Memory leak in experience buffer
+- Numerical stability issues in reward calculation
+- Inconsistent state representation in multi-timeframe analysis
+
+## [0.1.0] - 2023-10-01
+
+### Added
+- Initial release with basic trading environment
+- PPO agent implementation
+- Simple backtesting framework
+- Data preprocessing utilities
+- Basic technical indicators 

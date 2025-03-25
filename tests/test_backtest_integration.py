@@ -65,6 +65,27 @@ def create_test_settings(agent_name: str) -> dict:
             "initial_balance": 10000,
             "trading_fee": 0.001
         }
+    elif agent_name == "PPO":
+        # PPO 에이전트에는 1D 형태의 관측 공간을 사용합니다 (10차원 입력)
+        return {
+            "agent_name": agent_name,
+            "agent_config": {
+                "observation_space": gym.spaces.Box(
+                    low=-np.inf, high=np.inf,
+                    shape=(10,), dtype=np.float32  # 10차원 입력
+                ),
+                "action_space": gym.spaces.Box(
+                    low=-1.0, high=1.0,
+                    shape=(1,), dtype=np.float32
+                ),
+                "learning_rate": 0.001,
+                "batch_size": 64
+            },
+            "max_position_size": 100,
+            "stop_loss": 10,
+            "initial_balance": 10000,
+            "trading_fee": 0.001
+        }
     else:
         return {
             "agent_name": agent_name,

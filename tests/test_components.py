@@ -259,9 +259,13 @@ class TestPPOAgent:
             agent.train_step(state, action, reward, next_state, done)
             assert len(agent.buffer) == i + 1, f"Buffer should have {i + 1} experiences during filling"
         
-        # Test training and buffer reset
-        agent.train_step(state, action, reward, next_state, done)  # This should trigger training
-        assert len(agent.buffer) == 0, "Buffer should be empty after training"
+        # Add final experience to reach BATCH_SIZE
+        agent.train_step(state, action, reward, next_state, done)
+        assert len(agent.buffer) == BATCH_SIZE, "Buffer should be full"
+        
+        # Explicitly call update_if_buffer_ready to trigger training and buffer reset
+        metrics = agent.update_if_buffer_ready()
+        assert len(agent.buffer) == 0, "Buffer should be empty after update"
         
         # Test buffer starts filling again
         agent.train_step(state, action, reward, next_state, done)

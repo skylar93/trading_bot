@@ -19,7 +19,7 @@ from typing import Dict, List, Tuple
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from envs.multi_asset_env import MultiAssetTradingEnv
-from networks.multi_asset_policy import MultiAssetLSTMPolicy, MultiAssetAttentionPolicy
+from agents.models.architectures.multi_asset_policy import MultiAssetLSTMPolicy, MultiAssetAttentionPolicy
 
 # 로깅 설정
 logging.basicConfig(

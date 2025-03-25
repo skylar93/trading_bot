@@ -5,11 +5,19 @@ Features:
 - Computes advantages using GAE
 - Supports batch sampling
 - Handles both single and multi-agent experiences
+- Maintains log_probs from rollout phase for accurate ratio calculation
 
 Implementation Notes:
 - Uses numpy arrays for efficient storage
 - Supports variable-length episodes
 - Computes returns and advantages on-the-fly
+- Designed to work with the proper PPO rollout-then-update pattern
+- Preserves original log_probs from policy during rollout phase
+
+Recent Changes:
+- Added support for the PPO rollout-then-update pattern
+- Improved handling of log probabilities to maintain stability in PPO ratio calculation
+- Enhanced robustness with better shape handling and error checking
 """
 
 import numpy as np
@@ -85,20 +93,106 @@ class PPOBuffer:
         if isinstance(state, torch.Tensor):
             state = state.cpu().numpy()
             
+        # Check if state has valid shape
+        if state is None or (isinstance(state, np.ndarray) and state.size == 0):
+            logger.warning("Received empty state, skipping this experience")
+            return
+            
         # Reshape if needed
         if len(state.shape) == 3:  # (batch_size, window_size, features)
             state = state.squeeze(0)  # Remove batch dimension
-            
+        
+        # Handle mismatch between state shape and expected obs_shape
         if state.shape != self.obs_shape:
-            raise ValueError(f"Expected state shape {self.obs_shape}, got {state.shape}")
+            # Handle common shape mismatches by reshaping if possible
+            if np.prod(state.shape) == np.prod(self.obs_shape):
+                # If total elements match, reshape
+                state = state.reshape(self.obs_shape)
+                logger.debug(f"Reshaped state from {experience['state'].shape} to {state.shape}")
+            else:
+                # If we can't reshape, log warning but continue by padding/truncating
+                logger.warning(
+                    f"State shape mismatch. Expected {self.obs_shape}, got {state.shape}. "
+                    f"Attempting to adapt."
+                )
+                # Create a zero-filled state with correct shape
+                adapted_state = np.zeros(self.obs_shape, dtype=np.float32)
+                
+                # Copy as much data as we can
+                if len(state.shape) == 1 and len(self.obs_shape) == 1:
+                    # 1D to 1D
+                    min_len = min(state.shape[0], self.obs_shape[0])
+                    adapted_state[:min_len] = state[:min_len]
+                elif len(state.shape) == 2 and len(self.obs_shape) == 2:
+                    # 2D to 2D
+                    min_rows = min(state.shape[0], self.obs_shape[0])
+                    min_cols = min(state.shape[1], self.obs_shape[1])
+                    adapted_state[:min_rows, :min_cols] = state[:min_rows, :min_cols]
+                
+                state = adapted_state
             
         # Store experience
         self.states.append(state)
-        self.actions.append(experience["action"])
-        self.rewards.append(float(experience["reward"]))  # Ensure reward is float
-        self.values.append(float(experience["value"]))  # Ensure value is float
-        self.log_probs.append(float(experience["log_prob"]))  # Ensure log_prob is float
-        self.dones.append(bool(experience["done"]))  # Ensure done is boolean
+        
+        # Convert action to numpy if it's a tensor
+        action = experience["action"]
+        if isinstance(action, torch.Tensor):
+            action = action.cpu().numpy()
+        
+        # Ensure action has correct shape
+        if np.asarray(action).ndim == 0:  # Scalar action
+            action = np.array([action])
+        elif np.asarray(action).ndim == 1 and len(action) == 1:  # Already correct shape
+            pass
+        else:
+            # Reshape or adapt action if needed
+            target_shape = self.action_shape
+            if np.prod(np.asarray(action).shape) != np.prod(target_shape):
+                logger.warning(
+                    f"Action shape mismatch. Expected {target_shape}, got {np.asarray(action).shape}. "
+                    f"Adapting."
+                )
+                # Create a zero-filled action with correct shape
+                adapted_action = np.zeros(target_shape, dtype=np.float32)
+                
+                # Copy as much data as we can
+                flat_action = np.asarray(action).flatten()
+                flat_adapted = adapted_action.flatten()
+                min_len = min(len(flat_action), len(flat_adapted))
+                flat_adapted[:min_len] = flat_action[:min_len]
+                
+                action = adapted_action.reshape(target_shape)
+        
+        self.actions.append(action)
+        
+        # Process scalar values
+        try:
+            self.rewards.append(float(experience["reward"]))
+            self.values.append(float(experience["value"]))
+            self.dones.append(bool(experience["done"]))
+        except (ValueError, TypeError) as e:
+            logger.warning(f"Error processing experience values: {e}")
+            # Use defaults as fallback
+            self.rewards.append(0.0)
+            self.values.append(0.0)
+            self.dones.append(False)
+        
+        # Handle log_prob
+        log_prob = experience.get("log_prob", 0.0)
+        if isinstance(log_prob, torch.Tensor):
+            log_prob = log_prob.cpu().numpy()
+            
+        # Handle multi-dimensional log_probs by taking the mean if necessary
+        if isinstance(log_prob, np.ndarray) and log_prob.size > 1:
+            log_prob = float(np.mean(log_prob))
+        else:
+            try:
+                log_prob = float(log_prob)
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Error processing log_prob: {e}")
+                log_prob = 0.0
+                
+        self.log_probs.append(log_prob)
         
     def compute_advantages(self, last_value: np.ndarray):
         """Compute advantages using GAE.

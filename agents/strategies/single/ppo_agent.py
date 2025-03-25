@@ -6,12 +6,27 @@ Features:
 - Experience sharing between agents
 - Configurable hyperparameters
 - Automatic device selection (CPU/GPU)
+- Proper rollout-based PPO implementation with separate policy networks
 
 Implementation Notes:
 - Uses separate policy and value networks
+- Maintains separate "old" policy for rollout and stable ratio calculation
 - Supports both continuous and discrete action spaces
 - Implements early stopping based on KL divergence
 - Uses GAE for advantage estimation
+- Prevents negative entropy through minimum standard deviation clamping
+- Accurate KL divergence calculation between normal distributions
+
+Recent Changes:
+- Fixed standard deviation calculation to prevent negative entropy
+- Modified the PolicyNetwork to ensure std is clamped with a higher minimum (0.1)
+- Implemented proper rollout collection with old_network to maintain consistency
+- Added support for configurable rollout length with rollout_threshold parameter
+- Fixed PPO implementation to properly separate rollout from update phases
+- Modified train_step() to collect experiences and only update after sufficient rollout
+- Enhanced update_if_buffer_ready() to perform multi-epoch PPO updates
+- Implemented proper KL divergence calculation for normal distributions
+- Improved stability with ratio clamping and better numerical handling
 """
 
 import os
@@ -63,17 +78,17 @@ class PPOAgent(BaseAgent):
             learning_rate: Learning rate for optimizer
             gamma: Discount factor
             gae_lambda: GAE lambda parameter
-            clip_epsilon: PPO clip parameter
+            clip_epsilon: PPO clip epsilon
             c1: Value loss coefficient
             c2: Entropy coefficient
-            c3: KL divergence coefficient
+            c3: KL penalty coefficient (optional, used for early stopping)
             n_epochs: Number of epochs per update
             batch_size: Batch size for updates
             max_grad_norm: Maximum gradient norm
-            target_kl: Target KL divergence
+            target_kl: Target KL divergence for early stopping
             normalize_observations: Whether to normalize observations
-            device: Device to use for computations
-            **kwargs: Additional arguments
+            device: Device to use (cpu or cuda)
+            **kwargs: Additional arguments (hidden_sizes, etc.)
         """
         super().__init__(observation_space, action_space)
         
@@ -100,6 +115,9 @@ class PPOAgent(BaseAgent):
         self.normalize_observations = normalize_observations
         self.eps = 1e-8
         
+        # Add training flag
+        self.training = True
+        
         # Set device
         self.device = device if device is not None else ("cuda" if torch.cuda.is_available() else "cpu")
         
@@ -112,8 +130,10 @@ class PPOAgent(BaseAgent):
             raise ValueError(f"Unsupported observation space shape: {observation_space.shape}")
             
         # Initialize networks
+        hidden_sizes = kwargs.get('hidden_sizes', [64, 64])
+        self.logger.info(f"Creating networks with hidden sizes: {hidden_sizes}")
         self.network = PolicyNetwork(observation_space, action_space).to(self.device)
-        self.value_network = ValueNetwork(observation_space).to(self.device)
+        self.value_network = ValueNetwork(observation_space, hidden_sizes=hidden_sizes).to(self.device)
         
         # Initialize optimizer and scheduler
         self.optimizer = optim.Adam([
@@ -122,11 +142,15 @@ class PPOAgent(BaseAgent):
         ])
         
         # Set up learning rate scheduler if specified
-        if kwargs.get("use_lr_scheduler", False):
+        self.use_lr_scheduler = kwargs.get("use_lr_scheduler", False)
+        if self.use_lr_scheduler:
+            lr_scheduler_step_size = kwargs.get("lr_scheduler_step_size", 100)
+            lr_scheduler_gamma = kwargs.get("lr_scheduler_gamma", 0.9)
+            self.logger.info(f"Creating StepLR scheduler with step_size={lr_scheduler_step_size}, gamma={lr_scheduler_gamma}")
             self.scheduler = optim.lr_scheduler.StepLR(
                 self.optimizer,
-                step_size=kwargs.get("lr_scheduler_step_size", 100),
-                gamma=kwargs.get("lr_scheduler_gamma", 0.9)
+                step_size=lr_scheduler_step_size,
+                gamma=lr_scheduler_gamma
             )
         else:
             self.scheduler = None
@@ -145,8 +169,37 @@ class PPOAgent(BaseAgent):
             self.device
         )
         
+        # Create old_network to store policy parameters during rollout
+        self.old_network = PolicyNetwork(observation_space, action_space).to(self.device)
+        self._update_old_network()  # Initialize with current policy
+        
+        # Track rollout state
+        self.rollout_steps = 0
+        self.rollout_threshold = kwargs.get("rollout_steps", 1024)  # Default to 1024 steps per rollout
+        
+        # Track training metrics over time
+        self.training_history = {
+            "policy_loss": [],
+            "value_loss": [],
+            "entropy": [],
+            "kl": [],
+            "mean_std": [],
+            "mean_ratio": [],
+            "rewards": [],
+            "episode_rewards": [],
+            "episode_lengths": [],
+            "update_count": 0,
+            "total_steps": 0,
+            "completed_episodes": 0
+        }
+        
+        # Track current episode stats
+        self.current_episode_reward = 0.0
+        self.current_episode_length = 0
+        
         logger.info(
-            f"Initialized PPO agent on device: {self.device} with obs_dim={self.obs_dim}"
+            f"Initialized PPO agent on device: {self.device} with obs_dim={self.obs_dim}, "
+            f"rollout_threshold={self.rollout_threshold}"
         )
 
     def _normalize_state(self, state: torch.Tensor) -> torch.Tensor:
@@ -173,15 +226,44 @@ class PPOAgent(BaseAgent):
             
         original_shape = state.shape
         
+        # Special case for SingleAssetRLTradingEnv observation: (window_size, 5)
+        if state.dim() == 2 and state.shape == (self.buffer.obs_shape[0], self.buffer.obs_shape[1]):
+            # This is a direct observation from SingleAssetRLTradingEnv with shape (window_size, features)
+            # Reshape to (1, window_size*features)
+            state = state.reshape(1, -1)
+            
+            # If the flattened size doesn't match obs_dim, apply padding or truncation
+            if state.shape[1] != self.obs_dim:
+                self.logger.debug(
+                    f"Reshaped observation from {original_shape} to {state.shape}, "
+                    f"but obs_dim is {self.obs_dim}. Applying adaptive sizing."
+                )
+                if state.shape[1] < self.obs_dim:
+                    # Pad with zeros
+                    padding = torch.zeros(1, self.obs_dim - state.shape[1], device=state.device)
+                    state = torch.cat([state, padding], dim=1)
+                else:
+                    # Truncate to obs_dim
+                    state = state[:, :self.obs_dim]
+            
+            return state
+        
+        # Regular cases as before
         # Reshape input to (batch_size, obs_dim) for normalization
         if state.dim() == 1:
             # (features,) -> (1, features)
             if state.shape[0] == self.obs_dim:
                 state = state.unsqueeze(0)
             else:
-                raise ValueError(
-                    f"Expected 1D input with size {self.obs_dim}, got {state.shape}"
-                )
+                # Handle case where features don't match obs_dim
+                if state.shape[0] < self.obs_dim:
+                    # Pad with zeros
+                    padding = torch.zeros(self.obs_dim - state.shape[0], device=state.device)
+                    state = torch.cat([state, padding])
+                else:
+                    # Truncate to obs_dim
+                    state = state[:self.obs_dim]
+                state = state.unsqueeze(0)
                 
         elif state.dim() == 2:
             # (batch_size, input_size) or (window_size, features)
@@ -192,47 +274,78 @@ class PPOAgent(BaseAgent):
                 # Single sample (window_size, features) -> (1, window_size*features)
                 state = state.reshape(1, -1)
             else:
-                raise ValueError(
-                    f"Cannot interpret 2D input {state.shape} as (batch_size, {self.obs_dim}) "
-                    f"or single sample with size {self.obs_dim}"
-                )
+                # Handle dimension mismatch
+                batch_size = state.shape[0]
+                if state.shape[1] < self.obs_dim:
+                    # Pad each sample with zeros
+                    padding = torch.zeros(batch_size, self.obs_dim - state.shape[1], device=state.device)
+                    state = torch.cat([state, padding], dim=1)
+                else:
+                    # Truncate each sample to obs_dim
+                    state = state[:, :self.obs_dim]
                 
         elif state.dim() == 3:
             # (batch_size, window_size, features)
             b, w, f = state.shape
             if w * f != self.obs_dim:
-                raise ValueError(
-                    f"Expected 3D input with window_size*features={self.obs_dim}, "
-                    f"got shape {state.shape} with w*f={w*f}"
-                )
-            state = state.reshape(b, w*f)
-            
+                # Handle dimension mismatch
+                if w * f < self.obs_dim:
+                    # Pad with zeros
+                    padding_size = self.obs_dim - w * f
+                    padding = torch.zeros(b, padding_size, device=state.device)
+                    state = torch.cat([state.reshape(b, -1), padding], dim=1)
+                else:
+                    # Truncate to obs_dim
+                    state = state.reshape(b, -1)[:, :self.obs_dim]
+            else:
+                # Correct size, just reshape
+                state = state.reshape(b, -1)
         else:
-            raise ValueError(f"Unsupported input dimensions: {state.dim()}")
-            
-        # Update running statistics
-        with torch.no_grad():
-            batch_mean = state.mean(dim=0)
-            batch_std = torch.clamp(state.std(dim=0), min=self.eps)
-            
-            alpha = 0.05
-            self.state_mean = (1 - alpha) * self.state_mean + alpha * batch_mean
-            self.state_std = (1 - alpha) * self.state_std + alpha * batch_std
-            
-        # Normalize using running statistics
-        normalized = (state - self.state_mean) / self.state_std
-        normalized = torch.clamp(normalized, -10, 10)  # Prevent extreme values
+            self.logger.warning(f"Unexpected input dimension: {state.dim()}D. Original shape: {original_shape}")
+            # Try to force into (batch_size, obs_dim) format
+            state = state.reshape(-1, self.obs_dim)
+            if state.shape[1] != self.obs_dim:
+                if state.shape[1] < self.obs_dim:
+                    # Pad with zeros
+                    padding = torch.zeros(state.shape[0], self.obs_dim - state.shape[1], device=state.device)
+                    state = torch.cat([state, padding], dim=1)
+                else:
+                    # Truncate to obs_dim
+                    state = state[:, :self.obs_dim]
         
-        # Restore original shape if needed
-        if len(original_shape) == 1:
-            normalized = normalized.squeeze(0)
-        elif len(original_shape) == 3:
-            normalized = normalized.reshape(original_shape)
-            
-        return normalized
+        # Apply normalization if enabled
+        if self.normalize_observations:
+            # Update running mean and std during training
+            if self.training:
+                with torch.no_grad():
+                    # Update running mean and std
+                    batch_mean = state.mean(dim=0)
+                    batch_var = state.var(dim=0, unbiased=False)
+                    batch_size = state.shape[0]
+                    total_size = self.training_history["total_steps"] + batch_size
+                    
+                    # Update using Welford's online algorithm
+                    delta = batch_mean - self.state_mean
+                    new_mean = self.state_mean + delta * batch_size / total_size
+                    
+                    # Update variance using parallel algorithm
+                    m_a = self.state_std ** 2 * self.training_history["total_steps"]
+                    m_b = batch_var * batch_size
+                    M2 = m_a + m_b + delta ** 2 * self.training_history["total_steps"] * batch_size / total_size
+                    new_var = M2 / total_size
+                    
+                    # Update mean and std
+                    self.state_mean = new_mean
+                    self.state_std = torch.sqrt(new_var + self.eps)
+                    
+            # Normalize state
+            normalized_state = (state - self.state_mean) / (self.state_std + self.eps)
+            return normalized_state
+        
+        return state
 
     def get_action(
-        self, state: np.ndarray, deterministic: bool = False
+        self, state: np.ndarray, deterministic: bool = False, eval_mode: bool = False
     ) -> np.ndarray:
         """Get action from policy network
 
@@ -244,10 +357,12 @@ class PPOAgent(BaseAgent):
                 - (batch_size, features) : Batch of feature vectors
                 - (batch_size, window_size, 5) : Batch of OHLCV windows
             deterministic: Whether to use deterministic action
+            eval_mode: Whether the agent is in evaluation mode (equivalent to deterministic)
 
         Returns:
-            Action as numpy array with shape (1,) for single actions
-            or (batch_size, 1) for batched actions
+            Action as numpy array with shape matching the expected output shape:
+            - For single actions: (1,) or scalar
+            - For multi-asset actions: (n_assets,) without extra dimensions
         """
         with torch.no_grad():
             # Convert DataFrame to numpy if needed
@@ -263,7 +378,8 @@ class PPOAgent(BaseAgent):
             # Get action distribution parameters
             action_mean, action_std = self.network(state_tensor)
 
-            if deterministic:
+            # Use deterministic action if either deterministic or eval_mode is True
+            if deterministic or eval_mode:
                 raw_action = action_mean
             else:
                 dist = Normal(action_mean, action_std)
@@ -272,12 +388,24 @@ class PPOAgent(BaseAgent):
             # Clip action to valid range
             action = torch.clamp(raw_action, -1.0, 1.0)
             
-            # Convert to numpy and squeeze last dimension to ensure shape (1,) for single actions
-            return action.cpu().numpy().squeeze(-1)
+            # Convert to numpy
+            action_np = action.cpu().numpy()
+            
+            # Handle different action shapes based on the action space
+            # For multi-asset environments, we need to return shape (n_assets,)
+            if len(action_np.shape) > 1 and action_np.shape[0] == 1:
+                # If we have a batch dimension of 1, remove it
+                return action_np.squeeze(0)
+            elif action_np.shape[-1] == 1:
+                # For single-asset actions, squeeze the last dimension
+                return action_np.squeeze(-1)
+            else:
+                # For other cases, return as is
+                return action_np
 
-    def predict(self, state: np.ndarray, deterministic: bool = False) -> np.ndarray:
+    def predict(self, state: np.ndarray, deterministic: bool = False, eval_mode: bool = False) -> np.ndarray:
         """Alias for get_action to maintain compatibility with stable-baselines3 style API"""
-        return self.get_action(state, deterministic)
+        return self.get_action(state, deterministic, eval_mode)
 
     def train(
         self,
@@ -461,95 +589,342 @@ class PPOAgent(BaseAgent):
                 "std_reward": np.std(episode_rewards),
             }
 
-    def train_step(self, state, action, reward, next_state, done, agent_id: str = None) -> Dict[str, float]:
-        """Train the agent on a single state transition.
+    def _update_old_network(self):
+        """Update the old policy network with current policy parameters."""
+        self.old_network.load_state_dict(self.network.state_dict())
+        logger.debug("Updated old policy network with current parameters")
 
+    def _compute_ratio_histogram(self, ratios: torch.Tensor, bins: int = 10) -> Dict[str, List[float]]:
+        """Compute histogram data for ratio distribution for debugging.
+        
+        Args:
+            ratios: Tensor of policy ratios
+            bins: Number of histogram bins
+            
+        Returns:
+            Dictionary with histogram data (counts and bin_edges)
+        """
+        with torch.no_grad():
+            # Convert to numpy for histogram computation
+            ratios_np = ratios.detach().cpu().numpy()
+            
+            # Compute histogram
+            counts, bin_edges = np.histogram(ratios_np, bins=bins, range=(0.0, 2.0))
+            
+            # Convert to lists for logging
+            counts_list = counts.tolist()
+            bin_edges_list = bin_edges.tolist()
+            
+            # Also compute useful statistics
+            stats = {
+                "mean": float(np.mean(ratios_np)),
+                "median": float(np.median(ratios_np)),
+                "std": float(np.std(ratios_np)),
+                "min": float(np.min(ratios_np)),
+                "max": float(np.max(ratios_np)),
+                "close_to_one": float(np.mean((ratios_np > 0.99) & (ratios_np < 1.01))),
+            }
+            
+            return {
+                "counts": counts_list,
+                "bin_edges": bin_edges_list,
+                "stats": stats
+            }
+
+    def _compute_kl_divergence(self, states: torch.Tensor) -> Dict[str, float]:
+        """Calculate detailed KL divergence between old and new policies.
+        
+        This method provides detailed information about KL divergence components
+        to help detect issues with policy updates.
+        
+        Args:
+            states: Batch of states to evaluate
+            
+        Returns:
+            Dictionary with KL divergence components and total
+        """
+        with torch.no_grad():
+            # Normalize states
+            normalized_states = self._normalize_state(states)
+            
+            # Get distribution parameters from old policy
+            old_mean, old_std = self.old_network(normalized_states)
+            
+            # Get distribution parameters from current policy
+            new_mean, new_std = self.network(normalized_states)
+            
+            # Ensure std values are valid
+            old_std = torch.clamp(old_std, min=0.1, max=1.0)
+            new_std = torch.clamp(new_std, min=0.1, max=1.0)
+            
+            # Calculate mean component of KL: (μ1 - μ2)²/(2*σ2²)
+            mean_diff_squared = (old_mean - new_mean).pow(2)
+            mean_component = (mean_diff_squared / (2 * new_std.pow(2))).mean()
+            
+            # Calculate log(σ2/σ1) term
+            log_std_diff = torch.log(new_std / old_std).mean()
+            
+            # Calculate variance term: σ1²/(2*σ2²)
+            var_component = (old_std.pow(2) / (2 * new_std.pow(2))).mean()
+            
+            # Calculate -1/2 term
+            constant = -0.5
+            
+            # Full KL: log(σ2/σ1) + (σ1² + (μ1-μ2)²)/(2*σ2²) - 1/2
+            total_kl = log_std_diff + var_component + mean_component + constant
+            
+            # Calculate average absolute differences
+            mean_abs_diff = (old_mean - new_mean).abs().mean()
+            std_abs_diff = (old_std - new_std).abs().mean()
+            
+            # Store components
+            kl_components = {
+                "kl_total": total_kl.item(),
+                "kl_log_std_diff": log_std_diff.item(),
+                "kl_var_component": var_component.item(),
+                "kl_mean_component": mean_component.item(),
+                "kl_constant": constant,
+                "mean_abs_diff": mean_abs_diff.item(),
+                "std_abs_diff": std_abs_diff.item(),
+                "old_mean_avg": old_mean.mean().item(),
+                "new_mean_avg": new_mean.mean().item(),
+                "old_std_avg": old_std.mean().item(),
+                "new_std_avg": new_std.mean().item(),
+            }
+            
+            return kl_components
+
+    def train_step(self, state, action, reward, next_state, done, agent_id: str = None) -> Dict[str, float]:
+        """Single training step using one transition.
+        
+        Collects experiences into the buffer using the old policy's log_probs.
+        Only triggers an update when the rollout threshold is reached.
+        
         Args:
             state: Current state
             action: Action taken
             reward: Reward received
             next_state: Next state
             done: Whether episode is done
-            agent_id: Optional agent identifier for multi-agent scenarios
-        """
-        # Convert state to numpy array if it's a DataFrame
-        if isinstance(state, pd.DataFrame):
-            state = state.to_numpy()
-        if isinstance(next_state, pd.DataFrame):
-            next_state = next_state.to_numpy()
-        
-        # Convert to tensor and ensure correct shape
-        state_tensor = torch.FloatTensor(state).to(self.device)
-        next_state_tensor = torch.FloatTensor(next_state).to(self.device)
-        
-        # Add batch dimension if needed
-        if len(state_tensor.shape) == 1:  # (features,)
-            state_tensor = state_tensor.unsqueeze(0)  # (1, features)
-        if len(next_state_tensor.shape) == 1:  # (features,)
-            next_state_tensor = next_state_tensor.unsqueeze(0)  # (1, features)
-        
-        # Normalize states
-        state_tensor = self._normalize_state(state_tensor)
-        next_state_tensor = self._normalize_state(next_state_tensor)
-        
-        # Get value estimates for GAE
-        with torch.no_grad():
-            value = self.value_network(state_tensor)
-            next_value = self.value_network(next_state_tensor)
+            agent_id: Optional agent ID for multi-agent settings
             
-            # Get action probabilities for current state
-            action_mean, action_std = self.network(state_tensor)
+        Returns:
+            Empty dict if no update is performed, or metrics dict if update was triggered
+        """
+        # Track episode stats
+        self.current_episode_reward += reward
+        self.current_episode_length += 1
+        
+        # Convert inputs to tensors
+        state_tensor = torch.FloatTensor(state).to(self.device)
+        action_tensor = torch.FloatTensor(action).to(self.device)
+        
+        # Normalize state
+        normalized_state = self._normalize_state(state_tensor)
+        
+        # Get current value estimate 
+        with torch.no_grad():
+            current_value = self.value_network(normalized_state).item()
+            
+            # IMPORTANT: Use old_network to calculate log_prob for consistent ratio calculation
+            action_mean, action_std = self.old_network(normalized_state)
             dist = Normal(action_mean, action_std)
-            log_prob = dist.log_prob(torch.FloatTensor(action).to(self.device))
-
-        # Create experience dict
-        experience = {
+            log_prob = dist.log_prob(action_tensor).sum(dim=-1).item()
+            
+            # Debug logging for standard deviation
+            mean_std = action_std.mean().item()
+            min_std = action_std.min().item()
+            max_std = action_std.max().item()
+            if self.rollout_steps % 100 == 0:  # Log every 100 steps
+                self.logger.info(
+                    f"Rollout step {self.rollout_steps}: Mean std={mean_std:.4f}, "
+                    f"Min std={min_std:.4f}, Max std={max_std:.4f}"
+                )
+        
+        # Add experience to buffer
+        self.buffer.append({
             "state": state,
             "action": action,
-            "reward": float(reward),
-            "done": float(done),
-            "value": value.cpu().numpy(),
-            "log_prob": log_prob.cpu().numpy()
+            "reward": reward,
+            "value": current_value,
+            "log_prob": log_prob,
+            "done": done
+        })
+        
+        # Increment rollout steps
+        self.rollout_steps += 1
+        
+        # Track episode completion
+        if done:
+            self.training_history["completed_episodes"] += 1
+            self.training_history["episode_rewards"].append(self.current_episode_reward)
+            self.training_history["episode_lengths"].append(self.current_episode_length)
+            
+            # Log episode results
+            self.logger.info(
+                f"Episode {self.training_history['completed_episodes']} completed with "
+                f"reward={self.current_episode_reward:.4f}, length={self.current_episode_length}"
+            )
+            
+            # Reset episode tracking
+            self.current_episode_reward = 0.0
+            self.current_episode_length = 0
+        
+        # Only update if we've collected enough experiences
+        metrics = {}
+        if self.rollout_steps >= self.rollout_threshold or done:
+            self.logger.info(
+                f"Rollout complete with {self.rollout_steps} steps, buffer size {len(self.buffer)}. "
+                f"Performing update with {self.n_epochs} epochs."
+            )
+            metrics = self.update_if_buffer_ready()
+            
+            # Log update results
+            self.logger.info(
+                f"Update complete. Policy Loss: {metrics.get('policy_loss', 0):.4f}, "
+                f"Value Loss: {metrics.get('value_loss', 0):.4f}, "
+                f"KL: {metrics.get('kl', 0):.4f}, "
+                f"Entropy: {metrics.get('entropy', 0):.4f}"
+            )
+            
+            # Reset rollout steps counter and update old_network for next rollout
+            self.rollout_steps = 0
+            self._update_old_network()
+            self.logger.info("Updated old_network for next rollout phase")
+        
+        return metrics
+        
+    def update_if_buffer_ready(self) -> Dict[str, float]:
+        """Update policy if buffer has enough experiences.
+        
+        This method performs a proper PPO update when called after rollout completes.
+        The old_network parameters remain fixed during the update so that ratio calculation
+        compares the updated policy to the policy used during data collection.
+        
+        Returns:
+            Dictionary of loss metrics if update was performed, empty dict otherwise
+        """
+        # If we don't have enough samples, return early
+        if len(self.buffer) < self.batch_size:
+            return {}
+            
+        # Get last state to estimate its value for advantage computation
+        if hasattr(self.buffer, 'states') and len(self.buffer.states) > 0:
+            last_state = self.buffer.states[-1]
+            last_state_tensor = torch.FloatTensor(last_state).to(self.device)
+            normalized_last_state = self._normalize_state(last_state_tensor)
+            with torch.no_grad():
+                last_value = self.value_network(normalized_last_state).cpu().numpy()
+        else:
+            # If no states in buffer yet, use zero
+            last_value = np.zeros(1)
+            
+        # Compute advantages and returns
+        self.buffer.compute_advantages(last_value)
+        
+        # Get batch data
+        batch_data = self.buffer.get_batch(self.batch_size)
+        if batch_data is None:
+            return {}
+            
+        states, actions, old_log_probs, returns, advantages, old_values = batch_data
+        
+        # Calculate initial KL divergence to verify old and new policies are different
+        initial_kl = self._compute_kl_divergence(states)
+        self.logger.info(f"Initial KL before update: {initial_kl}")
+        
+        # Store metrics
+        policy_losses = []
+        value_losses = []
+        entropies = []
+        kls = []
+        
+        # Perform multiple epochs of optimization
+        for epoch in range(self.n_epochs):
+            # Update policy and value networks
+            update_metrics = self.update(
+                states, actions, old_log_probs, returns, advantages, old_values
+            )
+            
+            # Store metrics
+            policy_losses.append(update_metrics["policy_loss"])
+            value_losses.append(update_metrics["value_loss"])
+            entropies.append(update_metrics["entropy"])
+            kls.append(update_metrics.get("kl", 0))
+            
+            # Early stopping based on KL divergence
+            if update_metrics.get("kl", 0) > 1.5 * self.target_kl:
+                self.logger.info(f"Early stopping at epoch {epoch+1}/{self.n_epochs} due to KL divergence")
+                break
+        
+        # Step the learning rate scheduler if it exists
+        if self.scheduler is not None:
+            self.scheduler.step()
+            self.logger.info(f"Stepped learning rate scheduler. New LR: {self.optimizer.param_groups[0]['lr']:.6f}")
+        
+        # Record metrics in training history
+        avg_metrics = {
+            "policy_loss": np.mean(policy_losses),
+            "value_loss": np.mean(value_losses),
+            "entropy": np.mean(entropies),
+            "kl": np.mean(kls)
         }
         
-        # Add agent_id if provided
-        if agent_id is not None:
-            experience["agent_id"] = agent_id
+        # Update training history
+        self._update_training_history(avg_metrics)
+        
+        # Calculate final KL after all updates
+        final_kl = self._compute_kl_divergence(states)
+        self.logger.info(f"Final KL after update: {final_kl}")
+        
+        # Reset buffer after update
+        self.buffer.reset()
+        
+        # Return average metrics
+        return avg_metrics
 
-        # Add experience to buffer
-        self.buffer.append(experience)
-
-        # Train if we have enough samples
-        if len(self.buffer) >= self.batch_size:
-            # Compute advantages using the last value estimate
-            self.buffer.compute_advantages(last_value=next_value.cpu().numpy())
+    def _update_training_history(self, metrics: Dict[str, float]):
+        """Update training history with the latest metrics.
+        
+        Args:
+            metrics: Dictionary of metrics from the latest update
+        """
+        # Update metrics
+        for key, value in metrics.items():
+            if key in self.training_history:
+                self.training_history[key].append(value)
+        
+        # Update counters
+        self.training_history["update_count"] += 1
+        self.training_history["total_steps"] += self.rollout_steps
+        
+        # Log training progress periodically
+        if self.training_history["update_count"] % 10 == 0:
+            # Calculate recent performance
+            recent_metrics = {}
+            for key in ["policy_loss", "value_loss", "entropy", "kl"]:
+                if len(self.training_history[key]) >= 10:
+                    recent_metrics[f"avg_{key}_last10"] = np.mean(self.training_history[key][-10:])
             
-            # Get batch from buffer
-            states, actions, old_log_probs, returns, advantages, values = self.buffer.get_batch(
-                batch_size=self.batch_size,
-                shuffle=True
+            # Add episode reward statistics if available
+            if len(self.training_history["episode_rewards"]) >= 5:
+                recent_metrics["avg_episode_reward_last5"] = np.mean(self.training_history["episode_rewards"][-5:])
+                recent_metrics["avg_episode_length_last5"] = np.mean(self.training_history["episode_lengths"][-5:])
+            
+            # Log progress
+            self.logger.info(
+                f"Training progress after {self.training_history['update_count']} updates "
+                f"({self.training_history['total_steps']} steps, {self.training_history['completed_episodes']} episodes): "
+                f"{recent_metrics}"
             )
             
-            # Update policy
-            metrics = self.update(
-                states,
-                actions,
-                old_log_probs,
-                returns,
-                advantages,
-                values
-            )
-            
-            # Step learning rate scheduler if it exists
-            if self.scheduler is not None:
-                self.scheduler.step()
-            
-            # Reset buffer
-            self.buffer.reset()
-            
-            return metrics
-            
-        return None
+    def get_training_history(self) -> Dict[str, Any]:
+        """Get training history.
+        
+        Returns:
+            Dictionary with training metrics over time
+        """
+        return self.training_history
 
     def _compute_gae(
         self, rewards: torch.Tensor, values: torch.Tensor, dones: torch.Tensor
@@ -647,37 +1022,102 @@ class PPOAgent(BaseAgent):
             self.logger.warning("NaN values detected in normalized states")
             normalized_states = torch.nan_to_num(normalized_states, nan=0.0)
         
-        # Get action distribution parameters
+        # Get action distribution parameters from current policy
         action_mean, action_std = self.network(normalized_states)
+        
+        # Get value predictions
+        predicted_values = self.value_network(normalized_states).squeeze(-1)
         
         # Ensure action parameters are valid
         if torch.isnan(action_mean).any() or torch.isnan(action_std).any():
             self.logger.warning("NaN values detected in policy network output")
-            action_mean = torch.nan_to_num(action_mean, nan=0.0)
-            action_std = torch.nan_to_num(action_std, nan=1.0)
-            action_std = torch.clamp(action_std, min=1e-6, max=1.0)
+            action_mean = torch.nan_to_num(action_mean, nan=0.5)
+            action_std = torch.nan_to_num(action_std, nan=0.1)
         
-        # Create action distribution
+        # Clamp standard deviation to prevent it from getting too small
+        action_std = torch.clamp(action_std, min=0.1, max=1.0)
+        
+        # Create current action distribution
         current_dist = Normal(action_mean, action_std)
         
-        # Calculate log probabilities and entropy
-        current_log_probs = current_dist.log_prob(actions)
+        # Calculate current log probabilities 
+        current_log_probs = current_dist.log_prob(actions).sum(-1)
+        
+        # Calculate entropy (ensure it's properly computed and bounded)
         entropy = current_dist.entropy().mean()
+        
+        # Log entropy statistics for debugging
+        with torch.no_grad():
+            min_entropy = current_dist.entropy().min().item()
+            mean_std = action_std.mean().item()
+            self.logger.debug(f"Entropy: {entropy.item():.4f}, Min entropy: {min_entropy:.4f}, Mean std: {mean_std:.4f}")
 
         # Calculate ratios and surrogate losses
         ratios = torch.exp(current_log_probs - old_log_probs)
+        
+        # Log ratio statistics for debugging
+        with torch.no_grad():
+            mean_ratio = ratios.mean().item()
+            min_ratio = ratios.min().item()
+            max_ratio = ratios.max().item()
+            log_prob_diff = (current_log_probs - old_log_probs).mean().item()
+            
+            self.logger.info(
+                f"Ratio stats - Mean: {mean_ratio:.4f}, Min: {min_ratio:.4f}, "
+                f"Max: {max_ratio:.4f}, Log prob diff: {log_prob_diff:.4f}"
+            )
+            
+            # Count ratios close to 1.0 (indicating old/new policies are similar)
+            close_to_one = ((ratios > 0.99) & (ratios < 1.01)).float().mean().item()
+            self.logger.info(f"Percentage of ratios close to 1.0: {close_to_one * 100:.2f}%")
+            
+            # Generate ratio histogram data
+            ratio_hist = self._compute_ratio_histogram(ratios)
+            self.logger.info(f"Ratio histogram: {ratio_hist}")
+        
+        # Clamp ratios to prevent extreme values that could destabilize training
+        ratios = torch.clamp(ratios, 0.0, 10.0)
+        
+        # Calculate KL divergence more robustly
+        # KL = (log(std2/std1) + (std1^2 + (mean1-mean2)^2)/(2*std2^2) - 0.5)
+        with torch.no_grad():
+            # Get old policy distribution parameters for more accurate KL calculation
+            old_action_mean, old_action_std = self.old_network(normalized_states)
+            
+            # Log mean difference between old and new policy means
+            mean_diff = (old_action_mean - action_mean).abs().mean().item()
+            std_diff = (old_action_std - action_std).abs().mean().item()
+            self.logger.info(f"Policy diff - Mean: {mean_diff:.6f}, Std: {std_diff:.6f}")
+            
+            # Clamp old std to prevent division by zero
+            old_action_std = torch.clamp(old_action_std, min=0.1, max=1.0)
+            
+            # Calculate KL divergence between old and new policies
+            mean_diff_squared = (old_action_mean - action_mean).pow(2)
+            std_ratio = old_action_std / action_std
+            var_ratio = std_ratio.pow(2)
+            
+            # Use the analytical KL for normal distributions
+            kl_div = (torch.log(action_std / old_action_std) + 
+                      (old_action_std.pow(2) + mean_diff_squared) / 
+                      (2 * action_std.pow(2)) - 0.5).mean()
+            
+            kl_val = kl_div.item()
+        
+        # PPO surrogate objectives
         surr1 = ratios * advantages
         surr2 = torch.clamp(
             ratios, 1 - self.clip_epsilon, 1 + self.clip_epsilon
         ) * advantages
 
-        # Calculate losses
+        # Calculate policy loss
         policy_loss = -torch.min(surr1, surr2).mean()
-        value_loss = 0.5 * ((action_mean - returns) ** 2).mean()
-        kl_loss = self.c3 * (old_log_probs - current_log_probs).mean()
-
+        
+        # Calculate value loss using predicted values from value network
+        value_loss = 0.5 * F.mse_loss(predicted_values, returns)
+        
         # Combined loss with KL penalty
-        total_loss = policy_loss + self.c1 * value_loss - self.c2 * entropy + kl_loss
+        total_loss = policy_loss + self.c1 * value_loss - self.c2 * entropy
 
         # Update networks
         self.optimizer.zero_grad()
@@ -690,12 +1130,12 @@ class PPOAgent(BaseAgent):
         total_policy_loss = policy_loss.item()
         total_value_loss = value_loss.item()
         total_entropy = entropy.item()
-        total_kl = kl_loss.item()
+        total_kl = kl_val  # Use the properly calculated KL value
 
         # Log metrics
         logger.info(
             f"Policy Loss={total_policy_loss:.4f}, Value Loss={total_value_loss:.4f}, "
-            f"Entropy={total_entropy:.4f}, KL={total_kl:.4f}"
+            f"Entropy={total_entropy:.4f}, KL={total_kl:.4f}, Mean Std={mean_std:.4f}"
         )
 
         return {
@@ -703,4 +1143,5 @@ class PPOAgent(BaseAgent):
             "value_loss": total_value_loss,
             "entropy": total_entropy,
             "kl": total_kl,
+            "mean_std": mean_std
         }

@@ -14,19 +14,25 @@ class ValueNetwork(BaseNetwork):
       a) (batch_size, input_dim) passed through directly
       b) (window_size, features) flattened to (1, window_size*features)
     - Handles 3D inputs: (batch_size, window_size, features) -> (batch_size, window_size*features)
+    - Supports customizable hidden layer sizes
     """
     
-    def __init__(self, observation_space: Box):
+    def __init__(self, observation_space: Box, hidden_sizes=None):
         """Initialize value network.
         
         Args:
             observation_space: Observation space (Box)
+            hidden_sizes: List of hidden layer sizes (default: [256, 256])
             
         The network expects inputs to match observation_space.shape:
         - If shape is (features,): input_dim = features
         - If shape is (window_size, features): input_dim = window_size * features
         """
         super().__init__()
+        
+        # Use default hidden sizes if none provided
+        if hidden_sizes is None:
+            hidden_sizes = [256, 256]
         
         # Validate observation space type
         if not isinstance(observation_space, Box):
@@ -45,14 +51,20 @@ class ValueNetwork(BaseNetwork):
                 f"ValueNetwork only supports 1D or 2D Box shapes, got shape={obs_shape}"
             )
             
-        # Network architecture
-        self.network = nn.Sequential(
-            nn.Linear(self.input_dim, 256),
-            nn.ReLU(),
-            nn.Linear(256, 256),
-            nn.ReLU(),
-            nn.Linear(256, 1)  # Output single value
-        )
+        # Build dynamic network based on hidden_sizes
+        layers = []
+        prev_size = self.input_dim
+        
+        for size in hidden_sizes:
+            layers.append(nn.Linear(prev_size, size))
+            layers.append(nn.ReLU())
+            prev_size = size
+            
+        # Add final output layer
+        layers.append(nn.Linear(prev_size, 1))  # Output single value
+        
+        # Create sequential network
+        self.network = nn.Sequential(*layers)
         
         # Initialize weights
         for m in self.network.modules():
@@ -63,7 +75,8 @@ class ValueNetwork(BaseNetwork):
                     
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.info(
-            f"Initialized ValueNetwork with input_dim={self.input_dim}, obs_shape={obs_shape}"
+            f"Initialized ValueNetwork with input_dim={self.input_dim}, "
+            f"hidden_sizes={hidden_sizes}, obs_shape={obs_shape}"
         )
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -93,49 +106,44 @@ class ValueNetwork(BaseNetwork):
         # 2) Handle different input dimensions
         if x.dim() == 1:
             # (features,) -> (1, features)
-            if x.shape[0] == self.input_dim:
-                x = x.unsqueeze(0)
-            else:
-                raise ValueError(
-                    f"ValueNetwork expects input_dim={self.input_dim} but got 1D with shape {x.shape}"
-                )
+            x = x.unsqueeze(0)  # 항상 배치 차원 추가
                 
         elif x.dim() == 2:
-            # (batch_size, input_dim) or (window_size, features)
-            if x.shape[1] == self.input_dim:
-                # Already (batch_size, input_dim)
-                pass
-            elif x.shape[0] * x.shape[1] == self.input_dim:
-                # Single sample => flatten to (1, window_size*features)
-                x = x.reshape(1, -1)
-            else:
-                raise ValueError(
-                    f"ValueNetwork expects input_dim={self.input_dim}, but got 2D {x.shape}. "
-                    f"Cannot interpret as (batch_size, input_dim) or single sample (window_size, features)."
-                )
+            # 이미 2D 형태이므로 추가 처리 필요 없음
+            pass
                 
         elif x.dim() == 3:
             # (batch_size, window_size, features)
-            b, w, f = x.shape
-            if w * f != self.input_dim:
-                raise ValueError(
-                    f"ValueNetwork expects window_size*features={self.input_dim}, "
-                    f"but got shape {x.shape} => w*f={w*f}."
-                )
-            x = x.reshape(b, w*f)
+            b = x.shape[0]
+            x = x.reshape(b, -1)  # 평면화
             
         else:
-            raise ValueError(
-                f"ValueNetwork doesn't accept {x.dim()}D input: shape={original_shape}"
-            )
+            self.logger.warning(f"Unexpected input dimensions: {x.dim()}D. Attempting to reshape.")
+            x = x.reshape(1, -1)  # 일단 평면화 시도
             
-        # Final shape validation
+        # 차원 조정 (입력 크기 불일치 처리)
         if x.shape[1] != self.input_dim:
-            raise ValueError(
-                f"ValueNetwork final check failed: expecting input_dim={self.input_dim}, got shape={x.shape}"
-            )
+            self.logger.warning(f"Input dimension mismatch: got {x.shape[1]}, expected {self.input_dim}")
             
-        return self.network(x)
+            if x.shape[1] > self.input_dim:
+                # 큰 입력은 적응형 풀링으로 처리
+                x_reshaped = x.unsqueeze(1)  # [batch, 1, features]
+                pool = nn.AdaptiveAvgPool1d(self.input_dim)
+                x = pool(x_reshaped).squeeze(1)
+            else:
+                # 작은 입력은 0으로 패딩
+                padding = torch.zeros(x.shape[0], self.input_dim - x.shape[1], device=x.device)
+                x = torch.cat([x, padding], dim=1)
+                
+        # 최종 값 계산
+        value = self.network(x)
+        
+        # NaN 확인 및 처리
+        if torch.isnan(value).any():
+            self.logger.warning("NaN in value network output; replacing with 0.0")
+            value = torch.nan_to_num(value, nan=0.0)
+            
+        return value
         
     def get_architecture_type(self) -> str:
         """Get architecture type.

@@ -35,6 +35,10 @@ import yaml
 import pandas as pd
 import streamlit as st
 from typing import Dict, Any, List, Optional
+import logging
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 # Add project root to path to ensure imports work
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
@@ -691,7 +695,7 @@ async def model_training_page():
                 st.session_state.training_task = training_task
                 
                 # Force rerun to update UI
-                st.experimental_rerun()
+                st.rerun()
 
 async def run_training(manager, progress_bar, status_text, metrics_container, chart_container):
     """
@@ -708,6 +712,17 @@ async def run_training(manager, progress_bar, status_text, metrics_container, ch
         # Create placeholders for charts
         with chart_container:
             st.subheader("Training Progress")
+            
+            # Add console output display
+            console_output = st.expander("Console Output", expanded=True)
+            console_text = console_output.empty()
+            
+            # Add MLflow link
+            mlflow_link = st.empty()
+            
+            # Add timing information
+            timing_info = st.empty()
+            
             reward_chart = st.empty()
             eval_chart = st.empty()
             
@@ -728,8 +743,13 @@ async def run_training(manager, progress_bar, status_text, metrics_container, ch
             agent_rewards_history = {f"agent_{i}": [] for i in range(agent_count)}
             agent_eval_rewards_history = {f"agent_{i}": [] for i in range(agent_count)}
         
+        # Track console output for display
+        current_console_output = []
+        
         # Progress callback function
         def update_progress(progress, metrics):
+            nonlocal current_console_output
+            
             # Update session state
             st.session_state.training_status["progress"] = progress
             st.session_state.training_status["metrics"] = metrics
@@ -737,14 +757,33 @@ async def run_training(manager, progress_bar, status_text, metrics_container, ch
             # Update progress bar
             progress_bar.progress(progress)
             
-            # Update status text
-            duration = datetime.now() - st.session_state.training_status["start_time"]
-            duration_str = str(duration).split(".")[0]  # Remove microseconds
+            # Extract timing information
+            elapsed_time = metrics.get("elapsed_time", 0)
+            estimated_total_time = metrics.get("estimated_total_time", 0)
+            remaining_time = max(0, estimated_total_time - elapsed_time)
             
-            current_step = int(progress * manager.total_steps)
+            # Format times
+            elapsed_str = str(datetime.timedelta(seconds=int(elapsed_time)))
+            remaining_str = str(datetime.timedelta(seconds=int(remaining_time)))
+            
+            # Update status text
+            current_step = metrics.get("current_step", 0)
+            total_steps = metrics.get("total_steps", manager.total_steps)
             status_text.text(
-                f"Status: Running | Progress: {current_step:,}/{manager.total_steps:,} steps ({progress*100:.1f}%) | Duration: {duration_str}"
+                f"Status: Running | Progress: {current_step:,}/{total_steps:,} steps ({progress*100:.1f}%) | Elapsed: {elapsed_str}"
             )
+            
+            # Update timing information
+            timing_info.info(f"⏱️ Elapsed: {elapsed_str} | Estimated remaining: {remaining_str}")
+            
+            # Update console output if available
+            if "console_output" in metrics and metrics["console_output"] != current_console_output:
+                current_console_output = metrics["console_output"]
+                console_text.code("\n".join(current_console_output))
+            
+            # Update MLflow link if available
+            if hasattr(manager, 'mlflow_ui_url') and manager.mlflow_ui_url:
+                mlflow_link.markdown(f"📊 [View training details in MLflow]({manager.mlflow_ui_url})")
             
             # Store metrics for plotting
             if current_step > 0:
@@ -830,55 +869,95 @@ async def run_training(manager, progress_bar, status_text, metrics_container, ch
         result = await manager.run_training(update_progress)
         
         # Training completed
+        # Update training status
+        st.session_state.training_status["status"] = "completed"
+        st.session_state.training_status["end_time"] = datetime.now()
+        duration = st.session_state.training_status["end_time"] - st.session_state.training_status["start_time"]
+        duration_str = str(duration).split(".")[0]
+        
+        # Show completion message
         progress_bar.progress(1.0)
-        status_text.text("Training completed")
+        status_text.success(f"✅ Training completed successfully in {duration_str}")
         
-        # Handle multi-agent result visualization
-        if is_multi_agent:
-            best_rewards = result.get("best_eval_rewards", {})
-            final_returns = result.get("final_eval_returns", {})
-            
-            with metrics_container:
-                st.subheader("Training Results")
-                st.markdown("**Best Evaluation Rewards**")
-                
-                cols = st.columns(min(agent_count, 4))
-                for i in range(agent_count):
-                    agent_id = f"agent_{i}"
-                    if agent_id in best_rewards:
-                        cols[i % len(cols)].metric(
-                            f"Agent {i+1} Best", 
-                            f"{best_rewards[agent_id]:.2f}"
-                        )
-                
-                # Display manager path if available
-                if st.session_state.training_config["env"].get("use_manager", False):
-                    manager_path = result.get("manager_path", "")
-                    if manager_path:
-                        st.info(f"Multi-Agent Manager saved at: {manager_path}")
-                        st.session_state.manager_path = manager_path
+        # Show MLflow link
+        if hasattr(manager, 'mlflow_ui_url') and manager.mlflow_ui_url:
+            st.markdown(f"📊 **[View complete training details and metrics in MLflow]({manager.mlflow_ui_url})**")
+            st.info("To start the MLflow UI server (if not already running), open a terminal and run: `mlflow ui --port 5000`")
         
-        # Store the final result
-        st.session_state.training_result = result
-        st.session_state.training_status["is_training"] = False
+        # Get final metrics from MLflow
+        try:
+            metrics = manager.mlflow_manager.get_metric_history()
+            if metrics:
+                st.subheader("Final Training Metrics")
+                for metric_name, values in metrics.items():
+                    if values:
+                        last_value = values[-1]["value"]
+                        st.metric(label=metric_name.replace("_", " ").title(), value=f"{last_value:.4f}")
+        except Exception as e:
+            st.warning(f"Could not retrieve final metrics: {str(e)}")
         
-        # Add a button to go to backtest page
-        if st.button("Test Model in Backtest"):
-            # Set the model path in session state for backtest page
-            if is_multi_agent and st.session_state.training_config["env"].get("use_manager", False):
-                st.session_state.backtest_model_path = result.get("manager_path", "")
-            else:
-                st.session_state.backtest_model_path = result.get("model_path", "")
-                
-            st.experimental_rerun()
+        return result
         
     except Exception as e:
-        st.error(f"Training failed: {str(e)}")
-        logger.exception("Error during training")
-        st.session_state.training_status["is_training"] = False
+        # Update training status
+        st.session_state.training_status["status"] = "failed"
+        st.session_state.training_status["end_time"] = datetime.now()
+        st.session_state.training_status["error"] = str(e)
+        
+        # Show error message
+        status_text.error(f"❌ Training failed: {str(e)}")
+        st.error(f"Error details: {str(e)}")
+        
+        # Log the error
+        logging.error(f"Training failed: {str(e)}", exc_info=True)
+        raise
 
-def main():
-    asyncio.run(model_training_page())
+def display_config_panel():
+    """
+    Display configuration panel for model training settings.
+    """
+    st.subheader("Environment")
+    env_config = st.session_state.training_config["env"]
+    
+    # Asset setting
+    asset_mode = env_config.get("asset_mode", "single")
+    col1, col2 = st.columns(2)
+    with col1:
+        symbol_text = f"Symbol: {env_config['symbol']}" if asset_mode == "single" else f"Symbols: {', '.join(env_config.get('symbols', []))[:25]}..."
+        st.write(symbol_text)
+        st.write(f"Timeframe: {env_config['timeframe']}")
+    with col2:
+        st.write(f"Window Size: {env_config['window_size']}")
+        st.write(f"Date Range: {env_config['start_date']} to {env_config['end_date']}")
+
+    st.divider()
+    
+    # Agent setting
+    st.subheader("Agent")
+    agent_config = st.session_state.training_config["agent"]
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write(f"Algorithm: {agent_config['algorithm']}")
+        st.write(f"Hidden Layers: {agent_config['hidden_layers']}")
+    with col2:
+        lstm_status = "Yes" if agent_config.get("use_lstm", False) else "No"
+        st.write(f"LSTM: {lstm_status}")
+        if agent_config.get("use_lstm", False):
+            st.write(f"LSTM Size: {agent_config.get('lstm_hidden_size', 64)}")
+    
+    st.divider()
+            
+    # Training parameters
+    st.subheader("Training")
+    training_config = st.session_state.training_config["training"]
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write(f"Total Timesteps: {training_config['total_timesteps']:,}")
+        st.write(f"Batch Size: {training_config['batch_size']}")
+    with col2:
+        st.write(f"Learning Rate: {training_config['learning_rate']}")
+        st.write(f"Gamma: {training_config['gamma']}")
+        st.write(f"Seed: {training_config.get('seed', 42)}")
 
 if __name__ == "__main__":
-    main() 
+    asyncio.run(model_training_page()) 

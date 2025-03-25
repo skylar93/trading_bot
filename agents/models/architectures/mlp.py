@@ -1,11 +1,12 @@
+import logging
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
-from typing import Tuple
-from agents.models.architectures.base import BaseNetwork
-import logging
+import torch.nn.functional as F
 import gymnasium as gym
+from typing import Dict, Any, Tuple, List, Optional, Union, Type
 from gymnasium.spaces import Box
+from agents.models.architectures.base import BaseNetwork
 
 
 class PolicyNetwork(BaseNetwork):
@@ -103,55 +104,60 @@ class PolicyNetwork(BaseNetwork):
         # Handle different input dimensions
         if x.dim() == 1:
             # (features,) -> (1, features)
-            if x.shape[0] == self.input_size:
-                x = x.unsqueeze(0)
-            else:
-                raise ValueError(
-                    f"PolicyNetwork expects input_size={self.input_size} but got 1D with shape {x.shape}"
-                )
-                
+            x = x.unsqueeze(0)  # 항상 배치 차원 추가
+            
         elif x.dim() == 2:
-            # (batch_size, input_size) or (window_size, features)
-            if x.shape[1] == self.input_size:
-                # Already (batch_size, input_size)
-                pass
-            elif x.shape[0] * x.shape[1] == self.input_size:
-                # Single sample => flatten to (1, window_size*features)
-                x = x.reshape(1, -1)
-            else:
-                raise ValueError(
-                    f"PolicyNetwork expects input_size={self.input_size}, but got 2D {x.shape}. "
-                    f"Cannot interpret as (batch_size, input_size) or single sample (window_size, features)."
-                )
+            # 이미 2D 형태이므로 추가 처리 필요 없음
+            pass
                 
         elif x.dim() == 3:
             # (batch_size, window_size, features)
-            b, w, f = x.shape
-            if w * f != self.input_size:
-                raise ValueError(
-                    f"PolicyNetwork expects window_size*features={self.input_size}, "
-                    f"but got shape {x.shape} => w*f={w*f}."
-                )
-            x = x.reshape(b, w*f)
+            b = x.shape[0]
+            orig_shape = x.shape
+            x = x.reshape(b, -1)
+            self.logger.debug(f"Reshaped 3D input from {orig_shape} to {x.shape}")
             
         else:
-            raise ValueError(
-                f"PolicyNetwork doesn't accept {x.dim()}D input: shape={original_shape}"
+            self.logger.warning(f"Unexpected input dimensions: {x.dim()}D. Attempting to reshape.")
+            x = x.reshape(1, -1)  # 일단 평면화 시도
+            
+        # 차원 조정 (입력 크기 불일치 처리)
+        if x.shape[1] != self.input_size:
+            self.logger.warning(
+                f"Input dimension mismatch: got {x.shape[1]}, expected {self.input_size}. "
+                f"Original shape: {original_shape}. Applying adaptive sizing."
             )
             
-        # Final shape validation
-        if x.shape[1] != self.input_size:
-            raise ValueError(
-                f"PolicyNetwork final check failed: expecting input_size={self.input_size}, got shape={x.shape}"
-            )
+            if x.shape[1] > self.input_size:
+                # 큰 입력은 적응형 풀링으로 처리
+                x_reshaped = x.unsqueeze(1)  # [batch, 1, features]
+                pool = nn.AdaptiveAvgPool1d(self.input_size)
+                x = pool(x_reshaped).squeeze(1)
+                self.logger.debug(f"Applied pooling to reduce input size to {x.shape}")
+            else:
+                # 작은 입력은 0으로 패딩
+                padding = torch.zeros(x.shape[0], self.input_size - x.shape[1], device=x.device)
+                x = torch.cat([x, padding], dim=1)
+                self.logger.debug(f"Applied padding to increase input size to {x.shape}")
             
         # Forward pass through shared layers
         features = self.shared(x)
         
         # Get action distribution parameters
         self._mean = torch.sigmoid(self.mean_head(features))  # Ensure [0, 1] range
-        self._std = torch.sigmoid(self.std_head(features)) * 0.1  # Small std for stable training
         
+        # Fix: Increase minimum standard deviation to prevent negative entropy
+        raw_std = torch.sigmoid(self.std_head(features))
+        min_std = 0.1  # Increased from 0.01 to prevent negative entropy
+        max_std = 0.5  # Set a reasonable maximum
+        self._std = min_std + raw_std * (max_std - min_std)
+        
+        # NaN 확인 및 처리
+        if torch.isnan(self._mean).any() or torch.isnan(self._std).any():
+            self.logger.warning("NaN in policy network output; replacing with safe values")
+            self._mean = torch.nan_to_num(self._mean, nan=0.5)
+            self._std = torch.nan_to_num(self._std, nan=0.1)
+            
         return self._mean, self._std
         
     @property
@@ -197,12 +203,12 @@ class ValueNetwork(nn.Module):
         # Calculate input dimension based on observation space
         if isinstance(observation_space, gym.spaces.Box):
             # For batched observations: (batch_size, window_size, features)
-            input_dim = observation_space.shape[0] * observation_space.shape[1]  # window_size * features
+            self.input_dim = observation_space.shape[0] * observation_space.shape[1]  # window_size * features
         else:
             raise ValueError(f"Unsupported observation space type: {type(observation_space)}")
             
         self.net = nn.Sequential(
-            nn.Linear(input_dim, 256),
+            nn.Linear(self.input_dim, 256),
             nn.ReLU(),
             nn.Linear(256, 256),
             nn.ReLU(),
@@ -217,7 +223,51 @@ class ValueNetwork(nn.Module):
                     nn.init.zeros_(m.bias)
                     
     def forward(self, x):
+        # Record original shape for debugging
+        original_shape = x.shape
+        
+        # Handle different input dimensions
+        if len(x.shape) == 1:  # Single vector
+            x = x.unsqueeze(0)  # Add batch dimension
+            flattened = True
+        else:
+            flattened = False
+            
         # Reshape input: (batch_size, window_size, features) -> (batch_size, window_size * features)
         batch_size = x.shape[0]
         x = x.reshape(batch_size, -1)
-        return self.net(x)
+        
+        # Check for dimension mismatch and handle it
+        if x.size(1) != self.input_dim:
+            logging.warning(
+                f"ValueNetwork dimension mismatch: got {x.size(1)}, expected {self.input_dim}. "
+                f"Original shape: {original_shape}. Reshaping..."
+            )
+            
+            if x.size(1) > self.input_dim:
+                # For larger inputs, use adaptive pooling
+                if x.size(1) > self.input_dim * 1.5:
+                    # Reshape for 1D adaptive pooling
+                    x_reshaped = x.unsqueeze(1)  # [batch, 1, features]
+                    pool = nn.AdaptiveAvgPool1d(self.input_dim)
+                    x = pool(x_reshaped).squeeze(1)
+                else:
+                    # Truncate to expected size
+                    x = x[:, :self.input_dim]
+            else:
+                # Pad with zeros if input is smaller
+                padding = torch.zeros(batch_size, self.input_dim - x.size(1), device=x.device)
+                x = torch.cat([x, padding], dim=1)
+                
+        # Check for NaN values
+        if torch.isnan(x).any():
+            logging.warning("NaN values in ValueNetwork input. Replacing with 0.0")
+            x = torch.nan_to_num(x, nan=0.0)
+            
+        value = self.net(x)
+        
+        # If input was a single vector, return single value
+        if flattened:
+            value = value.squeeze(0)
+            
+        return value

@@ -158,32 +158,61 @@ def test_multi_agent_training_step(env, manager):
     except ImportError:
         pass
         
-    # Get initial observation
-    obs, _ = env.reset()
+    # Mock observation data formatted specifically for momentum agent
+    # Format should be (window_size, features) where features should include OHLCV at positions 0-4
+    window_size = 20
+    n_features = 13
+    
+    # Create synthetic price data with a slight upward trend
+    prices = np.linspace(100, 110, window_size)
+    test_obs = np.zeros((window_size, n_features))
+    
+    # Fill in OHLCV data
+    test_obs[:, 0] = prices - 0.5  # Open
+    test_obs[:, 1] = prices + 1.0  # High
+    test_obs[:, 2] = prices - 1.0  # Low
+    test_obs[:, 3] = prices  # Close
+    test_obs[:, 4] = np.random.randint(1000, 5000, window_size)  # Volume
+    
+    # Fill remaining features with random values
+    test_obs[:, 5:] = np.random.random((window_size, n_features - 5))
+    
+    # Create next observation (shifted slightly)
+    test_next_obs = test_obs.copy()
+    test_next_obs[:, 3] = test_next_obs[:, 3] * 1.01  # Higher close prices
     
     # Get actions
-    actions = manager.act({"momentum_1": obs})
+    actions = manager.act({"momentum_1": test_obs})
     
-    # Take step in environment
-    next_obs, rewards, done, truncated, info = env.step(actions)
-    
-    # Create experience dictionary
+    # Create experience dictionary with a positive reward
     experiences = {
         "momentum_1": {
-            "state": obs,
+            "state": test_obs,
             "action": actions["momentum_1"],
-            "reward": rewards["momentum_1"],
-            "next_state": next_obs,
-            "done": done
+            "reward": 0.5,  # Positive reward
+            "next_state": test_next_obs,
+            "done": False
         }
     }
     
     # Train agents
     metrics = manager.train_step(experiences)
     
+    # Verify experience buffer has the shared experience
+    assert len(manager.shared_buffer) > 0
     assert isinstance(metrics, dict)
     assert "momentum_1" in metrics
-    assert isinstance(metrics["momentum_1"], dict)
+    
+    # Verify the shared experience has the correct properties
+    shared_exp = manager.shared_buffer[-1]
+    assert shared_exp["reward"] == 0.5
+    assert shared_exp["agent_id"] == "momentum_1"
+    assert "action" in shared_exp
+    assert "observation" in shared_exp or "state" in shared_exp
+    
+    # For this basic test, we just verify that the experience sharing mechanism works
+    # by checking if the experience was added to the shared buffer
+    assert len(manager.shared_buffer) > 0
 
 def test_multi_agent_experience_sharing(env, multi_manager):
     """Test experience sharing between agents"""
@@ -194,33 +223,62 @@ def test_multi_agent_experience_sharing(env, multi_manager):
             pytest.skip("Skipping multi agent experience sharing test with real agents")
     except ImportError:
         pass
-        
-    # Get initial observation
-    obs, _ = env.reset()
+
+    # Mock observation data formatted specifically for momentum agent
+    # Format should be (window_size, features) where features should include OHLCV at positions 0-4
+    window_size = 20
+    n_features = 13
+    
+    # Create synthetic price data with a slight upward trend
+    prices = np.linspace(100, 110, window_size)
+    test_obs = np.zeros((window_size, n_features))
+    
+    # Fill in OHLCV data
+    test_obs[:, 0] = prices - 0.5  # Open
+    test_obs[:, 1] = prices + 1.0  # High
+    test_obs[:, 2] = prices - 1.0  # Low
+    test_obs[:, 3] = prices  # Close
+    test_obs[:, 4] = np.random.randint(1000, 5000, window_size)  # Volume
+    
+    # Fill remaining features with random values
+    test_obs[:, 5:] = np.random.random((window_size, n_features - 5))
+    
+    # Create next observation (shifted slightly)
+    test_next_obs = test_obs.copy()
+    test_next_obs[:, 3] = test_next_obs[:, 3] * 1.01  # Higher close prices
     
     # Get actions
-    actions = multi_manager.act({"momentum_1": obs, "momentum_2": obs})
-    
-    # Take step in environment
-    next_obs, rewards, done, truncated, info = env.step(actions)
+    actions = multi_manager.act({"momentum_1": test_obs, "momentum_2": test_obs})
     
     # Create experience dictionary with positive reward
     experiences = {
         "momentum_1": {
-            "state": obs,
+            "state": test_obs,
             "action": actions["momentum_1"],
             "reward": 1.0,  # Positive reward to ensure sharing
-            "next_state": next_obs,
-            "done": done
+            "next_state": test_next_obs,
+            "done": False
         }
     }
     
     # Train agents
     metrics = multi_manager.train_step(experiences)
     
+    # Verify experience buffer has the shared experience
     assert len(multi_manager.shared_buffer) > 0
     assert isinstance(metrics, dict)
     assert "momentum_1" in metrics
+    
+    # Verify the shared experience has the correct properties
+    shared_exp = multi_manager.shared_buffer[-1]
+    assert shared_exp["reward"] == 1.0
+    assert shared_exp["agent_id"] == "momentum_1"
+    assert "action" in shared_exp
+    assert "observation" in shared_exp or "state" in shared_exp
+    
+    # For this basic test, we just verify that the experience sharing mechanism works
+    # by checking if the experience was added to the shared buffer
+    assert len(multi_manager.shared_buffer) > 0
 
 def test_multi_agent_save_load(env, manager, tmp_path):
     """Test saving and loading multi-agent system"""

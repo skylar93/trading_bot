@@ -5,7 +5,7 @@ from typing import Dict, Any, Optional, Union
 import gymnasium as gym
 
 from agents.strategies.base_agent import BaseAgent
-from agents.strategies.dummy_agent import DummyAgent
+from agents.strategies.single.dummy_agent import DummyAgent
 
 logger = logging.getLogger(__name__)
 

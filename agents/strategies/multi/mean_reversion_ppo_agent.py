@@ -278,7 +278,7 @@ class MeanReversionPPOAgent(PPOAgent):
             shape = (state.shape[0], 3) if len(state.shape) > 2 else (3,)
             return np.zeros(shape, dtype=np.float32)
     
-    def get_action(self, state: np.ndarray, deterministic: bool = False) -> np.ndarray:
+    def get_action(self, state: np.ndarray, deterministic: bool = False, eval_mode: bool = False) -> np.ndarray:
         """Get action from policy network with mean reversion strategy.
         
         Handles different input shapes:
@@ -288,6 +288,7 @@ class MeanReversionPPOAgent(PPOAgent):
         Args:
             state: Current state observation
             deterministic: Whether to use deterministic action
+            eval_mode: Whether the agent is in evaluation mode (equivalent to deterministic)
             
         Returns:
             Action as numpy array with shape (1,)

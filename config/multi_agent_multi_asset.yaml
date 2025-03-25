@@ -1,0 +1,141 @@
+# Multi-Agent Multi-Asset Configuration
+# This file configures multiple agents trading in a multi-asset environment
+
+# Environment configuration
+env:
+  type: multi_asset_multi_agent_rl  # Environment type for multi-agent multi-asset
+  window_size: 30       # Observation window size
+  initial_balance: 10000  # Starting balance for each agent
+  trading_fee: 0.001    # 0.1% trading fee
+  reward_scaling: 1.0   # Reward scaling factor
+  max_position_size: 1.0  # Maximum position size as a fraction of balance
+  reward_function: sharpe_ratio  # Use Sharpe ratio as reward
+  action_type: portfolio_weights  # Use portfolio weights for multi-asset
+  include_technical_indicators: true  # Include technical indicators in observation
+  risk_adjusted: true    # Apply risk adjustment to rewards
+  realistic_slippage: true  # Apply realistic slippage model
+  
+  # Manager configuration
+  use_manager: true      # Use MultiAgentManager
+  ensemble_method: meta  # Options: weighted, best, meta
+  
+  # Asset-specific settings
+  assets:
+    - id: BTC
+      weight: 1.0
+    - id: ETH
+      weight: 1.0
+    - id: LTC
+      weight: 1.0
+  
+  # Portfolio constraints
+  portfolio_constraints:
+    max_weight_per_asset: 0.5  # Maximum 50% allocation to any single asset
+    min_weight_per_asset: 0.0  # Allow 0% allocation (no short selling)
+    max_change_per_step: 0.2   # Maximum 20% change in weights per step
+  
+  # Agent configurations
+  multi_agent_configs:
+    - id: agent1
+      agent_type: ppo
+      strategy: momentum
+      window_size: 30
+      assets: ["BTC", "ETH", "LTC"]
+      hyperparameters:
+        learning_rate: 3.0e-4
+        gamma: 0.99
+        ent_coef: 0.01
+    
+    - id: agent2
+      agent_type: ppo
+      strategy: mean_reversion
+      window_size: 30
+      assets: ["BTC", "ETH", "LTC"]
+      hyperparameters:
+        learning_rate: 3.0e-4
+        gamma: 0.99
+        ent_coef: 0.01
+        
+    - id: agent3
+      agent_type: ppo
+      strategy: trend_following
+      window_size: 60
+      assets: ["BTC", "ETH", "LTC"]
+      hyperparameters:
+        learning_rate: 2.5e-4
+        gamma: 0.995
+        ent_coef: 0.015
+  
+  # Meta-agent configuration (only used if ensemble_method is "meta")
+  meta_config:
+    id: meta_agent
+    type: meta
+    model: ppo
+    observation_size: 150  # Larger observation space for multi-asset
+    action_dim: 3  # Number of sub-agents
+    learning_rate: 3.0e-4
+    hidden_dim: 256  # Larger hidden layer for multi-asset
+    continuous_ensemble: true
+
+  # Technical indicators to include
+  indicators:
+    - name: "RSI"
+      window: 14
+    - name: "MACD"
+      fast_window: 12
+      slow_window: 26
+      signal_window: 9
+    - name: "Bollinger"
+      window: 20
+      dev: 2
+
+# Default agent configuration (shared by all agents unless overridden)
+agent_type: ppo  # Default agent type
+agent:
+  learning_rate: 3.0e-4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  batch_size: 64
+  n_epochs: 10
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  use_sde: false
+  sde_sample_freq: -1
+  target_kl: null
+  policy_kwargs:
+    net_arch:
+      pi: [128, 128]  # Larger network for multiple assets
+      vf: [128, 128]
+  normalize_advantage: true
+  normalize_observations: true
+
+# Training parameters
+training:
+  total_timesteps: 1000000
+  eval_interval: 10000
+  checkpoint_interval: 20000
+  log_interval: 100
+  n_eval_episodes: 5
+  random_seed: 42
+  tensorboard_log: ./logs/multi_agent_multi_asset_tensorboard/
+  device: auto  # Use "cpu" or "cuda" or "auto"
+
+# Paths for saved models and logs
+paths:
+  checkpoint_dir: checkpoints/multi_agent_multi_asset
+  log_dir: logs/multi_agent_multi_asset
+  data_dir: data
+
+# Data configuration
+data:
+  file_path: multi_asset_data_example.csv  # Using multi-asset data
+  train_test_split: 0.8
+  column_map:
+    open: $open
+    high: $high
+    low: $low
+    close: $close
+    volume: $volume
+  asset_column: asset  # Column that identifies different assets 

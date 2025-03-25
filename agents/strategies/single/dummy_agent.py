@@ -23,6 +23,13 @@ class DummyAgent(BaseAgent):
         self.step_count = -1  # Start at -1 so first increment gives 0
         self.logger = logging.getLogger(self.__class__.__name__)
         
+        # 속성 초기화
+        self.get_action_calls = 0  # 호출 횟수 추적
+        self.train_step_calls = 0  # 훈련 단계 호출 횟수
+        self.action_history = []  # 액션 히스토리
+        self.last_observation = None  # 마지막 관찰
+        self.fixed_action = kwargs.get("fixed_action", None)  # 고정 액션
+        
         # Strategy-specific attributes for testing compatibility
         self.strategy = kwargs.get("strategy", "dummy")
         self.momentum_window = kwargs.get("momentum_window", 10)  # Changed from 20 to 10 for test compatibility
@@ -41,55 +48,41 @@ class DummyAgent(BaseAgent):
         unused_keys = [key for key in kwargs.keys() if key not in self.__init__.__code__.co_varnames and 
                       key not in ["strategy", "momentum_window", "volatility_window", "trend_window", 
                                  "momentum_threshold", "rsi_window", "bb_window", "bb_std", 
-                                 "oversold_threshold", "overbought_threshold"]]
+                                 "oversold_threshold", "overbought_threshold", "fixed_action"]]
         if unused_keys:
             self.logger.warning(f"Ignoring unused config keys in DummyAgent: {unused_keys}")
         
-    def get_action(self, state: np.ndarray, deterministic: bool = False) -> np.ndarray:
-        """Generate actions based on state for testing purposes
+    def get_action(self, observation: np.ndarray, deterministic: bool = False, eval_mode: bool = False) -> np.ndarray:
+        """Get action from the dummy agent.
         
         Args:
-            state: Current state
-            deterministic: Whether to use deterministic policy
+            observation: The current state observation
+            deterministic: Whether to use deterministic action
+            eval_mode: Whether the agent is in evaluation mode
             
         Returns:
-            Action to take
+            Action from the dummy agent
         """
-        self.step_count += 1
+        self.get_action_calls += 1
         
-        # First action should be non-zero but small for consistency test
-        if self.step_count == 0:
-            return np.array([0.5])
-            
-        # For test_get_action_mean_reversion
-        if isinstance(state, np.ndarray) and state.size > 0:
-            if len(state.shape) == 2 and state.shape[1] >= 4:  # Check for OHLCV format
-                close_prices = state[:, 3]
-                if len(close_prices) > 5:
-                    # Check if prices are trending up strongly (overbought)
-                    if close_prices[-1] > close_prices[-5] * 1.05:  # Up more than 5%
-                        # For mean reversion test - sell in overbought
-                        if self.strategy.lower() == "meanreversion":
-                            return np.array([-0.5])  # Sell in overbought condition
-                        # For momentum test - buy in uptrend
-                        elif self.strategy.lower() == "momentum":
-                            return np.array([0.5])  # Buy in uptrend
-                    # Check if prices are trending down strongly (oversold)
-                    elif close_prices[-1] < close_prices[-5] * 0.95:  # Down more than 5%
-                        # For mean reversion test - buy in oversold
-                        if self.strategy.lower() == "meanreversion":
-                            return np.array([0.5])  # Buy in oversold condition
-                        # For momentum test - sell in downtrend
-                        elif self.strategy.lower() == "momentum":
-                            return np.array([-0.5])  # Sell in downtrend
+        # Record observation for testing
+        if hasattr(self, 'last_observation'):
+            self.last_observation = observation
         
-        # Trade every 5 steps with small magnitude
-        if self.step_count % 5 == 0:
-            action = 0.5 if (self.step_count // 5) % 2 == 0 else -0.5
-            self.logger.info(f"DummyAgent taking action: {action}")
-            return np.array([action])
-            
-        return np.array([0.0])
+        # Return fixed action if specified
+        if self.fixed_action is not None:
+            action = np.array([self.fixed_action])
+        else:
+            # Generate random action
+            action = self.action_space.sample()
+        
+        # Record for testing
+        self.action_history.append(action.copy())
+        
+        # Logging for debugging
+        self.logger.info(f"DummyAgent taking action: {action[0]}")
+        
+        return action
     
     def train_step(self, state=None, action=None, reward=None, next_state=None, done=None, info=None, experience=None):
         """

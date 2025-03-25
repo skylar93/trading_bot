@@ -13,7 +13,7 @@ from gymnasium import spaces
 # Add project root to Python path
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
-from agents.strategies.asset_specific_agents import (
+from agents.strategies.advanced.asset_specific_agents import (
     AssetSpecificAgent, 
     CryptoAgent, 
     EquityAgent, 
@@ -449,7 +449,7 @@ class TestAgentFactory(unittest.TestCase):
         """Test creation of a default agent for unknown asset type."""
         # Since AssetSpecificAgent is abstract and can't be instantiated directly,
         # we need to mock the create_agent method to return our ConcreteAssetAgent
-        with patch('agents.strategies.asset_specific_agents.AssetSpecificAgentFactory.create_agent') as mock_create:
+        with patch('agents.strategies.advanced.asset_specific_agents.AssetSpecificAgentFactory.create_agent') as mock_create:
             # Set up the mock to return a ConcreteAssetAgent instance
             mock_agent = MagicMock()
             mock_agent.asset_id = "XYZ"

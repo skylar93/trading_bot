@@ -12,6 +12,7 @@ import numpy as np
 import logging
 import torch
 import pandas as pd
+import os
 
 # Single Agents
 from agents.strategies.single.dummy_agent import DummyAgent
@@ -22,7 +23,14 @@ from agents.strategies.multi.mean_reversion_ppo_agent import MeanReversionPPOAge
 from agents.strategies.multi.momentum_ppo_agent import MomentumPPOAgent
 from agents.strategies.multi.multi_agent_manager import MultiAgentManager
 
-# Flag to indicate if we're using real agents or test/mock agents
+# Advanced Agents
+from agents.strategies.advanced.meta_agent import MetaAgent
+from agents.strategies.advanced.hierarchical_agent import HierarchicalAgent
+from agents.strategies.advanced.asset_specific_agents import AssetSpecificAgentFactory
+
+# Flag to determine whether to use real agents or mock agents
+# In production, this should be True
+# For testing without real dependencies, set to False
 USE_REAL_AGENTS = True
 
 # Default dummy spaces for testing
@@ -171,19 +179,48 @@ def create_agent(
             # Generic PPO agent (no specific strategy)
             else:
                 logger.info(f"Creating generic PPO agent")
+                # Import at module level to avoid cyclic dependencies
+                import importlib.util
+                
+                # First check if the PPO agent module exists
+                ppo_module_path = os.path.join(os.path.dirname(__file__), "single", "ppo_agent.py")
+                if not os.path.exists(ppo_module_path):
+                    logger.error(f"PPO agent module not found at {ppo_module_path}")
+                    raise ImportError(f"PPO agent module not found at {ppo_module_path}")
+                
                 try:
+                    # Explicitly attempt to import the PPO agent
                     from agents.strategies.single.ppo_agent import PPOAgent
-                    return PPOAgent(
+                    
+                    # Extract parameters from config
+                    agent_config = {k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space", "device"]}
+                    
+                    # Convert hidden_layers to hidden_sizes for compatibility
+                    if "hidden_layers" in agent_config and "hidden_sizes" not in agent_config:
+                        agent_config["hidden_sizes"] = agent_config.pop("hidden_layers")
+                    
+                    logger.info(f"PPO agent parameters: {agent_config}")
+                    
+                    # Create PPO agent with proper parameters
+                    ppo_agent = PPOAgent(
                         observation_space=observation_space,
                         action_space=action_space,
                         device=device,
-                        **{k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space", "device"]}
+                        **agent_config
                     )
-                except ImportError:
+                    
+                    logger.info(f"Successfully created PPO agent: {type(ppo_agent).__name__}")
+                    return ppo_agent
+                
+                except Exception as e:
+                    logger.error(f"Failed to create PPO agent: {str(e)}", exc_info=True)
+                    logger.error(f"Falling back to DummyAgent for compatibility")
+                    
                     from agents.strategies.single.dummy_agent import DummyAgent
                     return DummyAgent(
                         observation_space=observation_space,
                         action_space=action_space,
+                        agent_type="ppo",  # Set the agent_type to ppo for the dummy agent
                         **{k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space"]}
                     )
         
@@ -248,7 +285,7 @@ def create_agent(
             # Implement meta agent creation logic
             logger.info(f"Creating meta-agent for ensemble decision making")
             try:
-                from agents.strategies.meta_agent import MetaAgent
+                from agents.strategies.advanced.meta_agent import MetaAgent
                 
                 # Check if observation_space is 2D as required
                 if len(observation_space.shape) != 2:
@@ -262,7 +299,7 @@ def create_agent(
                     learning_rate=config.get("learning_rate", 3e-4),
                     hidden_dim=config.get("hidden_dim", 128),
                     continuous_ensemble=config.get("ensemble_type", "discrete") == "continuous",
-                    **{k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space", "device", "learning_rate", "hidden_dim", "ensemble_type"]}
+                    **{k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space", "device", "learning_rate", "hidden_dim", "ensemble_type", "continuous_ensemble"]}
                 )
             except ImportError as e:
                 logger.error(f"MetaAgent import failed: {e}")
@@ -274,6 +311,71 @@ def create_agent(
                 )
             except Exception as e:
                 logger.error(f"Error creating meta-agent: {e}")
+                from agents.strategies.single.dummy_agent import DummyAgent
+                return DummyAgent(
+                    observation_space=observation_space,
+                    action_space=action_space,
+                    **{k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space"]}
+                )
+        
+        # Hierarchical agent
+        elif agent_type == "hierarchical" or agent_type == "hierarchicalagent":
+            logger.info(f"Creating hierarchical agent with manager-worker architecture")
+            try:
+                from agents.strategies.advanced.hierarchical_agent import HierarchicalAgent
+                
+                # Create the hierarchical agent
+                return HierarchicalAgent(
+                    observation_space=observation_space,
+                    action_space=action_space,
+                    device=device,
+                    goal_dim=config.get("goal_dim", 8),
+                    goal_horizon=config.get("goal_horizon", 10),
+                    hidden_dim=config.get("hidden_dim", 128),
+                    learning_rate=config.get("learning_rate", 3e-4),
+                    **{k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space", "device", "goal_dim", "goal_horizon", "hidden_dim", "learning_rate"]}
+                )
+            except ImportError as e:
+                logger.error(f"HierarchicalAgent import failed: {e}")
+                from agents.strategies.single.dummy_agent import DummyAgent
+                return DummyAgent(
+                    observation_space=observation_space,
+                    action_space=action_space,
+                    **{k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space"]}
+                )
+            except Exception as e:
+                logger.error(f"Error creating hierarchical agent: {e}")
+                from agents.strategies.single.dummy_agent import DummyAgent
+                return DummyAgent(
+                    observation_space=observation_space,
+                    action_space=action_space,
+                    **{k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space"]}
+                )
+        
+        # Asset-specific agent
+        elif agent_type == "assetspecific":
+            logger.info(f"Creating asset-specific agent for {config.get('asset_id', 'unknown')} ({config.get('asset_type', 'unknown')})")
+            try:
+                from agents.strategies.advanced.asset_specific_agents import AssetSpecificAgentFactory
+                
+                # Create the asset-specific agent
+                return AssetSpecificAgentFactory.create_agent(
+                    asset_id=config.get("asset_id", "unknown"),
+                    asset_type=config.get("asset_type", "unknown"),
+                    observation_space=observation_space,
+                    action_space=action_space,
+                    config=config
+                )
+            except ImportError as e:
+                logger.error(f"AssetSpecificAgentFactory import failed: {e}")
+                from agents.strategies.single.dummy_agent import DummyAgent
+                return DummyAgent(
+                    observation_space=observation_space,
+                    action_space=action_space,
+                    **{k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space"]}
+                )
+            except Exception as e:
+                logger.error(f"Error creating asset-specific agent: {e}")
                 from agents.strategies.single.dummy_agent import DummyAgent
                 return DummyAgent(
                     observation_space=observation_space,
