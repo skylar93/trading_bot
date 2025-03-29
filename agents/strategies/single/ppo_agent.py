@@ -203,48 +203,49 @@ class PPOAgent(BaseAgent):
         )
 
     def _normalize_state(self, state: torch.Tensor) -> torch.Tensor:
-        """Normalize state observations using running mean and standard deviation.
+        """Normalize state using running mean and std
         
-        Handles input shapes consistently with PolicyNetwork:
-        - 1D: (features,) -> (1, features)
-        - 2D: (batch_size, input_size) or (window_size, features) -> (batch_size, input_size)
-        - 3D: (batch_size, window_size, features) -> (batch_size, window_size*features)
+        This method handles input state of various shapes and normalizes them:
+        - 1D state tensors: (features,)
+        - 2D state tensors: (batch_size, features) or (window_size, features)
+        - 3D state tensors: (batch_size, window_size, features)
         
         Args:
-            state: Input state tensor
+            state: State tensor of any supported shape
             
         Returns:
-            Normalized state tensor with shape (batch_size, obs_dim)
+            Normalized state tensor with shape appropriate for network input
         """
-        if not self.normalize_observations:
-            return state
-            
-        # Handle NaN values
-        if torch.isnan(state).any():
-            self.logger.warning("NaN in state input; replacing with 0.0")
-            state = torch.nan_to_num(state, nan=0.0)
-            
+        # Record original shape for debugging
         original_shape = state.shape
         
-        # Special case for SingleAssetRLTradingEnv observation: (window_size, 5)
-        if state.dim() == 2 and state.shape == (self.buffer.obs_shape[0], self.buffer.obs_shape[1]):
-            # This is a direct observation from SingleAssetRLTradingEnv with shape (window_size, features)
-            # Reshape to (1, window_size*features)
-            state = state.reshape(1, -1)
+        # Check for NaN or Inf values early and replace them
+        if torch.isnan(state).any() or torch.isinf(state).any():
+            self.logger.warning(
+                f"NaN or Inf values detected in state input with shape {original_shape}. Replacing with zeros."
+            )
+            state = torch.nan_to_num(state, nan=0.0, posinf=10.0, neginf=-10.0)
+        
+        # Special case for 3D state from SingleAssetRLTradingEnv (window_size, n_features, n_assets)
+        if len(state.shape) == 3 and state.shape[2] == 1:
+            if state.shape[0] == 1:
+                # (1, window_size, 1) -> (1, window_size)
+                state = state.squeeze(2)
+            else:
+                # (batch_size, window_size, 1) -> (batch_size, window_size)
+                state = state.squeeze(2)
+                
+        # For 2D state that's a single window from environment with
+        # shape (window_size, features), we convert to (batch_size, window_size, features)
+        elif len(state.shape) == 2 and state.shape[0] == self.observation_space.shape[0] and state.shape[1] == self.observation_space.shape[1]:
+            # This is likely a direct observation from SingleAssetRLTradingEnv
+            # Add batch dimension: (window_size, features) -> (1, window_size, features)
+            state = state.unsqueeze(0)  # Add batch dimension
+            self.logger.debug(f"Added batch dimension to state: {original_shape} -> {state.shape}")
             
-            # If the flattened size doesn't match obs_dim, apply padding or truncation
-            if state.shape[1] != self.obs_dim:
-                self.logger.debug(
-                    f"Reshaped observation from {original_shape} to {state.shape}, "
-                    f"but obs_dim is {self.obs_dim}. Applying adaptive sizing."
-                )
-                if state.shape[1] < self.obs_dim:
-                    # Pad with zeros
-                    padding = torch.zeros(1, self.obs_dim - state.shape[1], device=state.device)
-                    state = torch.cat([state, padding], dim=1)
-                else:
-                    # Truncate to obs_dim
-                    state = state[:, :self.obs_dim]
+            # Then reshape to flatten window and features: (1, window_size, features) -> (1, window_size*features)
+            state = state.reshape(1, -1)
+            self.logger.debug(f"Reshaped state for normalization: {original_shape} -> {state.shape}")
             
             return state
         
@@ -313,34 +314,93 @@ class PPOAgent(BaseAgent):
                     # Truncate to obs_dim
                     state = state[:, :self.obs_dim]
         
+        # Additional pre-normalization clipping to prevent extreme values
+        MAX_VALUE = 1e6  # Set a reasonable maximum value for observations
+        state = torch.clamp(state, -MAX_VALUE, MAX_VALUE)
+        
         # Apply normalization if enabled
         if self.normalize_observations:
             # Update running mean and std during training
             if self.training:
                 with torch.no_grad():
-                    # Update running mean and std
+                    # Check for extreme values in batch statistics
                     batch_mean = state.mean(dim=0)
                     batch_var = state.var(dim=0, unbiased=False)
+                    
+                    # Replace NaN or Inf values in batch statistics
+                    if torch.isnan(batch_mean).any() or torch.isinf(batch_mean).any():
+                        self.logger.warning("NaN or Inf in batch mean. Using safe values.")
+                        batch_mean = torch.nan_to_num(batch_mean, nan=0.0, posinf=1.0, neginf=-1.0)
+                        
+                    if torch.isnan(batch_var).any() or torch.isinf(batch_var).any():
+                        self.logger.warning("NaN or Inf in batch variance. Using safe values.")
+                        batch_var = torch.nan_to_num(batch_var, nan=1.0, posinf=1.0, neginf=1.0)
+                    
+                    # Clip variance to prevent extremely small values that could lead to division issues
+                    batch_var = torch.clamp(batch_var, min=1e-6, max=1e6)
+                    
                     batch_size = state.shape[0]
                     total_size = self.training_history["total_steps"] + batch_size
                     
-                    # Update using Welford's online algorithm
-                    delta = batch_mean - self.state_mean
-                    new_mean = self.state_mean + delta * batch_size / total_size
+                    # Use more stable update formula with safeguards
+                    if total_size > 0:  # Avoid division by zero
+                        # Update using Welford's online algorithm with defensive checks
+                        delta = batch_mean - self.state_mean
+                        
+                        # Clip delta to prevent extreme updates
+                        delta = torch.clamp(delta, -10.0, 10.0)
+                        
+                        # Update mean
+                        new_mean = self.state_mean + delta * batch_size / total_size
+                        
+                        # Update variance using parallel algorithm with safeguards
+                        m_a = self.state_std ** 2 * self.training_history["total_steps"]
+                        m_b = batch_var * batch_size
+                        
+                        # More numerically stable variance combination
+                        M2 = m_a + m_b + delta ** 2 * self.training_history["total_steps"] * batch_size / total_size
+                        new_var = M2 / total_size
+                        
+                        # Final safeguards against invalid statistics
+                        new_mean = torch.nan_to_num(new_mean, nan=0.0, posinf=0.0, neginf=0.0)
+                        new_var = torch.nan_to_num(new_var, nan=1.0, posinf=1.0, neginf=1.0)
+                        
+                        # Ensure variance is positive
+                        new_var = torch.clamp(new_var, min=1e-6, max=1e6)
+                        
+                        # Update mean and std
+                        self.state_mean = new_mean
+                        self.state_std = torch.sqrt(new_var + self.eps)
+            
+            # Normalize state with safeguards
+            try:
+                # Check for NaN/Inf in normalization parameters
+                if torch.isnan(self.state_mean).any() or torch.isinf(self.state_mean).any():
+                    self.logger.warning("NaN or Inf in state_mean. Using safe values.")
+                    self.state_mean = torch.nan_to_num(self.state_mean, nan=0.0, posinf=0.0, neginf=0.0)
                     
-                    # Update variance using parallel algorithm
-                    m_a = self.state_std ** 2 * self.training_history["total_steps"]
-                    m_b = batch_var * batch_size
-                    M2 = m_a + m_b + delta ** 2 * self.training_history["total_steps"] * batch_size / total_size
-                    new_var = M2 / total_size
-                    
-                    # Update mean and std
-                    self.state_mean = new_mean
-                    self.state_std = torch.sqrt(new_var + self.eps)
-                    
-            # Normalize state
-            normalized_state = (state - self.state_mean) / (self.state_std + self.eps)
-            return normalized_state
+                if torch.isnan(self.state_std).any() or torch.isinf(self.state_std).any():
+                    self.logger.warning("NaN or Inf in state_std. Using safe values.")
+                    self.state_std = torch.ones_like(self.state_std)
+                
+                # Ensure std is positive
+                safe_std = torch.clamp(self.state_std, min=1e-6)
+                
+                # Normalize with robust clipping
+                normalized_state = (state - self.state_mean) / (safe_std + self.eps)
+                
+                # Clip normalized values to prevent extreme outputs
+                normalized_state = torch.clamp(normalized_state, -10.0, 10.0)
+                
+                # Final NaN check after normalization
+                if torch.isnan(normalized_state).any() or torch.isinf(normalized_state).any():
+                    self.logger.warning("NaN or Inf in normalized state. Using safe normalized values.")
+                    normalized_state = torch.nan_to_num(normalized_state, nan=0.0, posinf=1.0, neginf=-1.0)
+                
+                return normalized_state
+            except Exception as e:
+                self.logger.error(f"Error during normalization: {str(e)}. Returning unnormalized state.")
+                return state
         
         return state
 
@@ -369,9 +429,15 @@ class PPOAgent(BaseAgent):
             if isinstance(state, pd.DataFrame):
                 state = state.to_numpy()
             
+            # Handle 2D observations from environment with shape (window_size, features)
+            # by adding a batch dimension to make it (1, window_size, features)
+            if len(state.shape) == 2 and state.shape[0] == self.observation_space.shape[0] and state.shape[1] == self.observation_space.shape[1]:
+                # This is likely a direct observation from SingleAssetRLTradingEnv
+                state = np.expand_dims(state, axis=0)  # Add batch dimension: (1, window_size, features)
+            
             # Convert to tensor
             state_tensor = torch.FloatTensor(state).to(self.device)
-            
+
             # Normalize state (handles all shape cases internally)
             state_tensor = self._normalize_state(state_tensor)
             

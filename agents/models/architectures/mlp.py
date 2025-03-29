@@ -94,10 +94,14 @@ class PolicyNetwork(BaseNetwork):
         Raises:
             ValueError: If input shape cannot be interpreted as valid format
         """
-        # Handle NaN values
-        if torch.isnan(x).any():
-            self.logger.warning("NaN in policy network input; replacing with 0.0")
-            x = torch.nan_to_num(x, nan=0.0)
+        # Handle NaN and Inf values more robustly
+        if torch.isnan(x).any() or torch.isinf(x).any():
+            self.logger.warning(f"NaN or Inf in policy network input with shape {x.shape}; replacing with safe values")
+            x = torch.nan_to_num(x, nan=0.0, posinf=10.0, neginf=-10.0)
+        
+        # Additional initial clipping to prevent extreme values
+        MAX_INPUT = 1e6
+        x = torch.clamp(x, -MAX_INPUT, MAX_INPUT)
             
         original_shape = x.shape
         
@@ -130,35 +134,84 @@ class PolicyNetwork(BaseNetwork):
             
             if x.shape[1] > self.input_size:
                 # 큰 입력은 적응형 풀링으로 처리
-                x_reshaped = x.unsqueeze(1)  # [batch, 1, features]
-                pool = nn.AdaptiveAvgPool1d(self.input_size)
-                x = pool(x_reshaped).squeeze(1)
-                self.logger.debug(f"Applied pooling to reduce input size to {x.shape}")
+                try:
+                    x_reshaped = x.unsqueeze(1)  # [batch, 1, features]
+                    pool = nn.AdaptiveAvgPool1d(self.input_size)
+                    x = pool(x_reshaped).squeeze(1)
+                    self.logger.debug(f"Applied pooling to reduce input size to {x.shape}")
+                except Exception as e:
+                    self.logger.error(f"Error during pooling: {str(e)}. Applying truncation instead.")
+                    x = x[:, :self.input_size]  # Fallback to simple truncation
             else:
                 # 작은 입력은 0으로 패딩
                 padding = torch.zeros(x.shape[0], self.input_size - x.shape[1], device=x.device)
                 x = torch.cat([x, padding], dim=1)
                 self.logger.debug(f"Applied padding to increase input size to {x.shape}")
+        
+        try:
+            # Forward pass through shared layers
+            features = self.shared(x)
             
-        # Forward pass through shared layers
-        features = self.shared(x)
-        
-        # Get action distribution parameters
-        self._mean = torch.sigmoid(self.mean_head(features))  # Ensure [0, 1] range
-        
-        # Fix: Increase minimum standard deviation to prevent negative entropy
-        raw_std = torch.sigmoid(self.std_head(features))
-        min_std = 0.1  # Increased from 0.01 to prevent negative entropy
-        max_std = 0.5  # Set a reasonable maximum
-        self._std = min_std + raw_std * (max_std - min_std)
-        
-        # NaN 확인 및 처리
-        if torch.isnan(self._mean).any() or torch.isnan(self._std).any():
-            self.logger.warning("NaN in policy network output; replacing with safe values")
-            self._mean = torch.nan_to_num(self._mean, nan=0.5)
-            self._std = torch.nan_to_num(self._std, nan=0.1)
+            # Additional check for NaN/Inf after shared layers
+            if torch.isnan(features).any() or torch.isinf(features).any():
+                self.logger.warning("NaN/Inf after shared layers. Using safe replacement.")
+                features = torch.nan_to_num(features, nan=0.0, posinf=1.0, neginf=-1.0)
             
-        return self._mean, self._std
+            # Get action distribution parameters
+            raw_mean = self.mean_head(features)
+            
+            # Handle potential NaN/Inf in raw outputs
+            if torch.isnan(raw_mean).any() or torch.isinf(raw_mean).any():
+                self.logger.warning("NaN/Inf in raw_mean. Using safe replacement.")
+                raw_mean = torch.nan_to_num(raw_mean, nan=0.0, posinf=0.0, neginf=0.0)
+            
+            # Apply sigmoid with gradient clipping for stability
+            raw_mean_clipped = torch.clamp(raw_mean, -10.0, 10.0)  # Prevent extreme logits
+            self._mean = torch.sigmoid(raw_mean_clipped)  # Ensure [0, 1] range
+            
+            # Get standard deviation with increased stability
+            raw_std = self.std_head(features)
+            
+            # Handle potential NaN/Inf in std outputs
+            if torch.isnan(raw_std).any() or torch.isinf(raw_std).any():
+                self.logger.warning("NaN/Inf in raw_std. Using safe replacement.")
+                raw_std = torch.nan_to_num(raw_std, nan=0.0, posinf=0.0, neginf=0.0)
+            
+            # Clip raw std values for stability
+            raw_std_clipped = torch.clamp(raw_std, -10.0, 10.0)
+            
+            # Convert to sigmoid
+            std_sigmoid = torch.sigmoid(raw_std_clipped)
+            
+            # Fix: Maintain robust standard deviation range
+            min_std = 0.1  # Increased minimum to prevent near-zero values
+            max_std = 0.5  # Reasonable maximum
+            self._std = min_std + std_sigmoid * (max_std - min_std)
+            
+            # Final NaN check
+            if torch.isnan(self._mean).any() or torch.isnan(self._std).any() or \
+               torch.isinf(self._mean).any() or torch.isinf(self._std).any():
+                self.logger.warning("NaN or Inf in final policy network output; replacing with safe values")
+                self._mean = torch.nan_to_num(self._mean, nan=0.5, posinf=0.5, neginf=0.5)
+                self._std = torch.nan_to_num(self._std, nan=0.3, posinf=0.3, neginf=0.3)
+            
+            return self._mean, self._std
+            
+        except Exception as e:
+            # If any unexpected error occurs, return safe values
+            self.logger.error(f"Error in policy network forward pass: {str(e)}. Returning safe values.")
+            
+            # Create safe output of appropriate shape
+            batch_size = x.shape[0]
+            action_dim = self.action_space.shape[0]
+            
+            safe_mean = torch.ones(batch_size, action_dim, device=x.device) * 0.5
+            safe_std = torch.ones(batch_size, action_dim, device=x.device) * 0.3
+            
+            self._mean = safe_mean
+            self._std = safe_std
+            
+            return self._mean, self._std
         
     @property
     def mean(self) -> torch.Tensor:
@@ -223,51 +276,93 @@ class ValueNetwork(nn.Module):
                     nn.init.zeros_(m.bias)
                     
     def forward(self, x):
+        """Forward pass through value network.
+        
+        Args:
+            x: Input tensor that can be various shapes
+            
+        Returns:
+            Value estimate tensor with appropriate shape
+        """
         # Record original shape for debugging
         original_shape = x.shape
         
+        # Handle NaN and Inf values
+        if torch.isnan(x).any() or torch.isinf(x).any():
+            logging.warning(f"NaN or Inf in ValueNetwork input with shape {x.shape}; replacing with safe values")
+            x = torch.nan_to_num(x, nan=0.0, posinf=10.0, neginf=-10.0)
+        
+        # Initial clipping to prevent extreme values
+        MAX_INPUT = 1e6
+        x = torch.clamp(x, -MAX_INPUT, MAX_INPUT)
+        
         # Handle different input dimensions
+        flattened = False
         if len(x.shape) == 1:  # Single vector
             x = x.unsqueeze(0)  # Add batch dimension
             flattened = True
-        else:
-            flattened = False
-            
-        # Reshape input: (batch_size, window_size, features) -> (batch_size, window_size * features)
-        batch_size = x.shape[0]
-        x = x.reshape(batch_size, -1)
         
-        # Check for dimension mismatch and handle it
-        if x.size(1) != self.input_dim:
-            logging.warning(
-                f"ValueNetwork dimension mismatch: got {x.size(1)}, expected {self.input_dim}. "
-                f"Original shape: {original_shape}. Reshaping..."
-            )
+        try:
+            # Reshape input: (batch_size, window_size, features) -> (batch_size, window_size * features)
+            batch_size = x.shape[0]
+            x = x.reshape(batch_size, -1)
             
-            if x.size(1) > self.input_dim:
-                # For larger inputs, use adaptive pooling
-                if x.size(1) > self.input_dim * 1.5:
-                    # Reshape for 1D adaptive pooling
-                    x_reshaped = x.unsqueeze(1)  # [batch, 1, features]
-                    pool = nn.AdaptiveAvgPool1d(self.input_dim)
-                    x = pool(x_reshaped).squeeze(1)
-                else:
-                    # Truncate to expected size
-                    x = x[:, :self.input_dim]
-            else:
-                # Pad with zeros if input is smaller
-                padding = torch.zeros(batch_size, self.input_dim - x.size(1), device=x.device)
-                x = torch.cat([x, padding], dim=1)
+            # Check for dimension mismatch and handle it
+            if x.size(1) != self.input_dim:
+                logging.warning(
+                    f"ValueNetwork dimension mismatch: got {x.size(1)}, expected {self.input_dim}. "
+                    f"Original shape: {original_shape}. Reshaping..."
+                )
                 
-        # Check for NaN values
-        if torch.isnan(x).any():
-            logging.warning("NaN values in ValueNetwork input. Replacing with 0.0")
-            x = torch.nan_to_num(x, nan=0.0)
+                if x.size(1) > self.input_dim:
+                    # For larger inputs, use adaptive pooling
+                    try:
+                        if x.size(1) > self.input_dim * 1.5:
+                            # Reshape for 1D adaptive pooling
+                            x_reshaped = x.unsqueeze(1)  # [batch, 1, features]
+                            pool = nn.AdaptiveAvgPool1d(self.input_dim)
+                            x = pool(x_reshaped).squeeze(1)
+                        else:
+                            # Truncate to expected size
+                            x = x[:, :self.input_dim]
+                    except Exception as e:
+                        logging.error(f"Error during pooling: {str(e)}. Applying truncation instead.")
+                        x = x[:, :self.input_dim]  # Fallback to simple truncation
+                else:
+                    # Pad with zeros if input is smaller
+                    padding = torch.zeros(batch_size, self.input_dim - x.size(1), device=x.device)
+                    x = torch.cat([x, padding], dim=1)
             
-        value = self.net(x)
-        
-        # If input was a single vector, return single value
-        if flattened:
-            value = value.squeeze(0)
+            # Additional check for NaN values before network
+            if torch.isnan(x).any() or torch.isinf(x).any():
+                logging.warning("NaN or Inf values in reshaped ValueNetwork input. Replacing with safe values.")
+                x = torch.nan_to_num(x, nan=0.0, posinf=1.0, neginf=-1.0)
             
-        return value
+            # Forward pass through network layers
+            value = self.net(x)
+            
+            # Check for NaN/Inf in output
+            if torch.isnan(value).any() or torch.isinf(value).any():
+                logging.warning("NaN or Inf in ValueNetwork output. Replacing with safe values.")
+                value = torch.nan_to_num(value, nan=0.0, posinf=10.0, neginf=-10.0)
+            
+            # Clip extreme values in final output
+            value = torch.clamp(value, -100.0, 100.0)
+            
+            # If input was a single vector, return single value
+            if flattened:
+                value = value.squeeze(0)
+                
+            return value
+            
+        except Exception as e:
+            # If any unexpected error occurs, return safe values
+            logging.error(f"Error in ValueNetwork forward pass: {str(e)}. Returning safe value.")
+            
+            # Create safe output of appropriate shape
+            safe_value = torch.zeros(batch_size, 1, device=x.device)
+            
+            if flattened:
+                safe_value = safe_value.squeeze(0)
+                
+            return safe_value

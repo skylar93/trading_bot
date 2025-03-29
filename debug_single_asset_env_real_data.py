@@ -186,7 +186,14 @@ def train_and_evaluate(
             # 표준편차 확인 (몇 스텝마다)
             if step_count % debug_log_interval == 0:
                 with torch.no_grad():
-                    state_tensor = torch.FloatTensor(obs).to(agent.device)
+                    state = obs
+                    # Add explicit reshaping for 2D observations (window_size, features)
+                    if isinstance(state, np.ndarray) and len(state.shape) == 2:
+                        # Add batch dimension: (window_size, features) -> (1, window_size, features)
+                        state = np.expand_dims(state, axis=0)
+                        logger.info(f"Expanded state shape from {obs.shape} to {state.shape} for std stats calculation")
+                    
+                    state_tensor = torch.FloatTensor(state).to(agent.device)
                     action_mean, action_std = agent.old_network(state_tensor)
                     mean_std = action_std.mean().item()
                     min_std = action_std.min().item()
@@ -368,98 +375,129 @@ def hyperparameter_optimization(df, config=None):
     if config is None:
         config = {}
     
-    # 하이퍼파라미터 검색 공간 설정
-    search_config = {
-        "hyperopt": {
-            "num_samples": 5,  # 검색할 샘플 수
-            "parameters": {
-                "agent.learning_rate": {"distribution": "loguniform", "min": 1e-5, "max": 1e-3},
-                "agent.gamma": {"distribution": "uniform", "min": 0.9, "max": 0.999},
-                "agent.gae_lambda": {"distribution": "uniform", "min": 0.9, "max": 0.99},
-                "agent.clip_epsilon": {"distribution": "uniform", "min": 0.1, "max": 0.3},
-                "agent.n_epochs": {"distribution": "randint", "min": 3, "max": 10},
-                "env.window_size": {"distribution": "choice", "values": [10, 20, 30]},
-                "training.update_interval": {"distribution": "choice", "values": [64, 128, 256]},
+    # 데이터를 임시 파일로 저장 (Ray Tune worker가 접근할 수 있도록)
+    import tempfile
+    import os
+    
+    temp_dir = tempfile.mkdtemp()
+    temp_data_path = os.path.join(temp_dir, "temp_data.csv")
+    logger.info(f"임시 데이터 파일 저장: {temp_data_path}")
+    
+    try:
+        # DataFrame을 CSV 파일로 저장
+        df.to_csv(temp_data_path, index=False)
+        
+        # 하이퍼파라미터 검색 공간 설정
+        search_config = {
+            "hyperopt": {
+                "num_samples": 5,  # 검색할 샘플 수
+                "parameters": {
+                    "agent.learning_rate": {"distribution": "loguniform", "min": 1e-5, "max": 1e-3},
+                    "agent.gamma": {"distribution": "uniform", "min": 0.9, "max": 0.999},
+                    "agent.gae_lambda": {"distribution": "uniform", "min": 0.9, "max": 0.99},
+                    "agent.clip_epsilon": {"distribution": "uniform", "min": 0.1, "max": 0.3},
+                    "agent.n_epochs": {"distribution": "randint", "min": 3, "max": 10},
+                    "env.window_size": {"distribution": "choice", "values": [10, 20, 30]},
+                    "training.update_interval": {"distribution": "choice", "values": [64, 128, 256]},
+                }
+            },
+            "training": {
+                "num_episodes": 5,  # 각 시도마다 적은 에피소드로 평가
+            },
+            "paths": {
+                "model_path": "ppo_agent_hyperopt.pt"
+            },
+            # 환경 유형 및 데이터 경로 설정 추가
+            "env": {
+                "type": "single_asset_rl",  # 환경 유형 설정
+                "initial_capital": 10000.0,
+                "trading_fee": 0.001,
+                "risk_adjusted_reward": True
+            },
+            "data": {
+                "data_path": temp_data_path  # 임시 데이터 파일 경로 설정
             }
-        },
-        "training": {
-            "num_episodes": 5,  # 각 시도마다 적은 에피소드로 평가
-        },
-        "paths": {
-            "model_path": "ppo_agent_hyperopt.pt"
         }
-    }
-    
-    # 기존 설정과 검색 설정 병합
-    full_config = {**config, **search_config}
-    
-    def train_func(trial_config):
-        """Ray Tune 학습 함수"""
-        # 설정 병합
-        trial_full_config = {**full_config}
         
-        # 하이퍼파라미터 업데이트
-        for param_key, param_value in trial_config.items():
-            if param_key != "_full_config":  # Ray Tune 내부 변수 무시
-                parts = param_key.split(".")
-                nested_dict = trial_full_config
-                for part in parts[:-1]:
-                    if part not in nested_dict:
-                        nested_dict[part] = {}
-                    nested_dict = nested_dict[part]
-                nested_dict[parts[-1]] = param_value
+        # 기존 설정과 검색 설정 병합
+        full_config = {**config, **search_config}
         
-        # 환경과 에이전트 생성
-        env = create_env(df, trial_full_config)
-        agent = create_agent(env, trial_full_config)
+        def train_func(trial_config):
+            """Ray Tune 학습 함수"""
+            # 설정 병합
+            trial_full_config = {**full_config}
+            
+            # 하이퍼파라미터 업데이트
+            for param_key, param_value in trial_config.items():
+                if param_key != "_full_config":  # Ray Tune 내부 변수 무시
+                    parts = param_key.split(".")
+                    nested_dict = trial_full_config
+                    for part in parts[:-1]:
+                        if part not in nested_dict:
+                            nested_dict[part] = {}
+                        nested_dict = nested_dict[part]
+                    nested_dict[parts[-1]] = param_value
+            
+            # 환경과 에이전트 생성
+            env = create_env(df, trial_full_config)
+            agent = create_agent(env, trial_full_config)
+            
+            # MLflow 매니저 설정
+            mlflow_manager = MLflowManager(
+                experiment_name="SingleAssetRL_Hyperopt",
+                tracking_dir="./mlruns"
+            )
+            
+            # 학습 및 평가
+            with mlflow_manager.start_run() as run:
+                # 하이퍼파라미터 로깅
+                flat_params = {}
+                for param_key, param_value in trial_config.items():
+                    if param_key != "_full_config":
+                        flat_params[param_key] = param_value
+                mlflow_manager.log_params(flat_params)
+                
+                # 학습 및 평가 실행
+                results = train_and_evaluate(agent, env, trial_full_config, mlflow_manager)
+                
+                # Ray Tune에 결과 반환
+                from ray import tune
+                tune.report(avg_reward=results["avg_reward"])
+                
+                return results
         
-        # MLflow 매니저 설정
+        # Ray Tune으로 하이퍼파라미터 최적화 실행
+        logger.info("하이퍼파라미터 최적화 시작")
+        search_space = create_search_space(full_config)
+        best_config, optimization_results = run_hyperparameter_optimization(full_config)
+        
+        logger.info(f"최적화 결과: {optimization_results}")
+        logger.info(f"최적 설정: {best_config}")
+        
+        # 최적 파라미터로 최종 학습
+        logger.info("최적 파라미터로 최종 학습 실행")
+        env = create_env(df, best_config)
+        agent = create_agent(env, best_config)
+        
         mlflow_manager = MLflowManager(
-            experiment_name="SingleAssetRL_Hyperopt",
+            experiment_name="SingleAssetRL_Final",
             tracking_dir="./mlruns"
         )
         
-        # 학습 및 평가
-        with mlflow_manager.start_run() as run:
-            # 하이퍼파라미터 로깅
-            flat_params = {}
-            for param_key, param_value in trial_config.items():
-                if param_key != "_full_config":
-                    flat_params[param_key] = param_value
-            mlflow_manager.log_params(flat_params)
-            
-            # 학습 및 평가 실행
-            results = train_and_evaluate(agent, env, trial_full_config, mlflow_manager)
-            
-            # Ray Tune에 결과 반환
-            from ray import tune
-            tune.report(avg_reward=results["avg_reward"])
-            
-            return results
+        with mlflow_manager.start_run("best_model_training") as run:
+            mlflow_manager.log_params(best_config)
+            final_results = train_and_evaluate(agent, env, best_config, mlflow_manager)
+        
+        return final_results
     
-    # Ray Tune으로 하이퍼파라미터 최적화 실행
-    logger.info("하이퍼파라미터 최적화 시작")
-    search_space = create_search_space(full_config)
-    best_config, optimization_results = run_hyperparameter_optimization(full_config)
-    
-    logger.info(f"최적화 결과: {optimization_results}")
-    logger.info(f"최적 설정: {best_config}")
-    
-    # 최적 파라미터로 최종 학습
-    logger.info("최적 파라미터로 최종 학습 실행")
-    env = create_env(df, best_config)
-    agent = create_agent(env, best_config)
-    
-    mlflow_manager = MLflowManager(
-        experiment_name="SingleAssetRL_Final",
-        tracking_dir="./mlruns"
-    )
-    
-    with mlflow_manager.start_run("best_model_training") as run:
-        mlflow_manager.log_params(best_config)
-        final_results = train_and_evaluate(agent, env, best_config, mlflow_manager)
-    
-    return final_results
+    finally:
+        # 임시 디렉토리 및 파일 정리
+        import shutil
+        logger.info(f"임시 디렉토리 정리: {temp_dir}")
+        try:
+            shutil.rmtree(temp_dir)
+        except Exception as e:
+            logger.warning(f"임시 디렉토리 정리 중 오류 발생: {str(e)}")
 
 def main():
     parser = argparse.ArgumentParser(description="단일 자산 RL 환경에서 PPO 에이전트 디버깅")
