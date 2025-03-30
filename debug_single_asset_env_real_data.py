@@ -392,12 +392,12 @@ def hyperparameter_optimization(df, config=None):
             "hyperopt": {
                 "num_samples": 5,  # 검색할 샘플 수
                 "parameters": {
-                    "agent.learning_rate": {"distribution": "loguniform", "min": 1e-5, "max": 1e-3},
+                    "agent.learning_rate": {"distribution": "loguniform", "min": 1e-5, "max": 5e-4},
                     "agent.gamma": {"distribution": "uniform", "min": 0.9, "max": 0.999},
                     "agent.gae_lambda": {"distribution": "uniform", "min": 0.9, "max": 0.99},
                     "agent.clip_epsilon": {"distribution": "uniform", "min": 0.1, "max": 0.3},
                     "agent.n_epochs": {"distribution": "randint", "min": 3, "max": 10},
-                    "env.window_size": {"distribution": "choice", "values": [10, 20, 30]},
+                    "env.window_size": {"distribution": "choice", "values": [3, 5]},
                     "training.update_interval": {"distribution": "choice", "values": [64, 128, 256]},
                 }
             },

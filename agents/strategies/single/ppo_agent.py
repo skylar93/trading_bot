@@ -46,6 +46,7 @@ from agents.base.base_agent import BaseAgent
 from agents.models.architectures.mlp import PolicyNetwork
 from agents.models.architectures.value_mlp import ValueNetwork
 from buffers.ppo_buffer import PPOBuffer
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -1211,3 +1212,476 @@ class PPOAgent(BaseAgent):
             "kl": total_kl,
             "mean_std": mean_std
         }
+
+    def _update_policy(self, old_log_probs, advantages, states, actions):
+        """Update policy network parameters."""
+        for _ in range(self.k_epochs):
+            # Forward pass through policy network
+            action_mean, action_logstd = self.network(states)
+            
+            # Get log probabilities for the actions
+            action_std = torch.exp(action_logstd)
+            
+            # DEBUG: Check for extreme values in action_std
+            if torch.any(torch.isnan(action_std)) or torch.any(torch.isinf(action_std)):
+                self.logger.warning(f"❌ NaN/Inf detected in action_std: min={action_std.min().item():.4f}, max={action_std.max().item():.4f}")
+                # Replace with safe values
+                action_std = torch.clamp(action_std, min=1e-6, max=10.0)
+                
+            # Create normal distribution
+            dist = Normal(action_mean, action_std)
+            
+            # Calculate entropy (for exploration)
+            entropy = dist.entropy().mean()
+            
+            # Calculate log probabilities of actions
+            new_log_probs = dist.log_prob(actions)
+            
+            # DEBUG: Check for extreme values in new_log_probs
+            if torch.any(torch.isnan(new_log_probs)) or torch.any(torch.isinf(new_log_probs)):
+                self.logger.warning(f"❌ NaN/Inf detected in new_log_probs: min={new_log_probs.min().item():.4f}, max={new_log_probs.max().item():.4f}")
+                # Replace with safe values based on old_log_probs
+                new_log_probs = torch.where(
+                    torch.isnan(new_log_probs) | torch.isinf(new_log_probs),
+                    old_log_probs,
+                    new_log_probs
+                )
+            
+            # Calculate ratios
+            # Avoiding exp to prevent numerical overflow
+            if self.use_advantage_whitening:
+                # Whiten advantages
+                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+            
+            # Calculate the probability ratio directly
+            # ratio = (new_log_probs - old_log_probs).exp()
+            # Safer implementation:
+            log_ratio = new_log_probs - old_log_probs
+            ratio = torch.exp(torch.clamp(log_ratio, -20, 20))  # Prevent extreme values
+            
+            # DEBUG: Log ratio statistics
+            ratio_min = ratio.min().item()
+            ratio_max = ratio.max().item()
+            ratio_mean = ratio.mean().item()
+            self.logger.debug(f"📊 POLICY RATIO: min={ratio_min:.4f}, max={ratio_max:.4f}, mean={ratio_mean:.4f}")
+            
+            # Check for extreme ratios
+            if ratio_min < 0.01 or ratio_max > 100 or torch.any(torch.isnan(ratio)) or torch.any(torch.isinf(ratio)):
+                self.logger.warning(f"⚠️ EXTREME POLICY RATIO detected: min={ratio_min:.6f}, max={ratio_max:.6f}")
+                
+                # Debug the log probabilities that led to extreme ratios
+                if ratio_max > 100:
+                    extreme_idx = torch.argmax(ratio)
+                    self.logger.warning(
+                        f"📈 EXTREME RATIO DETAILS: "
+                        f"old_log_prob={old_log_probs[extreme_idx].item():.6f}, "
+                        f"new_log_prob={new_log_probs[extreme_idx].item():.6f}, "
+                        f"log_ratio={log_ratio[extreme_idx].item():.6f}, "
+                        f"ratio={ratio[extreme_idx].item():.6f}"
+                    )
+                
+                # Replace extreme values
+                ratio = torch.clamp(ratio, 0.01, 100.0)
+            
+            # Calculate surrogate losses
+            surr1 = ratio * advantages
+            surr2 = torch.clamp(ratio, 1.0 - self.eps_clip, 1.0 + self.eps_clip) * advantages
+            
+            # DEBUG: Check surrogate losses
+            if torch.any(torch.isnan(surr1)) or torch.any(torch.isnan(surr2)):
+                self.logger.warning(f"❌ NaN detected in surrogate losses")
+                # Replace NaN values with 0
+                surr1 = torch.nan_to_num(surr1, nan=0.0)
+                surr2 = torch.nan_to_num(surr2, nan=0.0)
+            
+            # PPO loss
+            policy_loss = -torch.min(surr1, surr2).mean()
+            
+            # Entropy bonus (for exploration)
+            loss = policy_loss - self.entropy_coefficient * entropy
+            
+            # Optimize policy network
+            self.optimizer.zero_grad()
+            loss.backward()
+            
+            # Clip gradients if enabled
+            if self.clip_grad:
+                torch.nn.utils.clip_grad_norm_(self.network.parameters(), self.max_grad_norm)
+                
+                # DEBUG: Log gradient norms
+                total_norm = 0
+                for p in self.network.parameters():
+                    if p.grad is not None:
+                        param_norm = p.grad.data.norm(2)
+                        total_norm += param_norm.item() ** 2
+                total_norm = total_norm ** 0.5
+                self.logger.debug(f"🔢 POLICY GRADIENT NORM: {total_norm:.6f}")
+                
+                # Check for extreme gradients
+                if total_norm > self.max_grad_norm * 0.9:  # Close to clipping threshold
+                    self.logger.warning(f"⚠️ LARGE POLICY GRADIENT: {total_norm:.6f}")
+            
+            self.optimizer.step()
+            
+            # Log statistics every few epochs
+            if _ == 0 or _ == self.k_epochs - 1:
+                self.logger.debug(
+                    f"🔄 POLICY UPDATE [{_+1}/{self.k_epochs}]: "
+                    f"policy_loss={policy_loss.item():.6f}, "
+                    f"entropy={entropy.item():.6f}, "
+                    f"final_loss={loss.item():.6f}"
+                )
+        
+        return policy_loss.item(), entropy.item()
+
+    def _update_value(self, returns, states):
+        """Update value network parameters."""
+        for _ in range(self.k_epochs):
+            # Get value predictions
+            predicted_values = self.value_network(states)
+            
+            # DEBUG: Check predicted values
+            if torch.any(torch.isnan(predicted_values)) or torch.any(torch.isinf(predicted_values)):
+                self.logger.warning(f"❌ NaN/Inf detected in predicted values: values stats: mean={predicted_values.mean().item():.4f}")
+                # Replace with safe values
+                predicted_values = torch.nan_to_num(predicted_values, nan=0.0, posinf=100.0, neginf=-100.0)
+            
+            # Calculate value loss using MSE
+            returns_flat = returns.view(-1, 1)
+            
+            # DEBUG: Check returns
+            if torch.any(torch.isnan(returns_flat)) or torch.any(torch.isinf(returns_flat)):
+                self.logger.warning(f"❌ NaN/Inf detected in returns: returns stats: mean={returns_flat.mean().item():.4f}")
+                # Replace with safe values
+                returns_flat = torch.nan_to_num(returns_flat, nan=0.0, posinf=100.0, neginf=-100.0)
+            
+            # Debug returns and values before loss calculation
+            returns_min, returns_max = returns_flat.min().item(), returns_flat.max().item()
+            values_min, values_max = predicted_values.min().item(), predicted_values.max().item()
+            self.logger.debug(f"📊 RETURNS RANGE: [{returns_min:.4f}, {returns_max:.4f}], VALUES RANGE: [{values_min:.4f}, {values_max:.4f}]")
+            
+            # Check for extreme difference between returns and values
+            abs_diff = torch.abs(returns_flat - predicted_values)
+            max_diff = abs_diff.max().item()
+            if max_diff > 100:
+                self.logger.warning(f"⚠️ EXTREME VALUE PREDICTION ERROR: {max_diff:.4f}")
+                
+                # Find the index of the maximum difference
+                max_idx = torch.argmax(abs_diff)
+                self.logger.warning(
+                    f"📈 EXTREME DIFF DETAILS: "
+                    f"return={returns_flat[max_idx].item():.4f}, "
+                    f"value={predicted_values[max_idx].item():.4f}, "
+                    f"diff={abs_diff[max_idx].item():.4f}"
+                )
+            
+            # Use MSE loss
+            value_loss = nn.MSELoss()(predicted_values, returns_flat)
+            
+            # Check for extreme loss
+            if torch.isnan(value_loss) or torch.isinf(value_loss) or value_loss.item() > 1000:
+                self.logger.warning(f"❌ EXTREME VALUE LOSS: {value_loss.item():.4f}")
+                # If loss is extreme, use a more conservative loss function
+                value_loss = nn.HuberLoss(delta=1.0)(predicted_values, returns_flat)
+                self.logger.debug(f"📈 Switched to Huber loss: {value_loss.item():.4f}")
+                
+                # If still extreme, use L1 loss
+                if torch.isnan(value_loss) or torch.isinf(value_loss) or value_loss.item() > 1000:
+                    value_loss = nn.L1Loss()(predicted_values, returns_flat)
+                    self.logger.debug(f"📈 Switched to L1 loss: {value_loss.item():.4f}")
+            
+            # Optimize value network
+            self.optimizer.zero_grad()
+            value_loss.backward()
+            
+            # Clip gradients if enabled
+            if self.clip_grad:
+                torch.nn.utils.clip_grad_norm_(self.value_network.parameters(), self.max_grad_norm)
+                
+                # DEBUG: Log gradient norms
+                total_norm = 0
+                for p in self.value_network.parameters():
+                    if p.grad is not None:
+                        param_norm = p.grad.data.norm(2)
+                        total_norm += param_norm.item() ** 2
+                total_norm = total_norm ** 0.5
+                self.logger.debug(f"🔢 VALUE GRADIENT NORM: {total_norm:.6f}")
+                
+                # Check for extreme gradients
+                if total_norm > self.max_grad_norm * 0.9:  # Close to clipping threshold
+                    self.logger.warning(f"⚠️ LARGE VALUE GRADIENT: {total_norm:.6f}")
+            
+            self.optimizer.step()
+            
+            # Log statistics every few epochs
+            if _ == 0 or _ == self.k_epochs - 1:
+                self.logger.debug(f"🔄 VALUE UPDATE [{_+1}/{self.k_epochs}]: value_loss={value_loss.item():.6f}")
+        
+        return value_loss.item()
+
+    def _compute_returns_and_advantages(self, rewards, states, dones):
+        """
+        Compute returns and advantages using GAE (Generalized Advantage Estimation).
+        
+        Args:
+            rewards: Tensor of rewards from each step
+            states: Tensor of states from each step
+            dones: Tensor indicating if episodes are done
+            
+        Returns:
+            returns: Tensor of discounted returns
+            advantages: Tensor of advantages
+        """
+        # Get value estimates for all states
+        with torch.no_grad():
+            values = self.value_network(states)
+            
+            # Check for NaN/Inf in values
+            if torch.any(torch.isnan(values)) or torch.any(torch.isinf(values)):
+                self.logger.warning(f"❌ NaN/Inf in value predictions during advantage calculation")
+                values = torch.nan_to_num(values, nan=0.0, posinf=100.0, neginf=-100.0)
+        
+        # Flatten values if needed
+        values = values.flatten()
+        
+        # Initialize return and advantage arrays
+        returns = torch.zeros_like(rewards)
+        advantages = torch.zeros_like(rewards)
+        
+        # Calculate GAE
+        gae = 0
+        next_value = 0  # Value of state after the last state in memory
+        
+        # Log value statistics
+        self.logger.debug(f"📊 VALUE STATS: min={values.min().item():.4f}, max={values.max().item():.4f}, mean={values.mean().item():.4f}")
+        
+        # Iterate backwards through rewards
+        for t in reversed(range(len(rewards))):
+            # For the last step or at done, next_value is 0 (episode boundary)
+            if t == len(rewards) - 1 or dones[t]:
+                next_non_terminal = 0.0
+                next_values = 0.0
+            else:
+                next_non_terminal = 1.0 - dones[t]
+                next_values = values[t + 1]
+                
+                # Check for NaN/Inf in next_values
+                if torch.isnan(next_values) or torch.isinf(next_values):
+                    self.logger.warning(f"❌ NaN/Inf in next_values at step {t}")
+                    next_values = 0.0
+            
+            # Calculate TD error: r_t + γV(s_{t+1}) - V(s_t)
+            delta = rewards[t] + self.gamma * next_values * next_non_terminal - values[t]
+            
+            # Calculate advantage using GAE
+            gae = delta + self.gamma * self.gae_lambda * next_non_terminal * gae
+            advantages[t] = gae
+            
+            # Calculate returns: advantage + value
+            returns[t] = advantages[t] + values[t]
+            
+            # Check for NaN/Inf in advantages and returns
+            if torch.isnan(advantages[t]) or torch.isinf(advantages[t]):
+                self.logger.warning(f"❌ NaN/Inf in advantage at step {t}: advantage={advantages[t].item():.4f}, gae={gae:.4f}")
+                if t > 0:  # Use previous advantage if available
+                    advantages[t] = advantages[t-1]
+                else:
+                    advantages[t] = 0.0
+                    
+            if torch.isnan(returns[t]) or torch.isinf(returns[t]):
+                self.logger.warning(f"❌ NaN/Inf in return at step {t}: return={returns[t].item():.4f}")
+                if t > 0:  # Use previous return if available
+                    returns[t] = returns[t-1]
+                else:
+                    returns[t] = rewards[t]  # Fall back to just the reward
+        
+        # Log advantage and return statistics
+        if len(advantages) > 0:
+            self.logger.debug(f"📊 ADVANTAGE STATS: min={advantages.min().item():.4f}, max={advantages.max().item():.4f}, mean={advantages.mean().item():.4f}")
+            self.logger.debug(f"📊 RETURN STATS: min={returns.min().item():.4f}, max={returns.max().item():.4f}, mean={returns.mean().item():.4f}")
+        
+        return returns, advantages
+
+    def train(self, memory):
+        """Update policy and value networks using collected experiences."""
+        # Convert memory to tensors
+        old_states = torch.FloatTensor(memory.states).to(self.device)
+        old_actions = torch.FloatTensor(memory.actions).to(self.device)
+        old_log_probs = torch.FloatTensor(memory.log_probs).to(self.device)
+        old_rewards = torch.FloatTensor(memory.rewards).to(self.device)
+        old_dones = torch.FloatTensor(memory.dones).to(self.device)
+        
+        # DEBUG: Check memory tensors for NaN/Inf
+        has_nans = torch.any(torch.isnan(old_states)) or torch.any(torch.isnan(old_actions)) or \
+                  torch.any(torch.isnan(old_log_probs)) or torch.any(torch.isnan(old_rewards))
+        if has_nans:
+            self.logger.warning("❌ NaN values detected in memory tensors!")
+            # Print which tensors have NaNs
+            self.logger.warning(f"NaN in states: {torch.any(torch.isnan(old_states))}")
+            self.logger.warning(f"NaN in actions: {torch.any(torch.isnan(old_actions))}")
+            self.logger.warning(f"NaN in log_probs: {torch.any(torch.isnan(old_log_probs))}")
+            self.logger.warning(f"NaN in rewards: {torch.any(torch.isnan(old_rewards))}")
+            
+            # Replace NaNs with safe values
+            old_states = torch.nan_to_num(old_states)
+            old_actions = torch.nan_to_num(old_actions)
+            old_log_probs = torch.nan_to_num(old_log_probs)
+            old_rewards = torch.nan_to_num(old_rewards)
+            
+        # Log memory statistics
+        self.logger.debug(
+            f"📊 MEMORY STATS: "
+            f"rewards=[{old_rewards.min().item():.4f}, {old_rewards.max().item():.4f}], "
+            f"actions=[{old_actions.min().item():.4f}, {old_actions.max().item():.4f}], "
+            f"log_probs=[{old_log_probs.min().item():.4f}, {old_log_probs.max().item():.4f}]"
+        )
+        
+        # Calculate returns and advantages
+        returns, advantages = self._compute_returns_and_advantages(old_rewards, old_states, old_dones)
+        
+        # DEBUG: Check for extreme advantages
+        if torch.any(torch.isnan(advantages)) or torch.any(torch.isinf(advantages)):
+            self.logger.warning(f"❌ NaN/Inf detected in advantages! Replacing with 0")
+            advantages = torch.nan_to_num(advantages, nan=0.0)
+        
+        adv_min, adv_max = advantages.min().item(), advantages.max().item()
+        if abs(adv_min) > 100 or abs(adv_max) > 100:
+            self.logger.warning(f"⚠️ EXTREME ADVANTAGES: min={adv_min:.4f}, max={adv_max:.4f}")
+            # Clip to reasonable range if extreme
+            advantages = torch.clamp(advantages, -100, 100)
+            
+        # Get the original_loss for logging
+        original_policy_loss = 0
+        original_value_loss = 0
+        
+        # Update networks
+        for _ in range(self.k_epochs):
+            # Forward pass through policy network
+            action_mean, action_logstd = self.network(old_states)
+            
+            # DEBUG: Check for NaN/Inf in network output
+            if torch.any(torch.isnan(action_mean)) or torch.any(torch.isnan(action_logstd)):
+                self.logger.warning(f"❌ NaN in policy network output; replacing with safe values")
+                action_mean = torch.nan_to_num(action_mean, nan=0.0)
+                action_logstd = torch.nan_to_num(action_logstd, nan=math.log(0.5))
+            
+            # Get log probabilities for the actions
+            action_std = torch.exp(action_logstd)
+            
+            # Clamp std to avoid numerical instability
+            action_std = torch.clamp(action_std, min=1e-6, max=10.0)
+            
+            dist = Normal(action_mean, action_std)
+            entropy = dist.entropy().mean()
+            new_log_probs = dist.log_prob(old_actions)
+            
+            # Safer calculation of ratio to avoid extreme values
+            log_ratio = new_log_probs - old_log_probs
+            log_ratio = torch.clamp(log_ratio, -20, 20)  # Prevent extreme values
+            ratio = torch.exp(log_ratio)
+            
+            # Log ratio statistics
+            ratio_min = ratio.min().item()
+            ratio_max = ratio.max().item()
+            ratio_mean = ratio.mean().item()
+            
+            self.logger.debug(f"📊 POLICY RATIO: min={ratio_min:.4f}, max={ratio_max:.4f}, mean={ratio_mean:.4f}")
+            
+            # Check for extreme ratios that might cause instability
+            if ratio_max > 100 or ratio_min < 0.01:
+                self.logger.warning(f"⚠️ EXTREME POLICY RATIO: min={ratio_min:.4f}, max={ratio_max:.4f}")
+                
+                # Find indices of extreme ratios for debugging
+                if ratio_max > 100:
+                    extreme_idx = torch.argmax(ratio)
+                    self.logger.warning(
+                        f"📈 EXTREME RATIO DETAILS: "
+                        f"old_log_prob={old_log_probs[extreme_idx].item():.6f}, "
+                        f"new_log_prob={new_log_probs[extreme_idx].item():.6f}, "
+                        f"log_ratio={log_ratio[extreme_idx].item():.6f}, "
+                        f"ratio={ratio[extreme_idx].item():.6f}"
+                    )
+                
+                # Clip extreme ratios to prevent instability
+                ratio = torch.clamp(ratio, 0.01, 100.0)
+            
+            # Calculate surrogate losses
+            surr1 = ratio * advantages
+            surr2 = torch.clamp(ratio, 1.0 - self.eps_clip, 1.0 + self.eps_clip) * advantages
+            
+            # Check for NaN in surrogate losses
+            if torch.any(torch.isnan(surr1)) or torch.any(torch.isnan(surr2)):
+                self.logger.warning(f"❌ NaN detected in surrogate losses")
+                surr1 = torch.nan_to_num(surr1, nan=0.0)
+                surr2 = torch.nan_to_num(surr2, nan=0.0)
+            
+            # Calculate policy loss
+            policy_loss = -torch.min(surr1, surr2).mean()
+            
+            # Validate policy loss
+            if torch.isnan(policy_loss) or torch.isinf(policy_loss):
+                self.logger.warning(f"❌ NaN/Inf in policy loss; using fallback loss")
+                policy_loss = -surr1.mean()  # Fallback to simpler loss
+                if torch.isnan(policy_loss) or torch.isinf(policy_loss):
+                    policy_loss = torch.tensor(0.0, device=self.device)  # Last resort
+            
+            # Calculate value network loss
+            values = self.value_network(old_states).view(-1)
+            value_loss = nn.MSELoss()(values, returns)
+            
+            # If value loss is NaN/Inf, try alternative loss functions
+            if torch.isnan(value_loss) or torch.isinf(value_loss):
+                self.logger.warning(f"❌ NaN/Inf in value loss; using Huber loss")
+                value_loss = nn.SmoothL1Loss()(values, returns)
+                if torch.isnan(value_loss) or torch.isinf(value_loss):
+                    self.logger.warning(f"❌ NaN/Inf still present; using L1 loss")
+                    value_loss = nn.L1Loss()(values, returns)
+                    if torch.isnan(value_loss) or torch.isinf(value_loss):
+                        value_loss = torch.tensor(0.0, device=self.device)  # Last resort
+            
+            # Store original losses for the first iteration
+            if _ == 0:
+                original_policy_loss = policy_loss.item()
+                original_value_loss = value_loss.item()
+            
+            # Combined loss
+            loss = policy_loss + self.value_loss_coef * value_loss - self.entropy_coefficient * entropy
+            
+            # Optimize
+            self.optimizer.zero_grad()
+            loss.backward()
+            
+            # Gradient clipping if enabled
+            if self.clip_grad:
+                torch.nn.utils.clip_grad_norm_(self.network.parameters(), self.max_grad_norm)
+                torch.nn.utils.clip_grad_norm_(self.value_network.parameters(), self.max_grad_norm)
+            
+            self.optimizer.step()
+            
+            # Log detailed training statistics periodically
+            if _ == 0 or _ == self.k_epochs - 1:
+                self.logger.debug(
+                    f"🔄 PPO UPDATE [{_+1}/{self.k_epochs}]: "
+                    f"policy_loss={policy_loss.item():.6f}, "
+                    f"value_loss={value_loss.item():.6f}, "
+                    f"entropy={entropy.item():.6f}, "
+                    f"total_loss={loss.item():.6f}"
+                )
+        
+        # Track statistics for later analysis
+        final_policy_loss = policy_loss.item()
+        final_value_loss = value_loss.item()
+        final_entropy = entropy.item()
+        
+        self.policy_losses.append(final_policy_loss)
+        self.value_losses.append(final_value_loss)
+        self.entropies.append(final_entropy)
+        
+        # Log improvement from original to final loss
+        self.logger.debug(
+            f"📈 TRAINING IMPROVEMENT: "
+            f"policy_loss: {original_policy_loss:.6f} -> {final_policy_loss:.6f} ({(final_policy_loss - original_policy_loss):.6f}), "
+            f"value_loss: {original_value_loss:.6f} -> {final_value_loss:.6f} ({(final_value_loss - original_value_loss):.6f})"
+        )
+        
+        return final_policy_loss, final_value_loss, final_entropy

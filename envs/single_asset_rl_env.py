@@ -54,6 +54,12 @@ class SingleAssetRLTradingEnv(gym.Env):
         partial_fills: bool = True,
         min_fill_rate: float = 0.8,
         volume_slippage_factor: float = 0.1,
+        # Additional stability parameters
+        scale_ohlcv: bool = True,
+        price_scale_factor: float = 1000.0,
+        volume_scale_factor: float = 1e6,
+        min_episode_steps: int = 5,
+        reward_scale: float = 1.0,
     ):
         """Initialize environment
 
@@ -73,6 +79,11 @@ class SingleAssetRLTradingEnv(gym.Env):
             partial_fills: Whether to simulate partial fills
             min_fill_rate: Minimum fill rate for partial fills (0-1)
             volume_slippage_factor: Factor for volume-based slippage calculation
+            scale_ohlcv: Whether to scale OHLCV data to prevent numerical instability
+            price_scale_factor: Factor to scale price data (OHLC)
+            volume_scale_factor: Factor to scale volume data
+            min_episode_steps: Minimum number of steps before allowing early termination
+            reward_scale: Factor to scale rewards (smaller values = more stable)
         """
         super().__init__()
         
@@ -126,6 +137,13 @@ class SingleAssetRLTradingEnv(gym.Env):
         self.partial_fills = partial_fills
         self.min_fill_rate = min_fill_rate
         self.volume_slippage_factor = volume_slippage_factor
+        
+        # Stability parameters
+        self.scale_ohlcv = scale_ohlcv
+        self.price_scale_factor = price_scale_factor
+        self.volume_scale_factor = volume_scale_factor
+        self.min_episode_steps = min_episode_steps
+        self.reward_scale = reward_scale
 
         # Define action and observation spaces
         self.action_space = gym.spaces.Box(
@@ -161,6 +179,14 @@ class SingleAssetRLTradingEnv(gym.Env):
             f"initial_capital={initial_capital}, trading_fee={trading_fee}, "
             f"risk_adjusted_reward={risk_adjusted_reward}, apply_slippage={apply_slippage}"
         )
+        
+        # STEP 1-A: Check if data is long enough
+        if self.data is not None:
+            if len(self.data) < self.window_size + 1:
+                raise ValueError(
+                    f"Data too short ({len(self.data)}) for window_size={self.window_size}. "
+                    f"Need at least window_size+1 rows."
+                )
 
     def reset(
         self, seed: Optional[int] = None, options: Optional[dict] = None
@@ -207,6 +233,16 @@ class SingleAssetRLTradingEnv(gym.Env):
         current_price = self.data.iloc[self.current_step]["$close"]
         current_volume = self.data.iloc[self.current_step]["$volume"]
         
+        # DEBUG: Check for extreme price values
+        if current_price <= 0 or np.isnan(current_price) or np.isinf(current_price):
+            self.logger.warning(f"❌ EXTREME PRICE VALUE at step {self.current_step}: price={current_price}")
+            current_price = max(0.01, abs(current_price)) if not np.isnan(current_price) else 1.0
+            
+        # DEBUG: Check for extreme volume values
+        if current_volume <= 0 or np.isnan(current_volume) or np.isinf(current_volume):
+            self.logger.warning(f"❌ EXTREME VOLUME VALUE at step {self.current_step}: volume={current_volume}")
+            current_volume = 1.0
+        
         # Calculate target position change
         position_change = float(action[0]) * self.max_position_size
         target_position = self.current_position + position_change
@@ -221,38 +257,94 @@ class SingleAssetRLTradingEnv(gym.Env):
         # Calculate actual position change
         actual_change = target_position - self.current_position
         
+        # DEBUG: Log action details for monitoring
+        self.logger.debug(f"💰 ACTION DETAILS: action={action[0]:.4f}, position_change={position_change:.4f}, actual_change={actual_change:.4f}")
+        
         # Reset trade metrics
         self.last_trade_size = 0
         self.last_fill_rate = 1.0
         self.last_slippage = 0.0
+        
+        # Initialize reward debug information
+        reward_debug = {
+            "basic_reward": 0.0,
+            "sharpe_component": 0.0,
+            "drawdown_penalty": 0.0,
+            "final_reward": 0.0,
+            "portfolio_change": 0.0,
+            "pre_portfolio": self.previous_portfolio_value,
+            "post_portfolio": 0.0,
+        }
         
         # Execute trade if there is a position change
         if abs(actual_change) > 1e-8:  # Small epsilon to handle float precision
             # Apply partial fills if enabled
             requested_change = actual_change
             if self.partial_fills:
-                # Larger trades are more likely to be partially filled
-                fill_rate = self._calculate_fill_rate(abs(actual_change), current_volume)
-                actual_change = actual_change * fill_rate
-                self.last_fill_rate = fill_rate
+                try:
+                    # Larger trades are more likely to be partially filled
+                    fill_rate = self._calculate_fill_rate(abs(actual_change), current_volume)
+                    
+                    # DEBUG: Check for extreme fill rates
+                    if fill_rate <= 0 or fill_rate > 1.0 or np.isnan(fill_rate) or np.isinf(fill_rate):
+                        self.logger.warning(f"❌ EXTREME FILL RATE: {fill_rate}, using safe default")
+                        fill_rate = self.min_fill_rate
+                        
+                    actual_change = actual_change * fill_rate
+                    self.last_fill_rate = fill_rate
+                    
+                    # DEBUG: Log fill rate details
+                    self.logger.debug(f"📊 FILL RATE: requested={requested_change:.4f}, fill_rate={fill_rate:.4f}, actual={actual_change:.4f}")
+                except Exception as e:
+                    self.logger.error(f"❌ ERROR in fill rate calculation: {str(e)}")
+                    self.last_fill_rate = self.min_fill_rate
+                    actual_change = actual_change * self.last_fill_rate
             
             # Apply slippage to price if enabled
             executed_price = current_price
             if self.apply_slippage:
-                # Calculate slippage based on order size and volume
-                slippage = self._calculate_slippage(actual_change, current_price, current_volume)
-                # Slippage is positive for buys (price goes up), negative for sells (price goes down)
-                slippage_direction = 1 if actual_change > 0 else -1
-                executed_price = current_price * (1 + slippage_direction * slippage)
-                self.last_slippage = slippage
+                try:
+                    # Calculate slippage based on order size and volume
+                    slippage = self._calculate_slippage(actual_change, current_price, current_volume)
+                    
+                    # DEBUG: Check for extreme slippage
+                    if slippage < 0 or slippage > 0.1 or np.isnan(slippage) or np.isinf(slippage):
+                        self.logger.warning(f"❌ EXTREME SLIPPAGE: {slippage}, capping at 0.05")
+                        slippage = min(max(0, slippage), 0.05)
+                        
+                    # Slippage is positive for buys (price goes up), negative for sells (price goes down)
+                    slippage_direction = 1 if actual_change > 0 else -1
+                    executed_price = current_price * (1 + slippage_direction * slippage)
+                    self.last_slippage = slippage
+                    
+                    # DEBUG: Log slippage details
+                    self.logger.debug(f"📉 SLIPPAGE: rate={slippage:.6f}, direction={slippage_direction}, price: {current_price:.4f} -> {executed_price:.4f}")
+                except Exception as e:
+                    self.logger.error(f"❌ ERROR in slippage calculation: {str(e)}")
+                    self.last_slippage = 0.0
+                    executed_price = current_price
             
             # Calculate trade cost
             trade_value = abs(actual_change * executed_price)
             self.last_trade_size = trade_value
             
             # Apply dynamic fee (larger trades might pay different fees)
-            fee_rate = self._calculate_dynamic_fee(trade_value)
-            trade_cost = trade_value * fee_rate
+            try:
+                fee_rate = self._calculate_dynamic_fee(trade_value)
+                trade_cost = trade_value * fee_rate
+                
+                # DEBUG: Check for extreme fees
+                if fee_rate < 0 or fee_rate > 0.05 or np.isnan(fee_rate) or np.isinf(fee_rate):
+                    self.logger.warning(f"❌ EXTREME FEE RATE: {fee_rate}, using default")
+                    fee_rate = self.trading_fee
+                    trade_cost = trade_value * fee_rate
+                    
+                # DEBUG: Log fee details
+                self.logger.debug(f"💲 TRADE COSTS: value={trade_value:.4f}, fee_rate={fee_rate:.6f}, cost={trade_cost:.4f}")
+            except Exception as e:
+                self.logger.error(f"❌ ERROR in fee calculation: {str(e)}")
+                fee_rate = self.trading_fee
+                trade_cost = trade_value * fee_rate
             
             # Update capital and position
             self.current_capital -= trade_cost
@@ -261,7 +353,29 @@ class SingleAssetRLTradingEnv(gym.Env):
             else:  # Sell
                 self.current_capital += trade_value
             
-            self.current_position += actual_change  # Update to the partially filled position
+            self.current_position += actual_change
+            
+            # Check if we should end the episode based on capital
+            force_done = False
+            if self.current_capital <= 1.0:
+                self.logger.warning(f"❌ NEGATIVE OR NEAR-ZERO CAPITAL ({self.current_capital:.4f}); flagging for episode end.")
+                force_done = True
+            elif self.current_capital > 1e9:
+                self.logger.warning(f"❌ EXTREME CAPITAL ({self.current_capital:.2f}); flagging for episode end.")
+                force_done = True
+            
+            # But don't actually end if we haven't reached minimum episode steps
+            if force_done and (self.current_step - self.window_size) < self.min_episode_steps:
+                self.logger.warning(f"Delaying episode termination until minimum steps {self.min_episode_steps} are reached. Current: {self.current_step - self.window_size}")
+                force_done = False
+            
+            # Apply force_done only if we've reached minimum steps
+            if force_done:
+                self.done = True
+            
+            # DEBUG: Check for negative capital (shouldn't happen but could cause issues)
+            if self.current_capital < 0:
+                self.logger.warning(f"❌ NEGATIVE CAPITAL after trade: {self.current_capital:.4f}")
             
             # Record trade
             self.trades.append({
@@ -283,6 +397,23 @@ class SingleAssetRLTradingEnv(gym.Env):
         # Calculate new portfolio value after action and step
         self.portfolio_value = self._calculate_portfolio_value(self.current_step - 1 if self.done else self.current_step)
         
+        # DEBUG: Check for extreme portfolio values
+        if self.portfolio_value <= 0 or np.isnan(self.portfolio_value) or np.isinf(self.portfolio_value):
+            self.logger.warning(f"❌ EXTREME PORTFOLIO VALUE: {self.portfolio_value}, using previous value")
+            self.portfolio_value = max(1.0, self.previous_portfolio_value)
+        
+        # STEP 3-2: After self.portfolio_value is computed and checked for NaN/Inf:
+        if self.portfolio_value < 1.0:
+            self.logger.warning(f"❌ PORTFOLIO < 1.0 => forced episode end")
+            self.done = True
+            # 만약 그래도 학습 유지하고 싶다면, 최소 1.0으로 강제
+            self.portfolio_value = max(1.0, self.portfolio_value)
+        
+        if self.portfolio_value > 1e9:
+            self.logger.warning(f"❌ PORTFOLIO > 1e9 => forced episode end")
+            self.done = True
+            self.portfolio_value = min(1e9, self.portfolio_value)
+        
         # Update peak portfolio value for drawdown calculation
         self.peak_portfolio_value = max(self.peak_portfolio_value, self.portfolio_value)
         
@@ -290,23 +421,77 @@ class SingleAssetRLTradingEnv(gym.Env):
         eps = 1e-8  # Small epsilon to prevent division by zero
         reward_step = (self.portfolio_value - self.previous_portfolio_value) / max(self.previous_portfolio_value, eps)
         
+        # Apply tighter clipping for basic reward (±2 instead of ±10)
+        if np.isnan(reward_step) or np.isinf(reward_step) or abs(reward_step) > 2.0:
+            self.logger.warning(f"❌ EXTREME BASIC REWARD: {reward_step}, capping to range [-2, 2]")
+            if np.isnan(reward_step):
+                reward_step = 0.0
+            else:
+                reward_step = np.clip(reward_step, -2.0, 2.0)
+        
+        # Scale reward for stability (if reward_scale < 1)
+        reward_step = reward_step * self.reward_scale
+            
+        # Update reward debug information
+        reward_debug["basic_reward"] = reward_step
+        reward_debug["portfolio_change"] = reward_step / self.reward_scale  # Show unscaled for debugging
+        reward_debug["post_portfolio"] = self.portfolio_value
+        
         # Update returns buffer for Sharpe calculation
         self.returns_buffer.append(reward_step)
         
         # Calculate final reward with risk adjustment
-        reward = self._calculate_risk_adjusted_reward(reward_step)
+        try:
+            reward = self._calculate_risk_adjusted_reward(reward_step, reward_debug)
+            
+            # Apply final tighter reward clipping (±5 instead of ±100)
+            if np.isnan(reward) or np.isinf(reward) or abs(reward) > 5.0:
+                self.logger.warning(f"❌ FINAL REWARD IS INVALID: {reward}, fallback to [-5, 5]")
+                if np.isnan(reward):
+                    reward = 0.0
+                else:
+                    reward = np.clip(reward, -5.0, 5.0)
+        except Exception as e:
+            self.logger.error(f"❌ ERROR calculating risk-adjusted reward: {str(e)}")
+            reward = np.clip(reward_step, -2.0, 2.0) if not np.isnan(reward_step) else 0.0
         
+        # Update info with reward debug
         observation = self._get_observation()
         info = self._get_info()
+        info["reward_debug"] = reward_debug
+        
+        # If we decided self.done = True above, we can forcibly end now
+        if self.done and self.current_step < len(self.data):  # Only early termination, not normal end
+            # Smaller penalty for capital <= 1.0
+            if self.current_capital <= 1.0:
+                reward = -1.0  # Reduced from -10.0 to -1.0 for stability
+            elif self.portfolio_value < 1.0:
+                reward = -0.5  # Reduced from -5.0 to -0.5 for stability
+
+            observation = self._get_observation()
+            info = self._get_info()
+            info["reward_debug"] = reward_debug
+            info["early_termination"] = True  # Add flag for agent to know this was early termination
+
+            return observation, reward, True, False, info
+        
+        # DEBUG: Log step summary periodically
+        if self.current_step % 10 == 0:
+            self.logger.info(
+                f"🔄 STEP {self.current_step}: portfolio={self.portfolio_value:.2f}, "
+                f"position={self.current_position:.4f}, reward={reward:.4f}"
+            )
+            self.logger.info(f"📈 REWARD DEBUG: {reward_debug}")
         
         return observation, reward, self.done, False, info
 
-    def _calculate_risk_adjusted_reward(self, basic_reward: float) -> float:
+    def _calculate_risk_adjusted_reward(self, basic_reward: float, reward_debug: dict = None) -> float:
         """
         Calculate risk-adjusted reward incorporating Sharpe ratio and drawdown penalties.
         
         Args:
             basic_reward: The basic reward (change in portfolio value)
+            reward_debug: Optional dictionary to store reward components for debugging
             
         Returns:
             float: Risk-adjusted reward
@@ -317,31 +502,94 @@ class SingleAssetRLTradingEnv(gym.Env):
         # Calculate Sharpe component if enabled and we have enough data
         sharpe_component = 0.0
         if self.risk_adjusted_reward and len(self.returns_buffer) > 3:
-            mean_return = np.mean(self.returns_buffer)
-            std_return = np.std(self.returns_buffer) + 1e-8  # avoid division by zero
-            sharpe_proxy = mean_return / std_return
-            
-            # Avoid extreme values
-            sharpe_proxy = np.clip(sharpe_proxy, -10.0, 10.0)
-            
-            # Mix in the Sharpe component
-            if self.sharpe_weight > 0:
-                final_reward = (1 - self.sharpe_weight) * basic_reward + self.sharpe_weight * sharpe_proxy
+            try:
+                # Calculate mean and standard deviation of returns
+                returns_array = np.array(list(self.returns_buffer))
+                
+                # Check for NaN/Inf values in returns buffer
+                if np.any(np.isnan(returns_array)) or np.any(np.isinf(returns_array)):
+                    self.logger.warning(f"❌ NaN/Inf values in returns buffer: {returns_array}")
+                    # Clean up the returns array
+                    returns_array = np.array([r for r in returns_array if not np.isnan(r) and not np.isinf(r)])
+                    if len(returns_array) < 3:
+                        # Not enough valid returns, skip Sharpe calculation
+                        if reward_debug is not None:
+                            reward_debug["sharpe_component"] = 0.0
+                        return basic_reward
+                
+                mean_return = np.mean(returns_array)
+                std_return = np.std(returns_array) + 1e-8  # avoid division by zero
+                
+                # DEBUG: Log Sharpe calculation details
+                self.logger.debug(f"📊 SHARPE CALC: mean={mean_return:.6f}, std={std_return:.6f}, n={len(returns_array)}")
+                
+                sharpe_proxy = mean_return / std_return
+                
+                # Avoid extreme values
+                sharpe_proxy = np.clip(sharpe_proxy, -10.0, 10.0)
+                sharpe_component = sharpe_proxy
+                
+                # Mix in the Sharpe component
+                if self.sharpe_weight > 0:
+                    final_reward = (1 - self.sharpe_weight) * basic_reward + self.sharpe_weight * sharpe_proxy
+                    
+                # DEBUG: Log Sharpe contribution
+                self.logger.debug(f"📈 SHARPE CONTRIB: sharpe={sharpe_proxy:.4f}, weight={self.sharpe_weight:.2f}")
+                
+                # Store in debug info if provided
+                if reward_debug is not None:
+                    reward_debug["sharpe_component"] = sharpe_component
+            except Exception as e:
+                self.logger.error(f"❌ ERROR in Sharpe calculation: {str(e)}")
+                # Keep the basic reward if there's an error
+                if reward_debug is not None:
+                    reward_debug["sharpe_component"] = 0.0
         
         # Calculate drawdown penalty if enabled
+        drawdown_penalty = 0.0
         if self.drawdown_penalty and self.peak_portfolio_value > 0:
-            drawdown = (self.peak_portfolio_value - self.portfolio_value) / self.peak_portfolio_value
+            try:
+                drawdown = (self.peak_portfolio_value - self.portfolio_value) / self.peak_portfolio_value
+                
+                # DEBUG: Log drawdown details
+                self.logger.debug(f"📉 DRAWDOWN: current={drawdown:.4f}, threshold={self.max_drawdown_penalty_threshold:.4f}")
+                
+                # Apply penalty if drawdown exceeds threshold
+                if drawdown > self.max_drawdown_penalty_threshold:
+                    # Penalty scales with severity of drawdown
+                    penalty_factor = 1.0 + (drawdown - self.max_drawdown_penalty_threshold) * 10.0
+                    # Scale the penalty based on the drawer threshold
+                    penalty = -0.1 * penalty_factor * drawdown
+                    
+                    # Clip penalty to prevent extreme values
+                    penalty = np.clip(penalty, -1.0, 0.0)
+                    
+                    # DEBUG: Log penalty details
+                    self.logger.debug(f"⚠️ DRAWDOWN PENALTY: factor={penalty_factor:.4f}, penalty={penalty:.4f}")
+                    
+                    drawdown_penalty = penalty
+                    final_reward += penalty
+                    
+                # Store in debug info if provided
+                if reward_debug is not None:
+                    reward_debug["drawdown_penalty"] = drawdown_penalty
+            except Exception as e:
+                self.logger.error(f"❌ ERROR in drawdown calculation: {str(e)}")
+                # Keep the reward without drawdown penalty if there's an error
+                if reward_debug is not None:
+                    reward_debug["drawdown_penalty"] = 0.0
+        
+        # Final safety check for reward value
+        if np.isnan(final_reward) or np.isinf(final_reward):
+            self.logger.warning(f"❌ INVALID FINAL REWARD: {final_reward}, using basic reward")
+            final_reward = basic_reward
             
-            # Apply penalty if drawdown exceeds threshold
-            if drawdown > self.max_drawdown_penalty_threshold:
-                # Penalty scales with severity of drawdown
-                penalty_factor = 1.0 + (drawdown - self.max_drawdown_penalty_threshold) * 10.0
-                # Scale the penalty based on the drawer threshold
-                penalty = -0.1 * penalty_factor * drawdown
-                final_reward += penalty
+        # Store in debug info if provided
+        if reward_debug is not None:
+            reward_debug["final_reward"] = final_reward
         
         return final_reward
-    
+
     def _calculate_fill_rate(self, trade_size: float, volume: float) -> float:
         """
         Calculate the fill rate for a trade based on its size and market volume.
@@ -356,20 +604,36 @@ class SingleAssetRLTradingEnv(gym.Env):
         if not self.partial_fills or volume <= 0:
             return 1.0
             
+        # Safety checks for inputs
+        if trade_size <= 0:
+            self.logger.warning("Invalid trade size for fill rate calculation")
+            return 1.0
+            
         # Normalize trade size relative to capital
-        relative_size = trade_size / self.initial_capital
+        relative_size = trade_size / max(self.initial_capital, 1e-8)
         
         # Use volume to estimate liquidity - small trades relative to volume are fully filled
         volume_factor = trade_size / (volume + 1e-10)
         
-        # More randomness for realism
-        randomness = np.random.uniform(0.95, 1.0)
+        # Reduced randomness for stability (0.98-1.0 instead of 0.95-1.0)
+        randomness = np.random.uniform(0.98, 1.0)
         
         # Calculate fill rate with a minimum
-        fill_rate = max(
-            self.min_fill_rate,
-            (1.0 - relative_size * 0.5) * (1.0 - volume_factor * self.volume_slippage_factor) * randomness
+        fill_rate_raw = (1.0 - relative_size * 0.5) * (1.0 - volume_factor * self.volume_slippage_factor) * randomness
+        
+        # More aggressive clipping for stability
+        fill_rate = np.clip(fill_rate_raw, self.min_fill_rate, 1.0)
+        
+        # DEBUG: Log fill rate calculation
+        self.logger.debug(
+            f"🔢 FILL RATE CALC: relative_size={relative_size:.6f}, "
+            f"volume_factor={volume_factor:.6f}, fill_rate={fill_rate:.4f}"
         )
+        
+        # Safety check for final value
+        if fill_rate < self.min_fill_rate or fill_rate > 1.0 or np.isnan(fill_rate) or np.isinf(fill_rate):
+            self.logger.warning(f"❌ Invalid fill rate calculated: {fill_rate}, using min_fill_rate")
+            fill_rate = self.min_fill_rate
         
         return fill_rate
         
@@ -388,22 +652,40 @@ class SingleAssetRLTradingEnv(gym.Env):
         if not self.apply_slippage:
             return 0.0
             
+        # Safety checks for inputs
+        if price <= 0 or np.isnan(price) or np.isinf(price):
+            self.logger.warning(f"❌ Invalid price for slippage calculation: {price}")
+            return 0.0
+            
         # Base slippage
         base_slippage = self.slippage_factor
         
         # Volume-based component
+        volume_component = 0.0
         if volume > 0:
             volume_component = abs(trade_size * price) / (volume + 1e-10) * self.volume_slippage_factor
         else:
             volume_component = 0.01  # Default to 1% if no volume data
             
-        # Random component
-        random_component = np.random.normal(0, 0.2 * base_slippage)
+        # Reduced random component for stability (0.05 instead of 0.2)
+        random_component = np.random.normal(0, 0.05 * base_slippage)
         
         # Total slippage (bounded to reasonable values)
         slippage = base_slippage + volume_component + random_component
-        return max(0, min(slippage, 0.05))  # Cap at 5%
         
+        # DEBUG: Log slippage calculation
+        self.logger.debug(
+            f"🔢 SLIPPAGE CALC: base={base_slippage:.6f}, "
+            f"volume_component={volume_component:.6f}, "
+            f"random_component={random_component:.6f}, "
+            f"total={slippage:.6f}"
+        )
+        
+        # Ensure slippage is within reasonable bounds
+        slippage = max(0, min(slippage, 0.05))  # Cap at 5%
+        
+        return slippage
+
     def _calculate_dynamic_fee(self, trade_value: float) -> float:
         """
         Calculate dynamic trading fee based on trade size.
@@ -484,6 +766,15 @@ class SingleAssetRLTradingEnv(gym.Env):
             window_data["$close"].values,
             window_data["$volume"].values,
         ]).astype(np.float32)
+        
+        # Scale OHLCV data if enabled to prevent numerical instability
+        if self.scale_ohlcv:
+            # Scale price data (OHLC) and volume separately
+            observation[:, 0] /= self.price_scale_factor  # $open
+            observation[:, 1] /= self.price_scale_factor  # $high
+            observation[:, 2] /= self.price_scale_factor  # $low
+            observation[:, 3] /= self.price_scale_factor  # $close
+            observation[:, 4] /= self.volume_scale_factor  # $volume
         
         # Final safety check to ensure correct shape
         if observation.shape != (self.window_size, 5):
