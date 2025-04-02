@@ -167,7 +167,7 @@ class PolicyNetwork(BaseNetwork):
             
             # Apply sigmoid with gradient clipping for stability
             raw_mean_clipped = torch.clamp(raw_mean, -10.0, 10.0)  # Prevent extreme logits
-            self._mean = torch.sigmoid(raw_mean_clipped)  # Ensure [0, 1] range
+            self._mean = torch.tanh(raw_mean_clipped)  # Ensure [-1, 1] range
             
             # Get standard deviation with increased stability
             raw_std = self.std_head(features)
