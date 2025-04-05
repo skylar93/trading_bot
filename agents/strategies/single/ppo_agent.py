@@ -46,10 +46,8 @@ from agents.base.base_agent import BaseAgent
 from agents.models.architectures.mlp import PolicyNetwork
 from agents.models.architectures.value_mlp import ValueNetwork
 from buffers.ppo_buffer import PPOBuffer
-import math
 
 logger = logging.getLogger(__name__)
-
 
 class PPOAgent(BaseAgent):
     def __init__(
@@ -352,173 +350,83 @@ class PPOAgent(BaseAgent):
 
     def train(
         self,
-        env_or_experiences,
-        total_timesteps: int = 1000,
-        batch_size: int = None,
-        env: Optional[gym.Env] = None,
-    ) -> Dict[str, float]:
-        """Train the agent using either environment interactions or experiences.
-
-        Args:
-            env_or_experiences: Either a gym environment or a list of experiences
-            total_timesteps: Total number of timesteps to train for
-            batch_size: Batch size for training (overrides self.batch_size if provided)
-            env: Optional environment for training (used when env_or_experiences is a buffer)
-
-        Returns:
-            Dictionary with training metrics
+        env: gym.Env,
+        total_timesteps: int = 10000
+    ) -> Dict[str, Any]:
         """
-        if batch_size is not None:
-            self.batch_size = batch_size
+        Train the agent using environment interactions until total_timesteps is reached.
+        Rely on `train_step()` to store transitions in PPOBuffer and automatically
+        perform updates when rollout_threshold is reached.
+        
+        Args:
+            env: Gym environment
+            total_timesteps: Number of timesteps to train for
+        
+        Returns:
+            Dictionary of final training metrics (episode rewards, etc.)
+        """
+        episode_rewards = []
+        current_episode_reward = 0.0
+        episode_count = 0
 
-        states = []
-        actions = []
-        rewards = []
-        values = []
-        log_probs = []
-        dones = []
+        # Reset environment
+        obs, info = env.reset()
+        
+        # If single-asset and obs is 1D (features,), ensure shape is (1,features)
+        if len(obs.shape) == 1:
+            obs = obs.reshape(1, -1)
 
-        if isinstance(env_or_experiences, list):
-            # Training from buffer
-            logger.info("Training from buffer")
-            if len(env_or_experiences) < self.batch_size:
-                logger.warning(
-                    f"Buffer size {len(env_or_experiences)} is smaller than "
-                    f"batch size {self.batch_size}"
-                )
-                return {
-                    "policy_loss": 0.0,
-                    "value_loss": 0.0,
-                    "entropy": 0.0,
-                }
-
-            # Convert experiences to tensors
-            for exp in env_or_experiences:
-                states.append(exp["state"])
-                actions.append(exp["action"])
-                rewards.append(exp["reward"])
-                dones.append(exp["done"])
-
-            # Stack tensors
-            states_tensor = torch.FloatTensor(np.vstack(states)).to(self.device)
-            actions_tensor = torch.FloatTensor(np.array(actions)).to(self.device)
-            rewards_tensor = torch.FloatTensor(np.array(rewards)).to(self.device)
-            values_tensor = self.value_network(states_tensor).detach()
-            log_probs_tensor = torch.zeros_like(rewards_tensor).to(self.device)
-
-            # Update policy
-            self.update(
-                states_tensor,
-                actions_tensor,
-                log_probs_tensor,
-                rewards_tensor,
-                rewards_tensor,
-                values_tensor,
+        steps_done = 0
+        
+        while steps_done < total_timesteps:
+            # 1. Get action from policy
+            action = self.get_action(obs, deterministic=False)
+            
+            # 2. Step environment
+            next_obs, reward, done, truncated, info = env.step(action)
+            steps_done += 1
+            
+            # 3. Also ensure next_obs shape matches (1,features) if needed
+            if len(next_obs.shape) == 1:
+                next_obs = next_obs.reshape(1, -1)
+            
+            # 4. Store transition in PPOBuffer via train_step
+            self.train_step(
+                state=obs,
+                action=action,
+                reward=reward,
+                next_state=next_obs,
+                done=done or truncated
             )
+            
+            # 5. Track episode rewards (just for logging)
+            current_episode_reward += reward
 
-            return {
-                "policy_loss": 0.0,  # Placeholder values since we don't track these for experience replay
-                "value_loss": 0.0,
-                "entropy": 0.0,
-            }
+            # 6. If episode is done, reset
+            if done or truncated:
+                episode_count += 1
+                episode_rewards.append(current_episode_reward)
+                self.logger.info(f"Episode {episode_count} finished with reward {current_episode_reward:.2f}")
+                current_episode_reward = 0.0
 
-        else:
-            # Training from environment
-            logger.info("Training from environment")
-            env = env_or_experiences if env is None else env
-            episode_rewards = []
-            current_episode_reward = 0
-            episode_count = 0
-            step_count = 0
-
-            state, _ = env.reset()
-            if len(state.shape) == 1:
-                state = state.reshape(1, -1)
-
-            while len(states) < total_timesteps:
-                step_count += 1
-                if step_count % 10 == 0:  # Log every 10 steps
-                    logger.info(
-                        f"Step {step_count}/{total_timesteps}, Episodes: {episode_count}, Current Episode Reward: {current_episode_reward:.2f}"
-                    )
-
-                # Get action and value
-                with torch.no_grad():
-                    state_tensor = torch.FloatTensor(state).to(self.device)
-                    action_mean, action_std = self.network(state_tensor)
-                    value = self.value_network(state_tensor)
-
-                    # Sample action
-                    dist = Normal(action_mean, action_std)
-                    action = dist.sample()
-                    log_prob = dist.log_prob(action)
-
-                # Take step in environment
-                next_state, reward, done, truncated, info = env.step(
-                    action.cpu().numpy()
-                )
-                if len(next_state.shape) == 1:
-                    next_state = next_state.reshape(1, -1)
-
-                # Store transition
-                states.append(state)
-                actions.append(action.cpu().numpy())
-                rewards.append(reward)
-                values.append(value.cpu().numpy())
-                log_probs.append(log_prob.cpu().numpy())
-                dones.append(done)
-
-                current_episode_reward += reward
-
-                if done or truncated:
-                    episode_count += 1
-                    episode_rewards.append(current_episode_reward)
-                    logger.info(
-                        f"Episode {episode_count} finished with reward {current_episode_reward:.2f}"
-                    )
-                    current_episode_reward = 0
-                    state, _ = env.reset()
-                    if len(state.shape) == 1:
-                        state = state.reshape(1, -1)
-                else:
-                    state = next_state
-
-                # Update policy if we have enough samples
-                if len(states) >= batch_size:
-                    logger.info(
-                        f"Updating policy with batch of {len(states)} samples"
-                    )
-                    # Convert lists to tensors with proper shapes
-                    states_tensor = torch.FloatTensor(np.vstack(states)).to(self.device)
-                    actions_tensor = torch.FloatTensor(np.array(actions)).to(self.device)
-                    rewards_tensor = torch.FloatTensor(np.array(rewards)).to(self.device)
-                    values_tensor = torch.FloatTensor(np.array(values)).to(self.device)
-                    log_probs_tensor = torch.FloatTensor(np.array(log_probs)).to(self.device)
-                    dones_tensor = torch.FloatTensor(np.array(dones)).to(self.device)
-
-                    self.update(
-                        states_tensor,
-                        actions_tensor,
-                        log_probs_tensor,
-                        rewards_tensor,
-                        rewards_tensor,
-                        values_tensor,
-                    )
-                    states = []
-                    actions = []
-                    rewards = []
-                    values = []
-                    log_probs = []
-                    dones = []
-
-            logger.info(
-                f"Training completed. Total episodes: {episode_count}, Mean reward: {np.mean(episode_rewards):.2f}"
-            )
-            return {
-                "episode_rewards": episode_rewards,
-                "mean_reward": np.mean(episode_rewards),
-                "std_reward": np.std(episode_rewards),
-            }
+                obs, info = env.reset()
+                if len(obs.shape) == 1:
+                    obs = obs.reshape(1, -1)
+            else:
+                obs = next_obs
+        
+        # Done training. Log final stats
+        mean_reward = float(np.mean(episode_rewards)) if episode_rewards else 0.0
+        std_reward = float(np.std(episode_rewards)) if episode_rewards else 0.0
+        
+        self.logger.info(f"Training completed after {steps_done} steps, episodes={episode_count}")
+        self.logger.info(f"Mean reward={mean_reward:.2f}, std={std_reward:.2f}")
+        
+        return {
+            "episode_rewards": episode_rewards,
+            "mean_reward": mean_reward,
+            "std_reward": std_reward,
+        }
 
     def _update_old_network(self):
         """Update the old policy network with current policy parameters."""
