@@ -62,12 +62,11 @@ class PPOAgent(BaseAgent):
         clip_epsilon: float = 0.2,
         c1: float = 1.0,
         c2: float = 0.01,
-        c3: float = 0.01,
         n_epochs: int = 10,
         batch_size: int = 64,
         max_grad_norm: float = 0.5,
         target_kl: float = 0.015,
-        normalize_observations: bool = True,
+        normalize_observations: bool = False,
         device: Optional[str] = None,
         **kwargs,
     ):
@@ -108,12 +107,11 @@ class PPOAgent(BaseAgent):
         self.clip_epsilon = clip_epsilon
         self.c1 = c1
         self.c2 = c2
-        self.c3 = c3
         self.n_epochs = n_epochs
         self.batch_size = batch_size
         self.max_grad_norm = max_grad_norm
         self.target_kl = target_kl
-        self.normalize_observations = normalize_observations
+        self.normalize_observations = False
         self.eps = 1e-8
         
         # Add training flag
@@ -155,10 +153,6 @@ class PPOAgent(BaseAgent):
             )
         else:
             self.scheduler = None
-        
-        # Initialize normalization statistics with correct dimensions
-        self.state_mean = torch.zeros(self.obs_dim, device=self.device)
-        self.state_std = torch.ones(self.obs_dim, device=self.device)
         
         # Initialize replay buffer
         self.buffer = PPOBuffer(
@@ -203,207 +197,89 @@ class PPOAgent(BaseAgent):
             f"rollout_threshold={self.rollout_threshold}"
         )
 
-    def _normalize_state(self, state: torch.Tensor) -> torch.Tensor:
-        """Normalize state using running mean and std
-        
-        This method handles input state of various shapes and normalizes them:
-        - 1D state tensors: (features,)
-        - 2D state tensors: (batch_size, features) or (window_size, features)
-        - 3D state tensors: (batch_size, window_size, features)
-        
-        Args:
-            state: State tensor of any supported shape
-            
-        Returns:
-            Normalized state tensor with shape appropriate for network input
+    def _prepare_state(self, state: torch.Tensor) -> torch.Tensor:
         """
-        # Record original shape for debugging
-        original_shape = state.shape
-        
-        # Check for NaN or Inf values early and replace them
-        if torch.isnan(state).any() or torch.isinf(state).any():
-            self.logger.warning(
-                f"NaN or Inf values detected in state input with shape {original_shape}. Replacing with zeros."
-            )
-            state = torch.nan_to_num(state, nan=0.0, posinf=10.0, neginf=-10.0)
-        
-        # Special case for 3D state from SingleAssetRLTradingEnv (window_size, n_features, n_assets)
-        if len(state.shape) == 3 and state.shape[2] == 1:
-            if state.shape[0] == 1:
-                # (1, window_size, 1) -> (1, window_size)
-                state = state.squeeze(2)
-            else:
-                # (batch_size, window_size, 1) -> (batch_size, window_size)
-                state = state.squeeze(2)
-                
-        # For 2D state that's a single window from environment with
-        # shape (window_size, features), we convert to (batch_size, window_size, features)
-        elif len(state.shape) == 2 and state.shape[0] == self.observation_space.shape[0] and state.shape[1] == self.observation_space.shape[1]:
-            # This is likely a direct observation from SingleAssetRLTradingEnv
-            # Add batch dimension: (window_size, features) -> (1, window_size, features)
-            state = state.unsqueeze(0)  # Add batch dimension
-            self.logger.debug(f"Added batch dimension to state: {original_shape} -> {state.shape}")
-            
-            # Then reshape to flatten window and features: (1, window_size, features) -> (1, window_size*features)
-            state = state.reshape(1, -1)
-            self.logger.debug(f"Reshaped state for normalization: {original_shape} -> {state.shape}")
-            
-            return state
-        
-        # Regular cases as before
-        # Reshape input to (batch_size, obs_dim) for normalization
+        Prepares a state tensor (batch_size, obs_dim) for network input,
+        handles various shape cases, NaN/Inf, and clipping.
+        """
+        # 1) 1D 케이스: (obs_dim,) -> (1, obs_dim)
         if state.dim() == 1:
-            # (features,) -> (1, features)
             if state.shape[0] == self.obs_dim:
-                state = state.unsqueeze(0)
+                state = state.unsqueeze(0)  # shape (1, obs_dim)
             else:
-                # Handle case where features don't match obs_dim
-                if state.shape[0] < self.obs_dim:
-                    # Pad with zeros
-                    padding = torch.zeros(self.obs_dim - state.shape[0], device=state.device)
-                    state = torch.cat([state, padding])
+                # pad or truncate
+                needed = self.obs_dim - state.shape[0]
+                if needed > 0:
+                    pad = torch.zeros(needed, device=state.device)
+                    state = torch.cat([state, pad])
                 else:
-                    # Truncate to obs_dim
                     state = state[:self.obs_dim]
                 state = state.unsqueeze(0)
-                
+
+        # 2) 2D 케이스
         elif state.dim() == 2:
-            # (batch_size, input_size) or (window_size, features)
-            if state.shape[1] == self.obs_dim:
-                # Already (batch_size, obs_dim)
+            b, d = state.shape
+            if b * d == self.obs_dim:
+                # ex) (3,5) with obs_dim=15 => flatten -> (1,15)
+                self.logger.debug(
+                    f"Detected 2D single-sample shape (b={b}, d={d}). Flatten => (1, {self.obs_dim})."
+                )
+                state = state.reshape(1, self.obs_dim)
+            elif d == self.obs_dim:
+                # already (batch_size, obs_dim)
                 pass
-            elif state.shape[0] * state.shape[1] == self.obs_dim:
-                # Single sample (window_size, features) -> (1, window_size*features)
-                state = state.reshape(1, -1)
             else:
-                # Handle dimension mismatch
-                batch_size = state.shape[0]
-                if state.shape[1] < self.obs_dim:
-                    # Pad each sample with zeros
-                    padding = torch.zeros(batch_size, self.obs_dim - state.shape[1], device=state.device)
-                    state = torch.cat([state, padding], dim=1)
+                # pad or truncate
+                if d < self.obs_dim:
+                    pad = torch.zeros(b, self.obs_dim - d, device=state.device)
+                    state = torch.cat([state, pad], dim=1)
                 else:
-                    # Truncate each sample to obs_dim
                     state = state[:, :self.obs_dim]
-                
+
+        # 3) **새로 추가**: 3D 케이스 (batch_size, window_size, features)
         elif state.dim() == 3:
-            # (batch_size, window_size, features)
             b, w, f = state.shape
-            if w * f != self.obs_dim:
-                # Handle dimension mismatch
-                if w * f < self.obs_dim:
-                    # Pad with zeros
-                    padding_size = self.obs_dim - w * f
-                    padding = torch.zeros(b, padding_size, device=state.device)
-                    state = torch.cat([state.reshape(b, -1), padding], dim=1)
-                else:
-                    # Truncate to obs_dim
-                    state = state.reshape(b, -1)[:, :self.obs_dim]
+            # 만약 w*f == self.obs_dim 이라면 그냥 flatten
+            if w * f == self.obs_dim:
+                # reshape => (b, obs_dim)
+                self.logger.debug(
+                    f"Detected 3D shape (b={b}, w={w}, f={f}) => flatten to (b, {self.obs_dim})."
+                )
+                state = state.reshape(b, self.obs_dim)
             else:
-                # Correct size, just reshape
-                state = state.reshape(b, -1)
-        else:
-            self.logger.warning(f"Unexpected input dimension: {state.dim()}D. Original shape: {original_shape}")
-            # Try to force into (batch_size, obs_dim) format
-            state = state.reshape(-1, self.obs_dim)
-            if state.shape[1] != self.obs_dim:
-                if state.shape[1] < self.obs_dim:
-                    # Pad with zeros
-                    padding = torch.zeros(state.shape[0], self.obs_dim - state.shape[1], device=state.device)
-                    state = torch.cat([state, padding], dim=1)
+                # pad or truncate
+                actual_dim = w * f
+                self.logger.warning(
+                    f"3D shape (b={b}, w={w}, f={f}) => {actual_dim} != obs_dim={self.obs_dim}, doing pad/truncate."
+                )
+                if actual_dim < self.obs_dim:
+                    # flatten first -> (b, actual_dim)
+                    state = state.view(b, -1)
+                    pad_size = self.obs_dim - actual_dim
+                    pad = torch.zeros(b, pad_size, device=state.device)
+                    state = torch.cat([state, pad], dim=1)
                 else:
-                    # Truncate to obs_dim
-                    state = state[:, :self.obs_dim]
-        
-        # Additional pre-normalization clipping to prevent extreme values
-        MAX_VALUE = 1e6  # Set a reasonable maximum value for observations
+                    # flatten and truncate
+                    state = state.view(b, -1)[:, :self.obs_dim]
+
+        # 4) 그 외: 예전 unexpected case
+        else:
+            self.logger.warning(f"Shape {state.shape} beyond 3D?! Flatten forcibly.")
+            state = state.reshape(-1, self.obs_dim)
+            # pad/truncate if mismatch
+
+        # NaN/Inf handling
+        if torch.isnan(state).any() or torch.isinf(state).any():
+            self.logger.warning("NaN/Inf in state => clamp or zero")
+            state = torch.nan_to_num(state, nan=0.0, posinf=1e6, neginf=-1e6)
+
+        # clamp big values
+        MAX_VALUE = 1e6
         state = torch.clamp(state, -MAX_VALUE, MAX_VALUE)
-        
-        # Apply normalization if enabled
-        if self.normalize_observations:
-            # Update running mean and std during training
-            if self.training:
-                with torch.no_grad():
-                    # Check for extreme values in batch statistics
-                    batch_mean = state.mean(dim=0)
-                    batch_var = state.var(dim=0, unbiased=False)
-                    
-                    # Replace NaN or Inf values in batch statistics
-                    if torch.isnan(batch_mean).any() or torch.isinf(batch_mean).any():
-                        self.logger.warning("NaN or Inf in batch mean. Using safe values.")
-                        batch_mean = torch.nan_to_num(batch_mean, nan=0.0, posinf=1.0, neginf=-1.0)
-                        
-                    if torch.isnan(batch_var).any() or torch.isinf(batch_var).any():
-                        self.logger.warning("NaN or Inf in batch variance. Using safe values.")
-                        batch_var = torch.nan_to_num(batch_var, nan=1.0, posinf=1.0, neginf=1.0)
-                    
-                    # Clip variance to prevent extremely small values that could lead to division issues
-                    batch_var = torch.clamp(batch_var, min=1e-6, max=1e6)
-                    
-                    batch_size = state.shape[0]
-                    total_size = self.training_history["total_steps"] + batch_size
-                    
-                    # Use more stable update formula with safeguards
-                    if total_size > 0:  # Avoid division by zero
-                        # Update using Welford's online algorithm with defensive checks
-                        delta = batch_mean - self.state_mean
-                        
-                        # Clip delta to prevent extreme updates
-                        delta = torch.clamp(delta, -10.0, 10.0)
-                        
-                        # Update mean
-                        new_mean = self.state_mean + delta * batch_size / total_size
-                        
-                        # Update variance using parallel algorithm with safeguards
-                        m_a = self.state_std ** 2 * self.training_history["total_steps"]
-                        m_b = batch_var * batch_size
-                        
-                        # More numerically stable variance combination
-                        M2 = m_a + m_b + delta ** 2 * self.training_history["total_steps"] * batch_size / total_size
-                        new_var = M2 / total_size
-                        
-                        # Final safeguards against invalid statistics
-                        new_mean = torch.nan_to_num(new_mean, nan=0.0, posinf=0.0, neginf=0.0)
-                        new_var = torch.nan_to_num(new_var, nan=1.0, posinf=1.0, neginf=1.0)
-                        
-                        # Ensure variance is positive
-                        new_var = torch.clamp(new_var, min=1e-6, max=1e6)
-                        
-                        # Update mean and std
-                        self.state_mean = new_mean
-                        self.state_std = torch.sqrt(new_var + self.eps)
-            
-            # Normalize state with safeguards
-            try:
-                # Check for NaN/Inf in normalization parameters
-                if torch.isnan(self.state_mean).any() or torch.isinf(self.state_mean).any():
-                    self.logger.warning("NaN or Inf in state_mean. Using safe values.")
-                    self.state_mean = torch.nan_to_num(self.state_mean, nan=0.0, posinf=0.0, neginf=0.0)
-                    
-                if torch.isnan(self.state_std).any() or torch.isinf(self.state_std).any():
-                    self.logger.warning("NaN or Inf in state_std. Using safe values.")
-                    self.state_std = torch.ones_like(self.state_std)
-                
-                # Ensure std is positive
-                safe_std = torch.clamp(self.state_std, min=1e-6)
-                
-                # Normalize with robust clipping
-                normalized_state = (state - self.state_mean) / (safe_std + self.eps)
-                
-                # Clip normalized values to prevent extreme outputs
-                normalized_state = torch.clamp(normalized_state, -10.0, 10.0)
-                
-                # Final NaN check after normalization
-                if torch.isnan(normalized_state).any() or torch.isinf(normalized_state).any():
-                    self.logger.warning("NaN or Inf in normalized state. Using safe normalized values.")
-                    normalized_state = torch.nan_to_num(normalized_state, nan=0.0, posinf=1.0, neginf=-1.0)
-                
-                return normalized_state
-            except Exception as e:
-                self.logger.error(f"Error during normalization: {str(e)}. Returning unnormalized state.")
-                return state
-        
+
         return state
+
+
 
     def get_action(
         self, state: np.ndarray, deterministic: bool = False, eval_mode: bool = False
@@ -439,8 +315,8 @@ class PPOAgent(BaseAgent):
             # Convert to tensor
             state_tensor = torch.FloatTensor(state).to(self.device)
 
-            # Normalize state (handles all shape cases internally)
-            state_tensor = self._normalize_state(state_tensor)
+            # Prepare state (handles all shape cases internally)
+            state_tensor = self._prepare_state(state_tensor)
             
             # Get action distribution parameters
             action_mean, action_std = self.network(state_tensor)
@@ -613,24 +489,12 @@ class PPOAgent(BaseAgent):
                         f"Updating policy with batch of {len(states)} samples"
                     )
                     # Convert lists to tensors with proper shapes
-                    states_tensor = torch.FloatTensor(np.vstack(states)).to(
-                        self.device
-                    )
-                    actions_tensor = torch.FloatTensor(np.array(actions)).to(
-                        self.device
-                    )
-                    rewards_tensor = torch.FloatTensor(np.array(rewards)).to(
-                        self.device
-                    )
-                    values_tensor = torch.FloatTensor(np.array(values)).to(
-                        self.device
-                    )
-                    log_probs_tensor = torch.FloatTensor(
-                        np.array(log_probs)
-                    ).to(self.device)
-                    dones_tensor = torch.FloatTensor(np.array(dones)).to(
-                        self.device
-                    )
+                    states_tensor = torch.FloatTensor(np.vstack(states)).to(self.device)
+                    actions_tensor = torch.FloatTensor(np.array(actions)).to(self.device)
+                    rewards_tensor = torch.FloatTensor(np.array(rewards)).to(self.device)
+                    values_tensor = torch.FloatTensor(np.array(values)).to(self.device)
+                    log_probs_tensor = torch.FloatTensor(np.array(log_probs)).to(self.device)
+                    dones_tensor = torch.FloatTensor(np.array(dones)).to(self.device)
 
                     self.update(
                         states_tensor,
@@ -711,14 +575,14 @@ class PPOAgent(BaseAgent):
             Dictionary with KL divergence components and total
         """
         with torch.no_grad():
-            # Normalize states
-            normalized_states = self._normalize_state(states)
+            # Prepare states
+            prepared_states = self._prepare_state(states)
             
             # Get distribution parameters from old policy
-            old_mean, old_std = self.old_network(normalized_states)
+            old_mean, old_std = self.old_network(prepared_states)
             
             # Get distribution parameters from current policy
-            new_mean, new_std = self.network(normalized_states)
+            new_mean, new_std = self.network(prepared_states)
             
             # Ensure std values are valid
             old_std = torch.clamp(old_std, min=0.1, max=1.0)
@@ -786,15 +650,18 @@ class PPOAgent(BaseAgent):
         state_tensor = torch.FloatTensor(state).to(self.device)
         action_tensor = torch.FloatTensor(action).to(self.device)
         
-        # Normalize state
-        normalized_state = self._normalize_state(state_tensor)
+        # Prepare state
+        prepared_state = self._prepare_state(state_tensor)
         
         # Get current value estimate 
         with torch.no_grad():
-            current_value = self.value_network(normalized_state).item()
-            
+            current_value = self.value_network(prepared_state)
+            # current_value: shape (1,1) or (1,) 이라면
+            current_value = current_value.squeeze(-1)  # shape (1,)
+            current_value = current_value.item()
+                        
             # IMPORTANT: Use old_network to calculate log_prob for consistent ratio calculation
-            action_mean, action_std = self.old_network(normalized_state)
+            action_mean, action_std = self.old_network(prepared_state)
             dist = Normal(action_mean, action_std)
             log_prob = dist.log_prob(action_tensor).sum(dim=-1).item()
             
@@ -879,9 +746,9 @@ class PPOAgent(BaseAgent):
         if hasattr(self.buffer, 'states') and len(self.buffer.states) > 0:
             last_state = self.buffer.states[-1]
             last_state_tensor = torch.FloatTensor(last_state).to(self.device)
-            normalized_last_state = self._normalize_state(last_state_tensor)
+            prepared_last_state = self._prepare_state(last_state_tensor)
             with torch.no_grad():
-                last_value = self.value_network(normalized_last_state).cpu().numpy()
+                last_value = self.value_network(prepared_last_state).cpu().numpy()
         else:
             # If no states in buffer yet, use zero
             last_value = np.zeros(1)
@@ -1056,19 +923,19 @@ class PPOAgent(BaseAgent):
         Returns:
             Dictionary of training metrics
         """
-        # Normalize states
-        normalized_states = self._normalize_state(states)
+        # Prepare states
+        prepared_states = self._prepare_state(states)
         
         # Ensure no NaN values
-        if torch.isnan(normalized_states).any():
-            self.logger.warning("NaN values detected in normalized states")
-            normalized_states = torch.nan_to_num(normalized_states, nan=0.0)
+        if torch.isnan(prepared_states).any():
+            self.logger.warning("NaN values detected in prepared states")
+            prepared_states = torch.nan_to_num(prepared_states, nan=0.0)
         
         # Get action distribution parameters from current policy
-        action_mean, action_std = self.network(normalized_states)
+        action_mean, action_std = self.network(prepared_states)
         
         # Get value predictions
-        predicted_values = self.value_network(normalized_states).squeeze(-1)
+        predicted_values = self.value_network(prepared_states).squeeze(-1)
         
         # Ensure action parameters are valid
         if torch.isnan(action_mean).any() or torch.isnan(action_std).any():
@@ -1124,7 +991,7 @@ class PPOAgent(BaseAgent):
         # KL = (log(std2/std1) + (std1^2 + (mean1-mean2)^2)/(2*std2^2) - 0.5)
         with torch.no_grad():
             # Get old policy distribution parameters for more accurate KL calculation
-            old_action_mean, old_action_std = self.old_network(normalized_states)
+            old_action_mean, old_action_std = self.old_network(prepared_states)
             
             # Log mean difference between old and new policy means
             mean_diff = (old_action_mean - action_mean).abs().mean().item()
@@ -1187,187 +1054,3 @@ class PPOAgent(BaseAgent):
             "kl": total_kl,
             "mean_std": mean_std
         }
-
-    def train(self, memory):
-        """Update policy and value networks using collected experiences."""
-        # Convert memory to tensors
-        old_states = torch.FloatTensor(memory.states).to(self.device)
-        old_actions = torch.FloatTensor(memory.actions).to(self.device)
-        old_log_probs = torch.FloatTensor(memory.log_probs).to(self.device)
-        old_rewards = torch.FloatTensor(memory.rewards).to(self.device)
-        old_dones = torch.FloatTensor(memory.dones).to(self.device)
-        
-        # DEBUG: Check memory tensors for NaN/Inf
-        has_nans = torch.any(torch.isnan(old_states)) or torch.any(torch.isnan(old_actions)) or \
-                  torch.any(torch.isnan(old_log_probs)) or torch.any(torch.isnan(old_rewards))
-        if has_nans:
-            self.logger.warning("❌ NaN values detected in memory tensors!")
-            # Print which tensors have NaNs
-            self.logger.warning(f"NaN in states: {torch.any(torch.isnan(old_states))}")
-            self.logger.warning(f"NaN in actions: {torch.any(torch.isnan(old_actions))}")
-            self.logger.warning(f"NaN in log_probs: {torch.any(torch.isnan(old_log_probs))}")
-            self.logger.warning(f"NaN in rewards: {torch.any(torch.isnan(old_rewards))}")
-            
-            # Replace NaNs with safe values
-            old_states = torch.nan_to_num(old_states)
-            old_actions = torch.nan_to_num(old_actions)
-            old_log_probs = torch.nan_to_num(old_log_probs)
-            old_rewards = torch.nan_to_num(old_rewards)
-            
-        # Log memory statistics
-        self.logger.debug(
-            f"📊 MEMORY STATS: "
-            f"rewards=[{old_rewards.min().item():.4f}, {old_rewards.max().item():.4f}], "
-            f"actions=[{old_actions.min().item():.4f}, {old_actions.max().item():.4f}], "
-            f"log_probs=[{old_log_probs.min().item():.4f}, {old_log_probs.max().item():.4f}]"
-        )
-        
-        # Calculate returns and advantages
-        returns, advantages = self._compute_returns_and_advantages(old_rewards, old_states, old_dones)
-        
-        # DEBUG: Check for extreme advantages
-        if torch.any(torch.isnan(advantages)) or torch.any(torch.isinf(advantages)):
-            self.logger.warning(f"❌ NaN/Inf detected in advantages! Replacing with 0")
-            advantages = torch.nan_to_num(advantages, nan=0.0)
-        
-        adv_min, adv_max = advantages.min().item(), advantages.max().item()
-        if abs(adv_min) > 100 or abs(adv_max) > 100:
-            self.logger.warning(f"⚠️ EXTREME ADVANTAGES: min={adv_min:.4f}, max={adv_max:.4f}")
-            # Clip to reasonable range if extreme
-            advantages = torch.clamp(advantages, -100, 100)
-            
-        # Get the original_loss for logging
-        original_policy_loss = 0
-        original_value_loss = 0
-        
-        # Update networks
-        for _ in range(self.k_epochs):
-            # Forward pass through policy network
-            action_mean, action_logstd = self.network(old_states)
-            
-            # DEBUG: Check for NaN/Inf in network output
-            if torch.any(torch.isnan(action_mean)) or torch.any(torch.isnan(action_logstd)):
-                self.logger.warning(f"❌ NaN in policy network output; replacing with safe values")
-                action_mean = torch.nan_to_num(action_mean, nan=0.0)
-                action_logstd = torch.nan_to_num(action_logstd, nan=math.log(0.5))
-            
-            # Get log probabilities for the actions
-            action_std = torch.exp(action_logstd)
-            
-            # Clamp std to avoid numerical instability
-            action_std = torch.clamp(action_std, min=1e-6, max=10.0)
-            
-            dist = Normal(action_mean, action_std)
-            entropy = dist.entropy().mean()
-            new_log_probs = dist.log_prob(old_actions)
-            
-            # Safer calculation of ratio to avoid extreme values
-            log_ratio = new_log_probs - old_log_probs
-            log_ratio = torch.clamp(log_ratio, -20, 20)  # Prevent extreme values
-            ratio = torch.exp(log_ratio)
-            
-            # Log ratio statistics
-            ratio_min = ratio.min().item()
-            ratio_max = ratio.max().item()
-            ratio_mean = ratio.mean().item()
-            
-            self.logger.debug(f"📊 POLICY RATIO: min={ratio_min:.4f}, max={ratio_max:.4f}, mean={ratio_mean:.4f}")
-            
-            # Check for extreme ratios that might cause instability
-            if ratio_max > 100 or ratio_min < 0.01:
-                self.logger.warning(f"⚠️ EXTREME POLICY RATIO: min={ratio_min:.4f}, max={ratio_max:.4f}")
-                
-                # Find indices of extreme ratios for debugging
-                if ratio_max > 100:
-                    extreme_idx = torch.argmax(ratio)
-                    self.logger.warning(
-                        f"📈 EXTREME RATIO DETAILS: "
-                        f"old_log_prob={old_log_probs[extreme_idx].item():.6f}, "
-                        f"new_log_prob={new_log_probs[extreme_idx].item():.6f}, "
-                        f"log_ratio={log_ratio[extreme_idx].item():.6f}, "
-                        f"ratio={ratio[extreme_idx].item():.6f}"
-                    )
-                
-                # Clip extreme ratios to prevent instability
-                ratio = torch.clamp(ratio, 0.01, 100.0)
-            
-            # Calculate surrogate losses
-            surr1 = ratio * advantages
-            surr2 = torch.clamp(ratio, 1.0 - self.eps_clip, 1.0 + self.eps_clip) * advantages
-            
-            # Check for NaN in surrogate losses
-            if torch.any(torch.isnan(surr1)) or torch.any(torch.isnan(surr2)):
-                self.logger.warning(f"❌ NaN detected in surrogate losses")
-                surr1 = torch.nan_to_num(surr1, nan=0.0)
-                surr2 = torch.nan_to_num(surr2, nan=0.0)
-            
-            # Calculate policy loss
-            policy_loss = -torch.min(surr1, surr2).mean()
-            
-            # Validate policy loss
-            if torch.isnan(policy_loss) or torch.isinf(policy_loss):
-                self.logger.warning(f"❌ NaN/Inf in policy loss; using fallback loss")
-                policy_loss = -surr1.mean()  # Fallback to simpler loss
-                if torch.isnan(policy_loss) or torch.isinf(policy_loss):
-                    policy_loss = torch.tensor(0.0, device=self.device)  # Last resort
-            
-            # Calculate value network loss
-            values = self.value_network(old_states).view(-1)
-            value_loss = nn.MSELoss()(values, returns)
-            
-            # If value loss is NaN/Inf, try alternative loss functions
-            if torch.isnan(value_loss) or torch.isinf(value_loss):
-                self.logger.warning(f"❌ NaN/Inf in value loss; using Huber loss")
-                value_loss = nn.SmoothL1Loss()(values, returns)
-                if torch.isnan(value_loss) or torch.isinf(value_loss):
-                    self.logger.warning(f"❌ NaN/Inf still present; using L1 loss")
-                    value_loss = nn.L1Loss()(values, returns)
-                    if torch.isnan(value_loss) or torch.isinf(value_loss):
-                        value_loss = torch.tensor(0.0, device=self.device)  # Last resort
-            
-            # Store original losses for the first iteration
-            if _ == 0:
-                original_policy_loss = policy_loss.item()
-                original_value_loss = value_loss.item()
-            
-            # Combined loss
-            loss = policy_loss + self.value_loss_coef * value_loss - self.entropy_coefficient * entropy
-            
-            # Optimize
-            self.optimizer.zero_grad()
-            loss.backward()
-            
-            # Gradient clipping if enabled
-            if self.clip_grad:
-                torch.nn.utils.clip_grad_norm_(self.network.parameters(), self.max_grad_norm)
-                torch.nn.utils.clip_grad_norm_(self.value_network.parameters(), self.max_grad_norm)
-            
-            self.optimizer.step()
-            
-            # Log detailed training statistics periodically
-            if _ == 0 or _ == self.k_epochs - 1:
-                self.logger.debug(
-                    f"🔄 PPO UPDATE [{_+1}/{self.k_epochs}]: "
-                    f"policy_loss={policy_loss.item():.6f}, "
-                    f"value_loss={value_loss.item():.6f}, "
-                    f"entropy={entropy.item():.6f}, "
-                    f"total_loss={loss.item():.6f}"
-                )
-        
-        # Track statistics for later analysis
-        final_policy_loss = policy_loss.item()
-        final_value_loss = value_loss.item()
-        final_entropy = entropy.item()
-        
-        self.policy_losses.append(final_policy_loss)
-        self.value_losses.append(final_value_loss)
-        self.entropies.append(final_entropy)
-        
-        # Log improvement from original to final loss
-        self.logger.debug(
-            f"📈 TRAINING IMPROVEMENT: "
-            f"policy_loss: {original_policy_loss:.6f} -> {final_policy_loss:.6f} ({(final_policy_loss - original_policy_loss):.6f}), "
-            f"value_loss: {original_value_loss:.6f} -> {final_value_loss:.6f} ({(final_value_loss - original_value_loss):.6f})"
-        )
-        
-        return final_policy_loss, final_value_loss, final_entropy
