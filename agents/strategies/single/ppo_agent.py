@@ -29,7 +29,7 @@ Recent Changes:
 - Improved stability with ratio clamping and better numerical handling
 """
 
-import os
+
 import logging
 from typing import Dict, Any, List, Optional, Tuple
 import numpy as np

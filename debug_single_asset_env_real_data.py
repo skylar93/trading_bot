@@ -209,63 +209,57 @@ def train_and_evaluate(
             episode_stats["actions"].append(action)
             episode_stats["rewards"].append(reward)
             
-            # PPO 버퍼에 저장
-            agent.train_step(obs, action, reward, next_obs, done)
+            update_metrics = agent.train_step(obs, action, reward, next_obs, done)
             
             obs = next_obs
             step_count += 1
             ep_steps += 1
             ep_reward += reward
-            
-            # 일정 스텝마다 PPO 업데이트
-            if step_count % update_interval == 0:
-                logger.info(f"[UPDATING] step={step_count}, buffer_size={len(agent.buffer)}")
-                update_metrics = agent.update_if_buffer_ready()
-                
-                if update_metrics:
-                    # KL 발산 상세 분석
-                    if "kl" in update_metrics and update_metrics["kl"] <= 0.001:  # 매우 작은 KL
-                        logger.warning(
-                            f"[KL WARNING] Very small KL={update_metrics['kl']:.6f} detected - "
-                            f"old and new policies might be too similar"
-                        )
-                    
-                    # 엔트로피 값이 음수인지 확인
-                    if "entropy" in update_metrics and update_metrics["entropy"] < 0:
-                        logger.warning(
-                            f"[ENTROPY WARNING] Negative entropy={update_metrics['entropy']:.4f} detected - "
-                            f"std might be too small"
-                        )
-                    
-                    # 결과 로깅
-                    logger.info(
-                        f"[UPDATE] step={step_count}, "
-                        f"policy_loss={update_metrics['policy_loss']:.4f}, "
-                        f"value_loss={update_metrics['value_loss']:.4f}, "
-                        f"entropy={update_metrics['entropy']:.4f}, "
-                        f"kl={update_metrics.get('kl', 0):.4f}, "
-                        f"mean_std={update_metrics.get('mean_std', 0):.4f}"
+
+            if update_metrics:
+                # KL 발산 상세 분석
+                if "kl" in update_metrics and update_metrics["kl"] <= 0.001:  # 매우 작은 KL
+                    logger.warning(
+                        f"[KL WARNING] Very small KL={update_metrics['kl']:.6f} detected - "
+                        f"old and new policies might be too similar"
                     )
-                    
-                    # 디버깅 정보 저장
-                    agent_stats["entropy_values"].append({"step": step_count, "value": update_metrics["entropy"]})
-                    
-                    if "kl" in update_metrics:
-                        agent_stats["kl_components"].append({
-                            "step": step_count,
-                            "kl": update_metrics["kl"],
-                            "policy_loss": update_metrics["policy_loss"]
-                        })
-                    
-                    # MLflow 로깅
-                    if mlflow_manager is not None:
-                        mlflow_manager.log_metrics({
-                            "policy_loss": float(update_metrics['policy_loss']),
-                            "value_loss": float(update_metrics['value_loss']),
-                            "entropy": float(update_metrics['entropy']),
-                            "kl": float(update_metrics.get('kl', 0)),
-                            "mean_std": float(update_metrics.get('mean_std', 0))
-                        }, step=step_count)
+                
+                # 엔트로피 값이 음수인지 확인
+                if "entropy" in update_metrics and update_metrics["entropy"] < 0:
+                    logger.warning(
+                        f"[ENTROPY WARNING] Negative entropy={update_metrics['entropy']:.4f} detected - "
+                        f"std might be too small"
+                    )
+                
+                # 결과 로깅
+                logger.info(
+                    f"[UPDATE] step={step_count}, "
+                    f"policy_loss={update_metrics['policy_loss']:.4f}, "
+                    f"value_loss={update_metrics['value_loss']:.4f}, "
+                    f"entropy={update_metrics['entropy']:.4f}, "
+                    f"kl={update_metrics.get('kl', 0):.4f}, "
+                    f"mean_std={update_metrics.get('mean_std', 0):.4f}"
+                )
+                
+                # 디버깅 정보 저장
+                agent_stats["entropy_values"].append({"step": step_count, "value": update_metrics["entropy"]})
+                
+                if "kl" in update_metrics:
+                    agent_stats["kl_components"].append({
+                        "step": step_count,
+                        "kl": update_metrics["kl"],
+                        "policy_loss": update_metrics["policy_loss"]
+                    })
+                
+                # MLflow 로깅
+                if mlflow_manager is not None:
+                    mlflow_manager.log_metrics({
+                        "policy_loss": float(update_metrics['policy_loss']),
+                        "value_loss": float(update_metrics['value_loss']),
+                        "entropy": float(update_metrics['entropy']),
+                        "kl": float(update_metrics.get('kl', 0)),
+                        "mean_std": float(update_metrics.get('mean_std', 0))
+                    }, step=step_count)
         
         # 에피소드 종료 통계
         episode_mean_std = np.mean([stat["mean"] for stat in episode_stats["std_values"]]) if episode_stats["std_values"] else 0
