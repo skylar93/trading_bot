@@ -569,14 +569,14 @@ class PPOAgent(BaseAgent):
             current_value = current_value.item()
                         
             # IMPORTANT: Use old_network to calculate log_prob for consistent ratio calculation
-            action_mean, action_std = self.old_network(prepared_state)
-            dist = Normal(action_mean, action_std)
+            action_mean, action_std_raw = self.old_network(prepared_state)
+            dist = Normal(action_mean, action_std_raw)
             log_prob = dist.log_prob(action_tensor).sum(dim=-1).item()
             
             # Debug logging for standard deviation
-            mean_std = action_std.mean().item()
-            min_std = action_std.min().item()
-            max_std = action_std.max().item()
+            mean_std = action_std_raw.mean().item()
+            min_std = action_std_raw.min().item()
+            max_std = action_std_raw.max().item()
             if self.rollout_steps % 100 == 0:  # Log every 100 steps
                 self.logger.info(
                     f"Rollout step {self.rollout_steps}: Mean std={mean_std:.4f}, "
@@ -840,34 +840,53 @@ class PPOAgent(BaseAgent):
             prepared_states = torch.nan_to_num(prepared_states, nan=0.0)
         
         # Get action distribution parameters from current policy
-        action_mean, action_std = self.network(prepared_states)
+        action_mean, action_std_raw = self.network(prepared_states)
         
         # Get value predictions
         predicted_values = self.value_network(prepared_states).squeeze(-1)
         
         # Ensure action parameters are valid
-        if torch.isnan(action_mean).any() or torch.isnan(action_std).any():
+        if torch.isnan(action_mean).any() or torch.isnan(action_std_raw).any():
             self.logger.warning("NaN values detected in policy network output")
             action_mean = torch.nan_to_num(action_mean, nan=0.5)
-            action_std = torch.nan_to_num(action_std, nan=0.1)
+            action_std_raw = torch.nan_to_num(action_std_raw, nan=0.1)
         
-        # Clamp standard deviation to prevent it from getting too small
-        action_std = torch.clamp(action_std, min=0.1, max=1.0)
-        
-        # Create current action distribution
-        current_dist = Normal(action_mean, action_std)
-        
+        # Log raw std before processing
+        self.logger.debug(f"Raw action_std min: {action_std_raw.min().item():.6f}, max: {action_std_raw.max().item():.6f}")
+
+        # Ensure positivity using softplus and add epsilon
+        action_std = F.softplus(action_std_raw) + 1e-5 
+
+        # Optional: Clamp upper bound if needed (but min clamping might be less critical now)
+        # action_std = torch.clamp(action_std, min=1e-5, max=1.0) 
+
+        self.logger.debug(f"Processed action_std min: {action_std.min().item():.6f}, max: {action_std.max().item():.6f}")
+
+        # Create current action distribution and calculate entropy safely
+        try:
+            current_dist = Normal(action_mean, action_std)
+            entropy = current_dist.entropy().mean()
+            if torch.isnan(entropy) or entropy < 0:
+                 self.logger.error(f"🚨 INVALID ENTROPY DETECTED: {entropy.item():.4f}. Mean={action_mean.mean().item():.4f}, Std mean={action_std.mean().item():.4f}")
+                 # Fallback entropy or handle error
+                 entropy = torch.zeros_like(entropy) # Or some safe value
+            else:
+                 self.logger.debug(f"Entropy: {entropy.item():.4f}, Min entropy in batch: {current_dist.entropy().min().item():.4f}, Mean std: {action_std.mean().item():.4f}")
+
+        except ValueError as e:
+            self.logger.error(f"🚨 Error creating Normal distribution: {e}")
+            self.logger.error(f"Mean min/max: {action_mean.min().item():.4f}/{action_mean.max().item():.4f}, Std min/max: {action_std.min().item():.4f}/{action_std.max().item():.4f}")
+            # Handle error, maybe return default metrics or raise exception
+            return {"policy_loss": 0.0, "value_loss": 0.0, "entropy": 0.0, "kl": 0.0, "mean_std": 0.0} # Return safe values
+
         # Calculate current log probabilities 
         current_log_probs = current_dist.log_prob(actions).sum(-1)
         
-        # Calculate entropy (ensure it's properly computed and bounded)
-        entropy = current_dist.entropy().mean()
-        
         # Log entropy statistics for debugging
         with torch.no_grad():
-            min_entropy = current_dist.entropy().min().item()
-            mean_std = action_std.mean().item()
-            self.logger.debug(f"Entropy: {entropy.item():.4f}, Min entropy: {min_entropy:.4f}, Mean std: {mean_std:.4f}")
+            # min_entropy = current_dist.entropy().min().item() # Already handled in try block
+            mean_std = action_std.mean().item() # Use the processed action_std
+            # self.logger.debug(f"Entropy: {entropy.item():.4f}, Min entropy: {min_entropy:.4f}, Mean std: {mean_std:.4f}") # Redundant log
 
         # Calculate ratios and surrogate losses
         ratios = torch.exp(current_log_probs - old_log_probs)
@@ -903,11 +922,12 @@ class PPOAgent(BaseAgent):
             
             # Log mean difference between old and new policy means
             mean_diff = (old_action_mean - action_mean).abs().mean().item()
-            std_diff = (old_action_std - action_std).abs().mean().item()
+            # Use the processed action_std for comparison
+            std_diff = (old_action_std - action_std).abs().mean().item() 
             self.logger.info(f"Policy diff - Mean: {mean_diff:.6f}, Std: {std_diff:.6f}")
             
             # Clamp old std to prevent division by zero
-            old_action_std = torch.clamp(old_action_std, min=0.1, max=1.0)
+            old_action_std = torch.clamp(old_action_std, min=1e-5, max=1.0) # Match lower bound used for action_std
             
             # Calculate KL divergence between old and new policies
             mean_diff_squared = (old_action_mean - action_mean).pow(2)
@@ -952,7 +972,7 @@ class PPOAgent(BaseAgent):
         # Log metrics
         logger.info(
             f"Policy Loss={total_policy_loss:.4f}, Value Loss={total_value_loss:.4f}, "
-            f"Entropy={total_entropy:.4f}, KL={total_kl:.4f}, Mean Std={mean_std:.4f}"
+            f"Entropy={total_entropy:.4f}, KL={total_kl:.4f}, Mean Std={mean_std:.4f}" # Use processed action_std mean
         )
 
         return {
@@ -960,5 +980,5 @@ class PPOAgent(BaseAgent):
             "value_loss": total_value_loss,
             "entropy": total_entropy,
             "kl": total_kl,
-            "mean_std": mean_std
+            "mean_std": mean_std # Return processed action_std mean
         }

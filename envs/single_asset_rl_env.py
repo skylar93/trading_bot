@@ -258,7 +258,16 @@ class SingleAssetRLTradingEnv(gym.Env):
         actual_change = target_position - self.current_position
         
         # DEBUG: Log action details for monitoring
-        self.logger.debug(f"💰 ACTION DETAILS: action={action[0]:.4f}, position_change={position_change:.4f}, actual_change={actual_change:.4f}")
+        # --- START: Added Pre-Trade Logging ---
+        self.logger.debug(
+            f"💰 PRE-TRADE: step={self.current_step}, capital={self.current_capital:.4f}, "
+            f"position={self.current_position:.4f}, price={current_price:.4f}, volume={current_volume:.1f}"
+        )
+        self.logger.debug(
+            f"💰 ACTION DETAILS: action={action[0]:.4f}, position_change={position_change:.4f}, "
+            f"target_position={target_position:.4f}, actual_change_requested={actual_change:.4f}"
+        )
+        # --- END: Added Pre-Trade Logging ---
         
         # Reset trade metrics
         self.last_trade_size = 0
@@ -278,8 +287,30 @@ class SingleAssetRLTradingEnv(gym.Env):
         
         # Execute trade if there is a position change
         if abs(actual_change) > 1e-8:  # Small epsilon to handle float precision
+            requested_change = actual_change # Store original requested change
+
+            # --- START: 상세 거래 로그 ---
+            trade_log_details = {
+                "step": self.current_step,
+                "capital_before": self.current_capital,
+                "position_before": self.current_position,
+                "price": current_price,
+                "volume": current_volume,
+                "requested_change": requested_change,
+                "fill_rate": 1.0, # Default value
+                "actual_change_after_fill": requested_change, # Default value
+                "slippage_rate": 0.0, # Default value
+                "executed_price": current_price, # Default value
+                "trade_value": 0.0, # Default value
+                "fee_rate": self.trading_fee, # Default value
+                "trade_cost": 0.0, # Default value
+                "capital_change": 0.0, # Default value
+                "capital_after": self.current_capital, # Default value
+                "position_after": self.current_position # Default value
+            }
+            # --- END: 상세 거래 로그 ---
+
             # Apply partial fills if enabled
-            requested_change = actual_change
             if self.partial_fills:
                 try:
                     # Larger trades are more likely to be partially filled
@@ -292,14 +323,21 @@ class SingleAssetRLTradingEnv(gym.Env):
                         
                     actual_change = actual_change * fill_rate
                     self.last_fill_rate = fill_rate
+                    trade_log_details["fill_rate"] = fill_rate
+                    trade_log_details["actual_change_after_fill"] = actual_change
                     
                     # DEBUG: Log fill rate details
                     self.logger.debug(f"📊 FILL RATE: requested={requested_change:.4f}, fill_rate={fill_rate:.4f}, actual={actual_change:.4f}")
                 except Exception as e:
                     self.logger.error(f"❌ ERROR in fill rate calculation: {str(e)}")
                     self.last_fill_rate = self.min_fill_rate
-                    actual_change = actual_change * self.last_fill_rate
-            
+                    actual_change = requested_change * self.last_fill_rate # Use requested_change here
+                    trade_log_details["fill_rate"] = self.last_fill_rate
+                    trade_log_details["actual_change_after_fill"] = actual_change
+            else:
+                # If not partial fills, actual_change remains requested_change
+                trade_log_details["actual_change_after_fill"] = actual_change
+
             # Apply slippage to price if enabled
             executed_price = current_price
             if self.apply_slippage:
@@ -316,6 +354,8 @@ class SingleAssetRLTradingEnv(gym.Env):
                     slippage_direction = 1 if actual_change > 0 else -1
                     executed_price = current_price * (1 + slippage_direction * slippage)
                     self.last_slippage = slippage
+                    trade_log_details["slippage_rate"] = slippage
+                    trade_log_details["executed_price"] = executed_price
                     
                     # DEBUG: Log slippage details
                     self.logger.debug(f"📉 SLIPPAGE: rate={slippage:.6f}, direction={slippage_direction}, price: {current_price:.4f} -> {executed_price:.4f}")
@@ -323,10 +363,15 @@ class SingleAssetRLTradingEnv(gym.Env):
                     self.logger.error(f"❌ ERROR in slippage calculation: {str(e)}")
                     self.last_slippage = 0.0
                     executed_price = current_price
-            
+                    trade_log_details["executed_price"] = executed_price # Update log even on error/no slippage
+            else: # 슬리피지 미적용 시
+                trade_log_details["executed_price"] = executed_price # 기록 위해 추가
+
             # Calculate trade cost
+            # Use the actual_change after fill rate application
             trade_value = abs(actual_change * executed_price)
             self.last_trade_size = trade_value
+            trade_log_details["trade_value"] = trade_value
             
             # Apply dynamic fee (larger trades might pay different fees)
             try:
@@ -338,6 +383,9 @@ class SingleAssetRLTradingEnv(gym.Env):
                     self.logger.warning(f"❌ EXTREME FEE RATE: {fee_rate}, using default")
                     fee_rate = self.trading_fee
                     trade_cost = trade_value * fee_rate
+                
+                trade_log_details["fee_rate"] = fee_rate
+                trade_log_details["trade_cost"] = trade_cost
                     
                 # DEBUG: Log fee details
                 self.logger.debug(f"💲 TRADE COSTS: value={trade_value:.4f}, fee_rate={fee_rate:.6f}, cost={trade_cost:.4f}")
@@ -345,16 +393,28 @@ class SingleAssetRLTradingEnv(gym.Env):
                 self.logger.error(f"❌ ERROR in fee calculation: {str(e)}")
                 fee_rate = self.trading_fee
                 trade_cost = trade_value * fee_rate
-            
+                trade_log_details["fee_rate"] = fee_rate
+                trade_log_details["trade_cost"] = trade_cost
+
             # Update capital and position
-            self.current_capital -= trade_cost
-            if actual_change > 0:  # Buy
-                self.current_capital -= trade_value
-            else:  # Sell
-                self.current_capital += trade_value
+            capital_change = -trade_cost
+            if actual_change > 0: # Buy
+                capital_change -= trade_value
+            else: # Sell
+                capital_change += trade_value
             
+            trade_log_details["capital_change"] = capital_change
+            
+            self.current_capital += capital_change
+            # Use the actual_change after fill rate application
             self.current_position += actual_change
             
+            trade_log_details["capital_after"] = self.current_capital
+            trade_log_details["position_after"] = self.current_position
+
+            # 중요: 상세 거래 로그 출력
+            self.logger.info(f"📊 TRADE EXECUTION DETAILS: {trade_log_details}")
+
             # Check if we should end the episode based on capital
             force_done = False
             if self.current_capital <= 1.0:
@@ -395,50 +455,116 @@ class SingleAssetRLTradingEnv(gym.Env):
         self.done = self.current_step >= len(self.data)
         
         # Calculate new portfolio value after action and step
-        self.portfolio_value = self._calculate_portfolio_value(self.current_step - 1 if self.done else self.current_step)
-        
-        # DEBUG: Check for extreme portfolio values
-        if self.portfolio_value <= 0 or np.isnan(self.portfolio_value) or np.isinf(self.portfolio_value):
-            self.logger.warning(f"❌ EXTREME PORTFOLIO VALUE: {self.portfolio_value}, using previous value")
-            self.portfolio_value = max(1.0, self.previous_portfolio_value)
-        
-        # STEP 3-2: After self.portfolio_value is computed and checked for NaN/Inf:
-        if self.portfolio_value < 1.0:
-            self.logger.warning(f"❌ PORTFOLIO < 1.0 => forced episode end")
+        # --- START: Added Portfolio Calc Logging ---
+        portfolio_calc_price = self.data.iloc[self.current_step - 1 if self.done else self.current_step]["$close"]
+        # Handle potential invalid price during calculation
+        if portfolio_calc_price <= 0 or np.isnan(portfolio_calc_price) or np.isinf(portfolio_calc_price):
+             self.logger.warning(f"❌ Invalid price used in portfolio calculation at step {self.current_step}: {portfolio_calc_price}. Using 1.0 as fallback.")
+             portfolio_calc_price = 1.0
+
+        position_value_calc = self.current_position * portfolio_calc_price
+        self.portfolio_value = self.current_capital + position_value_calc
+        self.logger.debug(
+            f"💰 PORTFOLIO CALC: step={self.current_step}, capital={self.current_capital:.4f}, "
+            f"position={self.current_position:.4f}, calc_price={portfolio_calc_price:.4f}, "
+            f"pos_value={position_value_calc:.4f}, portfolio_value={self.portfolio_value:.4f}"
+        )
+        # --- END: Added Portfolio Calc Logging ---
+
+        # --- START: 강화된 포트폴리오 가치 체크 및 즉시 종료 ---
+        CRITICAL_LOW_THRESHOLD = 1.0 # 파산 임계값 (초기 자본의 극히 일부)
+
+
+        FORCE_TERMINATION = False
+        TERMINATION_REASON = None
+        final_reward_on_termination = 0.0 # Define a default value
+
+        if self.portfolio_value <= CRITICAL_LOW_THRESHOLD:
+            self.logger.error(f"💥 CRITICAL PORTFOLIO VALUE at step {self.current_step}: {self.portfolio_value:.4f}. Forcing episode termination.")
+            FORCE_TERMINATION = True
+            TERMINATION_REASON = "bankruptcy"
+            # 포트폴리오 가치를 0 미만으로 두지 않도록 강제
+            self.portfolio_value = max(CRITICAL_LOW_THRESHOLD, self.portfolio_value) 
+            # 파산 시 큰 패널티 부여
+            final_reward_on_termination = -10.0 # 예: -10점 (기존 -1.0보다 크게)
+        elif np.isnan(self.portfolio_value) or np.isinf(self.portfolio_value):
+            self.logger.error(f"💥 INVALID PORTFOLIO VALUE (NaN/Inf) at step {self.current_step}. Forcing episode termination.")
+            FORCE_TERMINATION = True
+            TERMINATION_REASON = "nan_inf_portfolio"
+            # 이전 값으로 대체하거나, 안전한 값으로 설정 후 종료
+            self.portfolio_value = max(CRITICAL_LOW_THRESHOLD, self.previous_portfolio_value) 
+            final_reward_on_termination = -5.0 # 예: -5점
+        elif self.portfolio_value > 1e10: # 자본이 비정상적으로 커지는 경우도 방지 (기존 1e9에서 더 높은 값으로)
+             self.logger.error(f"💥 EXTREME POSITIVE PORTFOLIO VALUE at step {self.current_step}: {self.portfolio_value:.2f}. Forcing termination.")
+             FORCE_TERMINATION = True
+             TERMINATION_REASON = "extreme_positive_portfolio"
+             self.portfolio_value = 1e10 # 상한선 설정
+             final_reward_on_termination = -5.0 
+
+        # 에피소드 강제 종료 조건 확인 (최소 스텝 이후)
+        min_steps_elapsed = (self.current_step - self.window_size) >= self.min_episode_steps
+        if FORCE_TERMINATION and min_steps_elapsed:
             self.done = True
-            # 만약 그래도 학습 유지하고 싶다면, 최소 1.0으로 강제
-            self.portfolio_value = max(1.0, self.portfolio_value)
-        
-        if self.portfolio_value > 1e9:
-            self.logger.warning(f"❌ PORTFOLIO > 1e9 => forced episode end")
-            self.done = True
-            self.portfolio_value = min(1e9, self.portfolio_value)
+            observation = self._get_observation() # 최종 상태 가져오기
+            info = self._get_info()
+            info["early_termination_reason"] = TERMINATION_REASON
+            info["reward_debug"] = reward_debug # Add reward debug info
+            info["reward_debug"]["final_reward"] = final_reward_on_termination # Overwrite final reward
+            
+            # 종료 시 최종 보상을 설정 (위에서 정의한 값 사용)
+            # reward_debug 업데이트는 생략하거나 기본값으로 둘 수 있음
+            # 주의: 이 return 문은 reward 계산 로직 전에 위치해야 함
+            return observation, final_reward_on_termination, self.done, False, info
+        elif FORCE_TERMINATION and not min_steps_elapsed:
+            self.logger.warning(f"Portfolio value issue detected ({TERMINATION_REASON}) but delaying termination until min_steps {self.min_episode_steps} reached.")
+            # 경고는 하지만 일단 진행 (최소 스텝 보장 위해). 단, reward 계산 시 문제 발생 가능성 있음.
+            # 이 경우, 아래 reward 계산 로직에서 여전히 문제가 발생할 수 있으므로 주의 필요.
+            # 안전하게 하려면, 문제가 발생했을 때 포트폴리오 가치를 이전 값으로 되돌리는 로직 유지
+            if TERMINATION_REASON == "bankruptcy" or TERMINATION_REASON == "nan_inf_portfolio":
+                 self.portfolio_value = max(CRITICAL_LOW_THRESHOLD, self.previous_portfolio_value)
+                 self.logger.warning(f"Reverted portfolio value to {self.portfolio_value:.4f} temporarily.")
+
+
+        # --- END: 강화된 포트폴리오 가치 체크 ---
         
         # Update peak portfolio value for drawdown calculation
-        self.peak_portfolio_value = max(self.peak_portfolio_value, self.portfolio_value)
+        # 포트폴리오 가치가 유효한 경우에만 peak 업데이트
+        if not (np.isnan(self.portfolio_value) or np.isinf(self.portfolio_value) or self.portfolio_value <= 0):
+             self.peak_portfolio_value = max(self.peak_portfolio_value, self.portfolio_value)
+
+        # Calculate basic reward (change in portfolio value) using log returns
+        eps = 1e-8 # Small epsilon to prevent division by zero
         
-        # Calculate basic reward (change in portfolio value)
-        eps = 1e-8  # Small epsilon to prevent division by zero
-        reward_step = (self.portfolio_value - self.previous_portfolio_value) / max(self.previous_portfolio_value, eps)
+        # 🚨 여기가 중요: previous_portfolio_value가 0에 가까울 때 보상이 폭발하는 것을 방지해야 함
+        # 해결책 1: 로그 리턴 사용 (수치적으로 안정적)
+        log_return = np.log(max(self.portfolio_value, eps)) - np.log(max(self.previous_portfolio_value, eps))
         
-        # Apply tighter clipping for basic reward (±2 instead of ±10)
-        if np.isnan(reward_step) or np.isinf(reward_step) or abs(reward_step) > 2.0:
-            self.logger.warning(f"❌ EXTREME BASIC REWARD: {reward_step}, capping to range [-2, 2]")
-            if np.isnan(reward_step):
-                reward_step = 0.0
-            else:
-                reward_step = np.clip(reward_step, -2.0, 2.0)
+        # 로그 리턴은 보통 절대값이 작으므로, 클리핑 범위를 조정하거나 reward_scale을 활용
+        reward_step_raw = log_return * 100 # 예시: 스케일링 (필요에 따라 조정)
         
-        # Scale reward for stability (if reward_scale < 1)
+        # 클리핑 범위는 로그 리턴의 스케일에 맞춰 조정 (예: [-5, 5] 또는 더 작게)
+        REWARD_CLIP_RANGE = 5.0
+        if np.isnan(reward_step_raw) or np.isinf(reward_step_raw) or abs(reward_step_raw) > REWARD_CLIP_RANGE:
+             self.logger.warning(f"❌ EXTREME LOG RETURN REWARD: {reward_step_raw:.4f}, capping to range [{-REWARD_CLIP_RANGE}, {REWARD_CLIP_RANGE}]")
+             if np.isnan(reward_step_raw):
+                 reward_step = 0.0
+             else:
+                 reward_step = np.clip(reward_step_raw, -REWARD_CLIP_RANGE, REWARD_CLIP_RANGE)
+        else:
+             reward_step = reward_step_raw
+
+        # reward_scale 적용
         reward_step = reward_step * self.reward_scale
             
         # Update reward debug information
-        reward_debug["basic_reward"] = reward_step
-        reward_debug["portfolio_change"] = reward_step / self.reward_scale  # Show unscaled for debugging
+        reward_debug["basic_reward"] = reward_step # Store the final scaled and clipped reward
+        # Store the unscaled log return for comparison
+        reward_debug["portfolio_change"] = log_return 
         reward_debug["post_portfolio"] = self.portfolio_value
         
         # Update returns buffer for Sharpe calculation
-        self.returns_buffer.append(reward_step)
+        # Use the scaled and clipped reward_step for the buffer
+        self.returns_buffer.append(reward_step) 
         
         # Calculate final reward with risk adjustment
         try:
