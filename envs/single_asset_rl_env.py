@@ -58,7 +58,7 @@ class SingleAssetRLTradingEnv(gym.Env):
         scale_ohlcv: bool = True,
         price_scale_factor: float = 1000.0,
         volume_scale_factor: float = 1e6,
-        min_episode_steps: int = 5,
+        min_episode_steps: int = 30,
         reward_scale: float = 1.0,
     ):
         """Initialize environment
@@ -486,7 +486,7 @@ class SingleAssetRLTradingEnv(gym.Env):
             # 포트폴리오 가치를 0 미만으로 두지 않도록 강제
             self.portfolio_value = max(CRITICAL_LOW_THRESHOLD, self.portfolio_value) 
             # 파산 시 큰 패널티 부여
-            final_reward_on_termination = -10.0 # 예: -10점 (기존 -1.0보다 크게)
+            final_reward_on_termination = -100.0 # 예: -10점 (기존 -1.0보다 크게)
         elif np.isnan(self.portfolio_value) or np.isinf(self.portfolio_value):
             self.logger.error(f"💥 INVALID PORTFOLIO VALUE (NaN/Inf) at step {self.current_step}. Forcing episode termination.")
             FORCE_TERMINATION = True
@@ -532,20 +532,28 @@ class SingleAssetRLTradingEnv(gym.Env):
         if not (np.isnan(self.portfolio_value) or np.isinf(self.portfolio_value) or self.portfolio_value <= 0):
              self.peak_portfolio_value = max(self.peak_portfolio_value, self.portfolio_value)
 
-        # Calculate basic reward (change in portfolio value) using log returns
+        # Calculate basic reward (change in portfolio value) using log returns with ratio clipping
         eps = 1e-8 # Small epsilon to prevent division by zero
-        
-        # 🚨 여기가 중요: previous_portfolio_value가 0에 가까울 때 보상이 폭발하는 것을 방지해야 함
-        # 해결책 1: 로그 리턴 사용 (수치적으로 안정적)
-        log_return = np.log(max(self.portfolio_value, eps)) - np.log(max(self.previous_portfolio_value, eps))
-        
-        # 로그 리턴은 보통 절대값이 작으므로, 클리핑 범위를 조정하거나 reward_scale을 활용
-        reward_step_raw = log_return * 100 # 예시: 스케일링 (필요에 따라 조정)
-        
-        # 클리핑 범위는 로그 리턴의 스케일에 맞춰 조정 (예: [-5, 5] 또는 더 작게)
-        REWARD_CLIP_RANGE = 5.0
+        current_val = max(self.portfolio_value, eps)
+        previous_val = max(self.previous_portfolio_value, eps)
+
+        ratio = current_val / previous_val
+
+        # Winsorization/Clipping the ratio before taking log
+        # (예: 99% 손실 ~ 100배 이익 범위까지만 허용)
+        ratio_clipped = np.clip(ratio, 0.01, 100.0) 
+
+        log_return = np.log(ratio_clipped) # 이제 log_return 값은 극단적으로 튀지 않음
+
+        reward_step_raw = log_return # 스케일링 없이 사용
+
+        # 클리핑 범위는 Winsorization 후의 로그 리턴 범위에 맞게 설정 (예: log(0.01) ~ log(100))
+        # 이 범위는 약 -4.6 ~ +4.6 이므로, [-5.0, 5.0] 정도면 충분할 수 있음
+        REWARD_CLIP_RANGE = 5.0 
+
+        # Final clipping check (should rarely trigger now)
         if np.isnan(reward_step_raw) or np.isinf(reward_step_raw) or abs(reward_step_raw) > REWARD_CLIP_RANGE:
-             self.logger.warning(f"❌ EXTREME LOG RETURN REWARD: {reward_step_raw:.4f}, capping to range [{-REWARD_CLIP_RANGE}, {REWARD_CLIP_RANGE}]")
+             self.logger.warning(f"⚠️ CLAMPED LOG RETURN after ratio clipping: {reward_step_raw:.4f}, capping to range [{-REWARD_CLIP_RANGE}, {REWARD_CLIP_RANGE}]")
              if np.isnan(reward_step_raw):
                  reward_step = 0.0
              else:
@@ -553,7 +561,7 @@ class SingleAssetRLTradingEnv(gym.Env):
         else:
              reward_step = reward_step_raw
 
-        # reward_scale 적용
+        # reward_scale 적용 (이건 유지하거나 필요시 조정)
         reward_step = reward_step * self.reward_scale
             
         # Update reward debug information
@@ -579,7 +587,8 @@ class SingleAssetRLTradingEnv(gym.Env):
                     reward = np.clip(reward, -5.0, 5.0)
         except Exception as e:
             self.logger.error(f"❌ ERROR calculating risk-adjusted reward: {str(e)}")
-            reward = np.clip(reward_step, -2.0, 2.0) if not np.isnan(reward_step) else 0.0
+            # Use the adjusted clip range for the fallback reward
+            reward = np.clip(reward_step, -REWARD_CLIP_RANGE * self.reward_scale, REWARD_CLIP_RANGE * self.reward_scale) if not np.isnan(reward_step) else 0.0
         
         # Update info with reward debug
         observation = self._get_observation()

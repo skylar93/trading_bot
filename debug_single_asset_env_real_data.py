@@ -18,6 +18,7 @@ import pandas as pd
 import torch
 import argparse
 from typing import Dict, Any, Optional
+from ray import tune
 
 # 프로젝트 경로에 맞춰 조정 (env_factory, ppo_agent, DataLoader 위치에 따라 수정)
 PROJECT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "."))
@@ -102,7 +103,7 @@ def create_env(df, config=None):
         initial_capital=env_config.get("initial_capital", 10000.0),
         trading_fee=env_config.get("trading_fee", 0.001),
         window_size=env_config.get("window_size", 20),
-        max_position_size=env_config.get("max_position_size", 1.0),
+        max_position_size=env_config.get("max_position_size", 0.5),
         risk_adjusted_reward=env_config.get("risk_adjusted_reward", True),
         sharpe_lookback=env_config.get("sharpe_lookback", 30),
         sharpe_weight=env_config.get("sharpe_weight", 0.5),
@@ -150,7 +151,6 @@ def train_and_evaluate(
     
     # 학습 파라미터 설정
     num_episodes = training_config.get("num_episodes", 10)
-    update_interval = training_config.get("update_interval", 128)
     
     step_count = 0
     all_rewards = []
@@ -384,19 +384,24 @@ def hyperparameter_optimization(df, config=None):
         # 하이퍼파라미터 검색 공간 설정
         search_config = {
             "hyperopt": {
-                "num_samples": 5,  # 검색할 샘플 수
+                "num_samples": 40,  # 검색할 샘플 수
                 "parameters": {
-                    "agent.learning_rate": {"distribution": "loguniform", "min": 1e-5, "max": 5e-4},
-                    "agent.gamma": {"distribution": "uniform", "min": 0.9, "max": 0.999},
+                    "agent.learning_rate": {"distribution": "loguniform", "min": 1e-6, "max": 5e-5},
+                    "agent.gamma": {"distribution": "uniform", "min": 0.99, "max": 0.999},
                     "agent.gae_lambda": {"distribution": "uniform", "min": 0.9, "max": 0.99},
                     "agent.clip_epsilon": {"distribution": "uniform", "min": 0.1, "max": 0.3},
-                    "agent.n_epochs": {"distribution": "randint", "min": 3, "max": 10},
-                    "env.window_size": {"distribution": "choice", "values": [3, 5]},
-                    "training.update_interval": {"distribution": "choice", "values": [64, 128, 256]},
+                    "agent.n_epochs": {"distribution": "randint", "min": 5, "max": 15},
+                    "env.window_size": {"distribution": "choice", "values": [15, 20, 30]},
+                    "env.max_position_size": {"distribution": "uniform", "min": 0.3, "max": 0.8},
+                    "agent.rollout_steps": {"distribution": "choice", "values": [1024, 2048, 4096]},
+                    "agent.c2": {"distribution": "loguniform", "min": 1e-6, "max": 0.01},
+                    "env.reward_scale": {"distribution": "loguniform", "min": 0.1, "max": 5.0},
+                    "env.sharpe_weight": {"distribution": "uniform", "min": 0.1, "max": 0.9},
+                    "env.max_drawdown_penalty_threshold": {"distribution": "uniform", "min": 0.05, "max": 0.25},
                 }
             },
             "training": {
-                "num_episodes": 5,  # 각 시도마다 적은 에피소드로 평가
+                "num_episodes": 2,  
             },
             "paths": {
                 "model_path": "ppo_agent_hyperopt.pt"
@@ -443,7 +448,10 @@ def hyperparameter_optimization(df, config=None):
             )
             
             # 학습 및 평가
-            with mlflow_manager.start_run() as run:
+            # Assign a unique run name using the trial ID
+            run_name = f"trial_{tune.get_trial_id()}" 
+            logger.info(f"Starting MLflow run for trial: {run_name}")
+            with mlflow_manager.start_run(run_name=run_name) as run:
                 # 하이퍼파라미터 로깅
                 flat_params = {}
                 for param_key, param_value in trial_config.items():
@@ -588,8 +596,7 @@ def main():
             "rollout_steps": args.rollout_steps  # 로올아웃 스텝 수 설정
         },
         "training": {
-            "num_episodes": args.episodes,
-            "update_interval": 128
+            "num_episodes": args.episodes
         },
         "paths": {
             "model_path": f"ppo_agent_single_asset_{args.days}days.pt"
@@ -600,7 +607,7 @@ def main():
     env = create_env(df, config)
     agent = create_agent(env, config)
     
-    logger.info(f"에이전트 설정: 로올아웃 스텝={args.rollout_steps}, 학습률={args.learning_rate}")
+    logger.info(f"에이전트 설정: rollout steps={args.rollout_steps}, learning rate={args.learning_rate}")
     
     # MLflow 실험 추적
     if mlflow_manager is not None:

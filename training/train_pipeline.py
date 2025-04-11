@@ -845,6 +845,7 @@ def train_multi_agent_with_manager(
     total_timesteps = training_config.get("total_timesteps", 100000)
     checkpoint_interval = training_config.get("checkpoint_interval", 10000)
     eval_interval = training_config.get("eval_interval", 5000)
+    update_interval = training_config.get("update_interval", 2048)  # Steps before PPO update
     log_interval = training_config.get("log_interval", 10)
     paths_config = config.get("paths", {})
     checkpoint_dir = paths_config.get("checkpoint_dir", "checkpoints")

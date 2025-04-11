@@ -182,10 +182,9 @@ class PolicyNetwork(BaseNetwork):
             
             # Convert to sigmoid
             std_sigmoid = torch.sigmoid(raw_std_clipped)
-            
-            # Fix: Maintain robust standard deviation range
-            min_std = 0.1  # Increased minimum to prevent near-zero values
-            max_std = 0.5  # Reasonable maximum
+
+            min_std = 1e-3  
+            max_std = 0.3  #
             self._std = min_std + std_sigmoid * (max_std - min_std)
             
             # Final NaN check
@@ -247,122 +246,3 @@ class PolicyNetwork(BaseNetwork):
             String identifier for architecture type
         """
         return "mlp"
-
-
-class ValueNetwork(nn.Module):
-    def __init__(self, observation_space):
-        super().__init__()
-        
-        # Calculate input dimension based on observation space
-        if isinstance(observation_space, gym.spaces.Box):
-            # For batched observations: (batch_size, window_size, features)
-            self.input_dim = observation_space.shape[0] * observation_space.shape[1]  # window_size * features
-        else:
-            raise ValueError(f"Unsupported observation space type: {type(observation_space)}")
-            
-        self.net = nn.Sequential(
-            nn.Linear(self.input_dim, 256),
-            nn.ReLU(),
-            nn.Linear(256, 256),
-            nn.ReLU(),
-            nn.Linear(256, 1)
-        )
-        
-        # Initialize weights
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.orthogonal_(m.weight)
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-                    
-    def forward(self, x):
-        """Forward pass through value network.
-        
-        Args:
-            x: Input tensor that can be various shapes
-            
-        Returns:
-            Value estimate tensor with appropriate shape
-        """
-        # Record original shape for debugging
-        original_shape = x.shape
-        
-        # Handle NaN and Inf values
-        if torch.isnan(x).any() or torch.isinf(x).any():
-            logging.warning(f"NaN or Inf in ValueNetwork input with shape {x.shape}; replacing with safe values")
-            x = torch.nan_to_num(x, nan=0.0, posinf=10.0, neginf=-10.0)
-        
-        # Initial clipping to prevent extreme values
-        MAX_INPUT = 1e6
-        x = torch.clamp(x, -MAX_INPUT, MAX_INPUT)
-        
-        # Handle different input dimensions
-        flattened = False
-        if len(x.shape) == 1:  # Single vector
-            x = x.unsqueeze(0)  # Add batch dimension
-            flattened = True
-        
-        try:
-            # Reshape input: (batch_size, window_size, features) -> (batch_size, window_size * features)
-            batch_size = x.shape[0]
-            x = x.reshape(batch_size, -1)
-            
-            # Check for dimension mismatch and handle it
-            if x.size(1) != self.input_dim:
-                logging.warning(
-                    f"ValueNetwork dimension mismatch: got {x.size(1)}, expected {self.input_dim}. "
-                    f"Original shape: {original_shape}. Reshaping..."
-                )
-                
-                if x.size(1) > self.input_dim:
-                    # For larger inputs, use adaptive pooling
-                    try:
-                        if x.size(1) > self.input_dim * 1.5:
-                            # Reshape for 1D adaptive pooling
-                            x_reshaped = x.unsqueeze(1)  # [batch, 1, features]
-                            pool = nn.AdaptiveAvgPool1d(self.input_dim)
-                            x = pool(x_reshaped).squeeze(1)
-                        else:
-                            # Truncate to expected size
-                            x = x[:, :self.input_dim]
-                    except Exception as e:
-                        logging.error(f"Error during pooling: {str(e)}. Applying truncation instead.")
-                        x = x[:, :self.input_dim]  # Fallback to simple truncation
-                else:
-                    # Pad with zeros if input is smaller
-                    padding = torch.zeros(batch_size, self.input_dim - x.size(1), device=x.device)
-                    x = torch.cat([x, padding], dim=1)
-            
-            # Additional check for NaN values before network
-            if torch.isnan(x).any() or torch.isinf(x).any():
-                logging.warning("NaN or Inf values in reshaped ValueNetwork input. Replacing with safe values.")
-                x = torch.nan_to_num(x, nan=0.0, posinf=1.0, neginf=-1.0)
-            
-            # Forward pass through network layers
-            value = self.net(x)
-            
-            # Check for NaN/Inf in output
-            if torch.isnan(value).any() or torch.isinf(value).any():
-                logging.warning("NaN or Inf in ValueNetwork output. Replacing with safe values.")
-                value = torch.nan_to_num(value, nan=0.0, posinf=10.0, neginf=-10.0)
-            
-            # Clip extreme values in final output
-            value = torch.clamp(value, -100.0, 100.0)
-            
-            # If input was a single vector, return single value
-            if flattened:
-                value = value.squeeze(0)
-                
-            return value
-            
-        except Exception as e:
-            # If any unexpected error occurs, return safe values
-            logging.error(f"Error in ValueNetwork forward pass: {str(e)}. Returning safe value.")
-            
-            # Create safe output of appropriate shape
-            safe_value = torch.zeros(batch_size, 1, device=x.device)
-            
-            if flattened:
-                safe_value = safe_value.squeeze(0)
-                
-            return safe_value

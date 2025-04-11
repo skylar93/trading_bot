@@ -58,7 +58,7 @@ class PPOAgent(BaseAgent):
         gamma: float = 0.99,
         gae_lambda: float = 0.95,
         clip_epsilon: float = 0.2,
-        c1: float = 1.0,
+        c1: float = 0.5,
         c2: float = 0.01,
         n_epochs: int = 10,
         batch_size: int = 64,
@@ -968,6 +968,9 @@ class PPOAgent(BaseAgent):
         total_value_loss = value_loss.item()
         total_entropy = entropy.item()
         total_kl = kl_val  # Use the properly calculated KL value
+
+        with torch.no_grad():
+            mean_std = action_std.mean().item() # 계산은 여기서 하거나, 
 
         # Log metrics
         logger.info(
