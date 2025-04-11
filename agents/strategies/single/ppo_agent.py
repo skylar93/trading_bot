@@ -65,6 +65,7 @@ class PPOAgent(BaseAgent):
         max_grad_norm: float = 0.5,
         target_kl: float = 0.015,
         normalize_observations: bool = False,
+        std_epsilon: float = 1e-4,
         device: Optional[str] = None,
         **kwargs,
     ):
@@ -110,7 +111,10 @@ class PPOAgent(BaseAgent):
         self.max_grad_norm = max_grad_norm
         self.target_kl = target_kl
         self.normalize_observations = False
+        self.std_epsilon = std_epsilon
         self.eps = 1e-8
+
+        self.rollout_threshold = kwargs.get("rollout_steps", 1024)  # Default to 1024 steps per rollout
         
         # Add training flag
         self.training = True
@@ -156,7 +160,7 @@ class PPOAgent(BaseAgent):
         self.buffer = PPOBuffer(
             observation_space.shape,
             action_space.shape,
-            self.batch_size,
+            self.rollout_threshold,
             self.gamma,
             self.gae_lambda,
             self.device
@@ -168,7 +172,6 @@ class PPOAgent(BaseAgent):
         
         # Track rollout state
         self.rollout_steps = 0
-        self.rollout_threshold = kwargs.get("rollout_steps", 1024)  # Default to 1024 steps per rollout
         
         # Track training metrics over time
         self.training_history = {
@@ -307,7 +310,6 @@ class PPOAgent(BaseAgent):
             # Handle 2D observations from environment with shape (window_size, features)
             # by adding a batch dimension to make it (1, window_size, features)
             if len(state.shape) == 2 and state.shape[0] == self.observation_space.shape[0] and state.shape[1] == self.observation_space.shape[1]:
-                # This is likely a direct observation from SingleAssetRLTradingEnv
                 state = np.expand_dims(state, axis=0)  # Add batch dimension: (1, window_size, features)
             
             # Convert to tensor
@@ -317,7 +319,9 @@ class PPOAgent(BaseAgent):
             state_tensor = self._prepare_state(state_tensor)
             
             # Get action distribution parameters
-            action_mean, action_std = self.network(state_tensor)
+            raw_action_mean, raw_action_std = self.network(state_tensor)
+            action_mean = torch.tanh(raw_action_mean)
+            action_std = F.softplus(raw_action_std) + self.std_epsilon
 
             # Use deterministic action if either deterministic or eval_mode is True
             if deterministic or eval_mode:
@@ -488,13 +492,14 @@ class PPOAgent(BaseAgent):
             
             # Get distribution parameters from old policy
             old_mean, old_std = self.old_network(prepared_states)
+            old_mean = torch.tanh(old_mean)
+            old_std = F.softplus(old_std) + self.std_epsilon
             
             # Get distribution parameters from current policy
             new_mean, new_std = self.network(prepared_states)
+            new_mean = torch.tanh(new_mean)
+            new_std = F.softplus(new_std) + self.std_epsilon
             
-            # Ensure std values are valid
-            old_std = torch.clamp(old_std, min=0.1, max=1.0)
-            new_std = torch.clamp(new_std, min=0.1, max=1.0)
             
             # Calculate mean component of KL: (μ1 - μ2)²/(2*σ2²)
             mean_diff_squared = (old_mean - new_mean).pow(2)
@@ -565,18 +570,20 @@ class PPOAgent(BaseAgent):
         with torch.no_grad():
             current_value = self.value_network(prepared_state)
             # current_value: shape (1,1) or (1,) 이라면
-            current_value = current_value.squeeze(-1)  # shape (1,)
-            current_value = current_value.item()
+            current_value = current_value.squeeze(-1).item()
                         
             # IMPORTANT: Use old_network to calculate log_prob for consistent ratio calculation
-            action_mean, action_std_raw = self.old_network(prepared_state)
-            dist = Normal(action_mean, action_std_raw)
+            old_raw_mean, old_raw_std = self.old_network(prepared_state)
+            old_action_mean = torch.tanh(old_raw_mean)
+            old_action_std = F.softplus(old_raw_std) + self.std_epsilon
+
+            dist = Normal(old_action_mean, old_action_std)
             log_prob = dist.log_prob(action_tensor).sum(dim=-1).item()
             
             # Debug logging for standard deviation
-            mean_std = action_std_raw.mean().item()
-            min_std = action_std_raw.min().item()
-            max_std = action_std_raw.max().item()
+            mean_std = old_action_std.mean().item()
+            min_std = old_action_std.min().item()
+            max_std = old_action_std.max().item()
             if self.rollout_steps % 100 == 0:  # Log every 100 steps
                 self.logger.info(
                     f"Rollout step {self.rollout_steps}: Mean std={mean_std:.4f}, "
@@ -648,6 +655,7 @@ class PPOAgent(BaseAgent):
         """
         # If we don't have enough samples, return early
         if len(self.buffer) < self.batch_size:
+            self.logger.warning(f"Not enough samples to perform update. Buffer size: {len(self.buffer)}, Batch size: {self.batch_size}")
             return {}
             
         # Get last state to estimate its value for advantage computation
@@ -840,27 +848,27 @@ class PPOAgent(BaseAgent):
             prepared_states = torch.nan_to_num(prepared_states, nan=0.0)
         
         # Get action distribution parameters from current policy
-        action_mean, action_std_raw = self.network(prepared_states)
+        raw_action_mean, raw_action_std = self.network(prepared_states)
+        action_mean = torch.tanh(raw_action_mean)
+        action_std = F.softplus(raw_action_std) + self.std_epsilon
         
         # Get value predictions
         predicted_values = self.value_network(prepared_states).squeeze(-1)
         
         # Ensure action parameters are valid
-        if torch.isnan(action_mean).any() or torch.isnan(action_std_raw).any():
+        if torch.isnan(action_mean).any() or torch.isnan(action_std).any():
             self.logger.warning("NaN values detected in policy network output")
             action_mean = torch.nan_to_num(action_mean, nan=0.5)
-            action_std_raw = torch.nan_to_num(action_std_raw, nan=0.1)
+            action_std = torch.nan_to_num(action_std, nan=0.1)
         
         # Log raw std before processing
-        self.logger.debug(f"Raw action_std min: {action_std_raw.min().item():.6f}, max: {action_std_raw.max().item():.6f}")
+        self.logger.debug(f"Raw std input to softplus min: {raw_action_std.min().item():.6f}, max: {raw_action_std.max().item():.6f}")
 
-        # Ensure positivity using softplus and add epsilon
-        action_std = F.softplus(action_std_raw) + 1e-5 
 
         # Optional: Clamp upper bound if needed (but min clamping might be less critical now)
         # action_std = torch.clamp(action_std, min=1e-5, max=1.0) 
 
-        self.logger.debug(f"Processed action_std min: {action_std.min().item():.6f}, max: {action_std.max().item():.6f}")
+        # self.logger.debug(f"Processed action_std min: {action_std.min().item():.6f}, max: {action_std.max().item():.6f}")
 
         # Create current action distribution and calculate entropy safely
         try:
@@ -884,9 +892,8 @@ class PPOAgent(BaseAgent):
         
         # Log entropy statistics for debugging
         with torch.no_grad():
-            # min_entropy = current_dist.entropy().min().item() # Already handled in try block
             mean_std = action_std.mean().item() # Use the processed action_std
-            # self.logger.debug(f"Entropy: {entropy.item():.4f}, Min entropy: {min_entropy:.4f}, Mean std: {mean_std:.4f}") # Redundant log
+            self.logger.debug(f"Update - Entropy: {entropy.item():.4f}, Mean processed std: {mean_std:.4f}")
 
         # Calculate ratios and surrogate losses
         ratios = torch.exp(current_log_probs - old_log_probs)
@@ -918,7 +925,9 @@ class PPOAgent(BaseAgent):
         # KL = (log(std2/std1) + (std1^2 + (mean1-mean2)^2)/(2*std2^2) - 0.5)
         with torch.no_grad():
             # Get old policy distribution parameters for more accurate KL calculation
-            old_action_mean, old_action_std = self.old_network(prepared_states)
+            old_raw_mean, old_raw_std = self.old_network(prepared_states)
+            old_action_mean = torch.tanh(old_raw_mean)
+            old_action_std = F.softplus(old_raw_std) + self.std_epsilon
             
             # Log mean difference between old and new policy means
             mean_diff = (old_action_mean - action_mean).abs().mean().item()
@@ -926,18 +935,16 @@ class PPOAgent(BaseAgent):
             std_diff = (old_action_std - action_std).abs().mean().item() 
             self.logger.info(f"Policy diff - Mean: {mean_diff:.6f}, Std: {std_diff:.6f}")
             
-            # Clamp old std to prevent division by zero
-            old_action_std = torch.clamp(old_action_std, min=1e-5, max=1.0) # Match lower bound used for action_std
-            
             # Calculate KL divergence between old and new policies
             mean_diff_squared = (old_action_mean - action_mean).pow(2)
             std_ratio = old_action_std / action_std
             var_ratio = std_ratio.pow(2)
             
             # Use the analytical KL for normal distributions
-            kl_div = (torch.log(action_std / old_action_std) + 
+            kl_eps = 1e-8
+            kl_div = (torch.log((action_std + kl_eps) / (old_action_std + kl_eps)) + 
                       (old_action_std.pow(2) + mean_diff_squared) / 
-                      (2 * action_std.pow(2)) - 0.5).mean()
+                      (2 * action_std.pow(2) + kl_eps) - 0.5).mean()
             
             kl_val = kl_div.item()
         
@@ -951,7 +958,11 @@ class PPOAgent(BaseAgent):
         policy_loss = -torch.min(surr1, surr2).mean()
         
         # Calculate value loss using predicted values from value network
-        value_loss = 0.5 * F.mse_loss(predicted_values, returns)
+        # value_loss = 0.5 * F.mse_loss(predicted_values, returns)
+        values_clipped = old_values + torch.clamp(predicted_values - old_values, -self.clip_epsilon, self.clip_epsilon)
+        value_loss_unclipped = F.mse_loss(predicted_values, returns, reduction='none')
+        value_loss_clipped = F.mse_loss(values_clipped, returns, reduction='none')
+        value_loss = 0.5 * torch.max(value_loss_unclipped, value_loss_clipped).mean()
         
         # Combined loss with KL penalty
         total_loss = policy_loss + self.c1 * value_loss - self.c2 * entropy
@@ -970,12 +981,12 @@ class PPOAgent(BaseAgent):
         total_kl = kl_val  # Use the properly calculated KL value
 
         with torch.no_grad():
-            mean_std = action_std.mean().item() # 계산은 여기서 하거나, 
+            mean_std_val = action_std.mean().item() 
 
         # Log metrics
         logger.info(
             f"Policy Loss={total_policy_loss:.4f}, Value Loss={total_value_loss:.4f}, "
-            f"Entropy={total_entropy:.4f}, KL={total_kl:.4f}, Mean Std={mean_std:.4f}" # Use processed action_std mean
+            f"Entropy={total_entropy:.4f}, KL={total_kl:.4f}, Mean Std={mean_std_val:.4f}" # Use processed action_std mean
         )
 
         return {
@@ -983,5 +994,5 @@ class PPOAgent(BaseAgent):
             "value_loss": total_value_loss,
             "entropy": total_entropy,
             "kl": total_kl,
-            "mean_std": mean_std # Return processed action_std mean
+            "mean_std": mean_std_val # Return processed action_std mean
         }

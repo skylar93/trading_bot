@@ -165,11 +165,8 @@ class PolicyNetwork(BaseNetwork):
                 self.logger.warning("NaN/Inf in raw_mean. Using safe replacement.")
                 raw_mean = torch.nan_to_num(raw_mean, nan=0.0, posinf=0.0, neginf=0.0)
             
-            # Apply sigmoid with gradient clipping for stability
-            raw_mean_clipped = torch.clamp(raw_mean, -10.0, 10.0)  # Prevent extreme logits
-            self._mean = torch.tanh(raw_mean_clipped)  # Ensure [-1, 1] range
+            self._mean = raw_mean  
             
-            # Get standard deviation with increased stability
             raw_std = self.std_head(features)
             
             # Handle potential NaN/Inf in std outputs
@@ -177,15 +174,7 @@ class PolicyNetwork(BaseNetwork):
                 self.logger.warning("NaN/Inf in raw_std. Using safe replacement.")
                 raw_std = torch.nan_to_num(raw_std, nan=0.0, posinf=0.0, neginf=0.0)
             
-            # Clip raw std values for stability
-            raw_std_clipped = torch.clamp(raw_std, -10.0, 10.0)
-            
-            # Convert to sigmoid
-            std_sigmoid = torch.sigmoid(raw_std_clipped)
-
-            min_std = 1e-3  
-            max_std = 0.3  #
-            self._std = min_std + std_sigmoid * (max_std - min_std)
+            self._std = raw_std
             
             # Final NaN check
             if torch.isnan(self._mean).any() or torch.isnan(self._std).any() or \

@@ -386,7 +386,7 @@ def hyperparameter_optimization(df, config=None):
             "hyperopt": {
                 "num_samples": 40,  # 검색할 샘플 수
                 "parameters": {
-                    "agent.learning_rate": {"distribution": "loguniform", "min": 1e-6, "max": 5e-5},
+                    "agent.learning_rate": {"distribution": "loguniform", "min": 1e-6, "max": 5e-4},
                     "agent.gamma": {"distribution": "uniform", "min": 0.99, "max": 0.999},
                     "agent.gae_lambda": {"distribution": "uniform", "min": 0.9, "max": 0.99},
                     "agent.clip_epsilon": {"distribution": "uniform", "min": 0.1, "max": 0.3},
@@ -394,7 +394,7 @@ def hyperparameter_optimization(df, config=None):
                     "env.window_size": {"distribution": "choice", "values": [15, 20, 30]},
                     "env.max_position_size": {"distribution": "uniform", "min": 0.3, "max": 0.8},
                     "agent.rollout_steps": {"distribution": "choice", "values": [1024, 2048, 4096]},
-                    "agent.c2": {"distribution": "loguniform", "min": 1e-6, "max": 0.01},
+                    "agent.c2": {"distribution": "loguniform", "min": 1e-6, "max": 1e-3},
                     "env.reward_scale": {"distribution": "loguniform", "min": 0.1, "max": 5.0},
                     "env.sharpe_weight": {"distribution": "uniform", "min": 0.1, "max": 0.9},
                     "env.max_drawdown_penalty_threshold": {"distribution": "uniform", "min": 0.05, "max": 0.25},
@@ -571,13 +571,13 @@ def main():
         "env": {
             "initial_capital": 10000.0,
             "trading_fee": 0.001,
-            "window_size": 20,
+            "window_size": 30,
             "max_position_size": 1.0,
             "risk_adjusted_reward": True,
             "sharpe_lookback": 30,
             "sharpe_weight": 0.5,
             "drawdown_penalty": True,
-            "max_drawdown_penalty_threshold": 0.1,
+            "max_drawdown_penalty_threshold": 0.10407893821932308,
             "apply_slippage": True,
             "slippage_factor": 0.0005,
             "partial_fills": True,
@@ -586,14 +586,15 @@ def main():
         },
         "agent": {
             "learning_rate": args.learning_rate,
-            "gamma": 0.99,
-            "gae_lambda": 0.95,
-            "clip_epsilon": 0.2,
-            "n_epochs": 5,
+            "gamma": 0.9970174166336603,
+            "c2": 2.755588785551048e-05,
+            "gae_lambda": 0.9782020840971682,
+            "clip_epsilon": 0.18529228761647618,
+            "n_epochs": 8,
             "batch_size": 64,
             "max_grad_norm": 0.5,
             "target_kl": 0.02,
-            "rollout_steps": args.rollout_steps  # 로올아웃 스텝 수 설정
+            "rollout_steps": args.rollout_steps  
         },
         "training": {
             "num_episodes": args.episodes

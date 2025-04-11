@@ -20,8 +20,6 @@ Implementation Notes:
 
 Recent Changes:
 - Added support for Population Based Training (PBT)
-- Enhanced search space definitions
-- Improved result tracking and visualization
 - Fixed handling of dotted parameters to ensure they are preserved in returned configurations
 - Updated Ray Tune integration to use get_dataframe() method for retrieving trial counts
 - Improved error handling with robust fallback configurations
