@@ -176,88 +176,59 @@ class MomentumPPOAgent(PPOAgent):
             return np.zeros(shape, dtype=np.float32)
     
     def get_action(self, state: np.ndarray, deterministic: bool = False) -> np.ndarray:
-        """Get action from policy network with momentum strategy.
-        
-        Handles different input shapes:
-        - 2D: (window_size, features)
-        - 3D: (batch_size, window_size, features)
-        
+        """Get action from PPO policy network with momentum feature augmentation.
+
+        This method uses actual RL policy (not rule-based):
+        1. Calculate momentum-specific features (momentum, volatility, trend)
+        2. Augment state with these features
+        3. Pass augmented state to parent PPO policy network
+
         Args:
-            state: Current state observation
+            state: Current state observation (window_size, features) or (batch, window, features)
             deterministic: Whether to use deterministic action
-            
+
         Returns:
             Action as numpy array with shape (1,)
         """
         # Convert DataFrame to numpy if needed
         if isinstance(state, pd.DataFrame):
             state = state.to_numpy()
-        
-        # Calculate momentum features
+
+        # Calculate momentum features (momentum, volatility, trend)
         momentum_features = self._calculate_momentum_features(state)
-        
-        # Calculate trend strength
-        if len(state.shape) == 3:  # (batch_size, window_size, features)
-            close_prices = state[..., 3]  # Get close prices for all batches
-            if close_prices.shape[1] < 10:
-                trend_strength = np.zeros(close_prices.shape[0])
-            else:
-                denominator = close_prices[:, -10]
-                safe_mask = (denominator != 0) & ~np.isnan(denominator) & ~np.isinf(denominator)
-                trend_strength = np.zeros(close_prices.shape[0])
-                trend_strength[safe_mask] = (close_prices[safe_mask, -1] - denominator[safe_mask]) / denominator[safe_mask]
-                trend_strength = np.nan_to_num(trend_strength, nan=0.0, posinf=0.0, neginf=0.0)
-        else:  # (window_size, features)
-            close_prices = state[:, 3]  # Get close prices
-            if len(close_prices) < 10:
-                trend_strength = 0.0
-            else:
-                denominator = close_prices[-10]
-                if denominator == 0 or np.isnan(denominator) or np.isinf(denominator):
-                    trend_strength = 0.0
-                else:
-                    trend_strength = (close_prices[-1] - denominator) / denominator
-                    trend_strength = np.nan_to_num(trend_strength, nan=0.0, posinf=0.0, neginf=0.0)
-        
-        # Extract momentum and trend features
-        momentum = momentum_features[0] if len(momentum_features.shape) == 1 else momentum_features[:, 0]
-        trend = momentum_features[2] if len(momentum_features.shape) == 1 else momentum_features[:, 2]
-        
-        # Calculate trend-based bias (stronger bias for momentum agent)
-        trend_bias = np.sign(trend_strength) * np.abs(trend_strength) * 3.0  # Increased multiplier
-        
-        # Generate action based on trend and momentum
-        if isinstance(momentum, np.ndarray):  # Batch case
-            # Strong trend following
-            action = np.where(
-                trend_strength > self.momentum_threshold,
-                1.0,  # Strong buy in uptrend
-                np.where(
-                    trend_strength < -self.momentum_threshold,
-                    -1.0,  # Strong sell in downtrend
-                    0.0  # Hold when no clear trend
-                )
-            )
-        else:  # Single case
-            # Strong trend following
-            if trend_strength > self.momentum_threshold:
-                action = 1.0  # Strong buy in uptrend
-            elif trend_strength < -self.momentum_threshold:
-                action = -1.0  # Strong sell in downtrend
-            else:
-                action = 0.0  # Hold when no clear trend
-        
-        # Handle any NaN/inf values and clip
-        action = np.nan_to_num(action, nan=0.0, posinf=1.0, neginf=-1.0)
-        action = np.clip(action, -1.0, 1.0)
-        
-        # Ensure action is a numpy array with shape (1,)
-        if isinstance(action, (float, np.float32, np.float64)):
-            action = np.array([action], dtype=np.float32)
-        elif isinstance(action, np.ndarray) and action.shape != (1,):
-            action = action.reshape(1)
-        
+
+        # Augment state with momentum features
+        augmented_state = self._augment_state_with_features(state, momentum_features)
+
+        # Use parent PPO agent's get_action with augmented state
+        # This calls the actual RL policy network, not rule-based logic
+        action = super().get_action(augmented_state, deterministic)
+
         return action
+
+    def _augment_state_with_features(self, state: np.ndarray, features: np.ndarray) -> np.ndarray:
+        """Augment state with momentum features for the policy network.
+
+        Args:
+            state: Original state (window_size, n_features) or (batch, window, features)
+            features: Momentum features (3,) or (batch, 3)
+
+        Returns:
+            Augmented state as flattened array matching observation space
+        """
+        # Flatten state
+        if len(state.shape) == 3:  # (batch, window, features)
+            batch_size = state.shape[0]
+            flat_state = state.reshape(batch_size, -1)
+            # Ensure features have batch dimension
+            if len(features.shape) == 1:
+                features = np.tile(features, (batch_size, 1))
+            augmented = np.concatenate([flat_state, features], axis=1)
+        else:  # (window, features)
+            flat_state = state.reshape(-1)
+            augmented = np.concatenate([flat_state, features])
+
+        return augmented
     
     def train_step(self, state: np.ndarray, action: np.ndarray, 
                   reward: float, next_state: np.ndarray, 

@@ -673,7 +673,11 @@ class PPOAgent(BaseAgent):
 
         # Calculate losses
         policy_loss = -torch.min(surr1, surr2).mean()
-        value_loss = 0.5 * ((action_mean - returns) ** 2).mean()
+
+        # Get current value estimates from value network (NOT action_mean!)
+        current_values = self.value_network(normalized_states).squeeze(-1)
+        value_loss = 0.5 * ((current_values - returns) ** 2).mean()
+
         kl_loss = self.c3 * (old_log_probs - current_log_probs).mean()
 
         # Combined loss with KL penalty

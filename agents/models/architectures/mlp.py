@@ -149,8 +149,10 @@ class PolicyNetwork(BaseNetwork):
         features = self.shared(x)
         
         # Get action distribution parameters
-        self._mean = torch.sigmoid(self.mean_head(features))  # Ensure [0, 1] range
-        self._std = torch.sigmoid(self.std_head(features)) * 0.1  # Small std for stable training
+        # Use tanh for [-1, 1] range to match environment action space
+        self._mean = torch.tanh(self.mean_head(features))  # [-1, 1] range
+        # Use softplus for std to ensure positive values, scaled for stable training
+        self._std = torch.nn.functional.softplus(self.std_head(features)) * 0.1 + 1e-6
         
         return self._mean, self._std
         
