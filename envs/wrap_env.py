@@ -1,9 +1,7 @@
 import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
-from typing import Dict, Any, Tuple, Optional
-import torch
-import mlflow
+from typing import Dict, Any, Tuple, Optional, Union, List, Callable
 
 
 class NormalizeObservation(gym.ObservationWrapper):
@@ -262,19 +260,96 @@ class MLflowLoggingWrapper(gym.Wrapper):
 
 
 def make_env(env, normalize=True, stack_size=4):
-    """Create environment with specified wrappers"""
-    # Add action clipping
+    """Create environment with specified wrappers (legacy)."""
     env = ClipActions(env)
-
-    # Add observation normalization if requested
     if normalize:
         env = NormalizeObservation(env)
-
-    # Add observation stacking if requested
     if stack_size > 1:
         env = StackObservation(env, stack_size=stack_size)
-
-    # Add episode statistics recording
     env = RecordEpisodeStats(env)
-
     return env
+
+
+# ---------------------------------------------------------------------------
+# SB3-compatible wrappers  (Week 2)
+# ---------------------------------------------------------------------------
+
+class SB3CompatWrapper(gym.Wrapper):
+    """Thin wrapper ensuring Gymnasium/SB3 API compatibility.
+
+    - Clips actions to action-space bounds (replaces ClipActions).
+    - Records episode statistics under the ``episode`` info key,
+      which SB3 monitors require (replaces RecordEpisodeStats).
+    """
+
+    def __init__(self, env: gym.Env):
+        super().__init__(env)
+        self._episode_reward = 0.0
+        self._episode_length = 0
+
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        self._episode_reward = 0.0
+        self._episode_length = 0
+        return obs, info
+
+    def step(self, action):
+        action = np.clip(action, self.action_space.low, self.action_space.high)
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        self._episode_reward += float(reward)
+        self._episode_length += 1
+        if terminated or truncated:
+            info["episode"] = {
+                "r": self._episode_reward,
+                "l": self._episode_length,
+            }
+        return obs, reward, terminated, truncated, info
+
+
+def make_sb3_env(
+    data,
+    n_envs: int = 1,
+    use_vec_normalize: bool = True,
+    vec_normalize_kwargs: Optional[dict] = None,
+    **env_kwargs,
+):
+    """Create a vectorized, SB3-ready environment.
+
+    Args:
+        data:                  DataFrame with OHLCV data.
+        n_envs:                Number of parallel environments.
+        use_vec_normalize:     Whether to wrap with VecNormalize.
+        vec_normalize_kwargs:  Override VecNormalize defaults.
+        **env_kwargs:          Passed to SingleAssetRLTradingEnv.
+
+    Returns:
+        DummyVecEnv or VecNormalize-wrapped DummyVecEnv.
+
+    Example::
+
+        from envs.wrap_env import make_sb3_env
+        vec_env = make_sb3_env(df, n_envs=4, use_vec_normalize=True)
+        model = PPO("MlpPolicy", vec_env, verbose=1)
+    """
+    from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+    from envs.single_asset_rl_env import SingleAssetRLTradingEnv
+
+    def _make() -> gym.Env:
+        env = SingleAssetRLTradingEnv(data=data, **env_kwargs)
+        return SB3CompatWrapper(env)
+
+    vec_env = DummyVecEnv([_make] * n_envs)
+
+    if use_vec_normalize:
+        _vn_defaults = {
+            "norm_obs": True,
+            "norm_reward": True,
+            "clip_obs": 10.0,
+            "clip_reward": 10.0,
+            "gamma": env_kwargs.get("gamma", 0.99),
+        }
+        if vec_normalize_kwargs:
+            _vn_defaults.update(vec_normalize_kwargs)
+        vec_env = VecNormalize(vec_env, **_vn_defaults)
+
+    return vec_env
