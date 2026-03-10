@@ -1157,5 +1157,103 @@ def evaluate_with_manager(env, manager, num_episodes: int = 5) -> Dict[str, List
         # Add episode returns for each agent
         for agent_id, return_ in episode_returns.items():
             returns[agent_id].append(return_)
-    
+
+
+# ---------------------------------------------------------------------------
+# SB3-native training pipeline
+# ---------------------------------------------------------------------------
+
+def train_sb3_agent(
+    sb3_agent,
+    train_env,
+    config: Dict[str, Any],
+    eval_env=None,
+    mlflow_manager=None,
+) -> Dict[str, Any]:
+    """
+    Train an SB3AgentWrapper using model.learn() with proper callbacks.
+
+    Args:
+        sb3_agent: SB3AgentWrapper instance (wraps PPO/SAC/TD3/A2C).
+        train_env: Vectorised training environment (VecEnv).
+        config: Full training config dict.
+        eval_env: Optional separate vectorised environment for EvalCallback.
+        mlflow_manager: Optional MLflowManager for metric logging.
+
+    Returns:
+        Dict with 'agent', 'model_path', 'best_model_path', 'total_timesteps'.
+    """
+    from stable_baselines3.common.callbacks import CallbackList
+    from training.callbacks.sb3_callbacks import (
+        MLflowLoggingCallback,
+        SB3CheckpointCallback,
+        SB3EvalCallback,
+    )
+
+    training_cfg = config.get("training", {})
+    total_timesteps = training_cfg.get("total_timesteps", 100_000)
+    checkpoint_interval = training_cfg.get("checkpoint_interval", 50_000)
+    eval_interval = training_cfg.get("eval_interval", 10_000)
+    log_interval = training_cfg.get("log_interval", 1_000)
+    n_eval_episodes = training_cfg.get("n_eval_episodes", 5)
+
+    paths_cfg = config.get("paths", {})
+    checkpoint_dir = paths_cfg.get("checkpoint_dir", "checkpoints")
+    best_model_dir = os.path.join(checkpoint_dir, "best")
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    os.makedirs(best_model_dir, exist_ok=True)
+
+    # Build callback list
+    callbacks = [
+        MLflowLoggingCallback(
+            mlflow_manager=mlflow_manager,
+            log_interval=log_interval,
+        ),
+        SB3CheckpointCallback(
+            save_freq=checkpoint_interval,
+            save_path=checkpoint_dir,
+            mlflow_manager=mlflow_manager,
+        ),
+    ]
+
+    if eval_env is not None:
+        callbacks.append(
+            SB3EvalCallback(
+                eval_env=eval_env,
+                mlflow_manager=mlflow_manager,
+                n_eval_episodes=n_eval_episodes,
+                eval_freq=eval_interval,
+                best_model_save_path=best_model_dir,
+                verbose=1,
+            )
+        )
+
+    callback = CallbackList(callbacks)
+
+    logger.info(
+        f"Starting SB3 training: {total_timesteps:,} timesteps, "
+        f"algo={sb3_agent.algo_type}"
+    )
+
+    sb3_agent.train(train_env, total_timesteps=total_timesteps, callbacks=callback)
+
+    # Save final model
+    final_path = os.path.join(checkpoint_dir, "final_model")
+    sb3_agent.save(final_path)
+    logger.info(f"Training complete. Final model saved to {final_path}.zip")
+
+    if mlflow_manager is not None:
+        try:
+            mlflow_manager.log_artifact(f"{final_path}.zip")
+        except Exception:
+            pass
+
+    best_path = os.path.join(best_model_dir, "best_model")
+    return {
+        "agent": sb3_agent,
+        "model_path": final_path,
+        "best_model_path": best_path if os.path.exists(f"{best_path}.zip") else None,
+        "total_timesteps": total_timesteps,
+    }
+
     return returns 
