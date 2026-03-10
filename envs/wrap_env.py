@@ -15,31 +15,101 @@ class NormalizeObservation(gym.ObservationWrapper):
 
         # Initialize running statistics
         self.is_vector_env = hasattr(env, "num_envs")
+        
+        # Initialize running statistics for each feature
+        obs_shape = self.observation_space.shape
+        self.running_mean = np.zeros(obs_shape[-1], dtype=np.float32)
+        self.running_std = np.ones(obs_shape[-1], dtype=np.float32)
+        self.count = 0
+        self.eps = 1e-8
 
         # Update observation space to reflect normalized values
         self.observation_space = spaces.Box(
-            low=-1,
-            high=1,
+            low=-10,  # Allow slightly larger range for stability
+            high=10,
             shape=self.observation_space.shape,
             dtype=np.float32,
         )
 
+    def _update_stats(self, obs):
+        """Update running statistics for normalization"""
+        if isinstance(obs, torch.Tensor):
+            obs = obs.cpu().numpy()
+            
+        # Handle NaN and infinite values
+        obs = np.nan_to_num(obs, nan=0.0, posinf=1e6, neginf=-1e6)
+        
+        # Ensure obs is 2D for consistent processing
+        if obs.ndim == 1:
+            obs = obs.reshape(1, -1)
+        elif obs.ndim == 3:
+            # For image-like observations, flatten last two dimensions
+            obs = obs.reshape(obs.shape[0], -1)
+            
+        batch_mean = obs.mean(axis=0)
+        batch_std = obs.std(axis=0)
+        batch_count = obs.shape[0]
+        
+        # Update running statistics using Welford's online algorithm
+        delta = batch_mean - self.running_mean
+        self.running_mean += delta * batch_count / (self.count + batch_count)
+        
+        # Update variance
+        delta2 = batch_mean - self.running_mean
+        m_a = self.running_std * self.running_std * self.count
+        m_b = batch_std * batch_std * batch_count
+        M2 = m_a + m_b + delta * delta2 * self.count * batch_count / (self.count + batch_count)
+        self.running_std = np.sqrt(M2 / (self.count + batch_count))
+        
+        self.count += batch_count
+
     def observation(self, obs):
         """Normalize observation"""
+        # Update statistics
+        self._update_stats(obs)
+        
         if isinstance(obs, np.ndarray):
             # Handle NaN values
-            obs = np.nan_to_num(obs, nan=0.0, posinf=1.0, neginf=-1.0)
-            # Ensure observation is in [-1, 1] range
-            obs = np.clip(obs, -1, 1)
-            return obs.astype(np.float32)
+            obs = np.nan_to_num(obs, nan=0.0, posinf=1e6, neginf=-1e6)
+            
+            # Normalize using running statistics
+            obs_normalized = (obs - self.running_mean) / (self.running_std + self.eps)
+            
+            # Clip to reasonable range
+            obs_normalized = np.clip(obs_normalized, -10, 10)
+            
+            return obs_normalized.astype(np.float32)
+            
         elif isinstance(obs, torch.Tensor):
             # Handle NaN values
-            obs = torch.nan_to_num(obs, nan=0.0, posinf=1.0, neginf=-1.0)
-            # Ensure observation is in [-1, 1] range
-            obs = torch.clamp(obs, -1, 1)
-            return obs.to(dtype=torch.float32)
+            obs = torch.nan_to_num(obs, nan=0.0, posinf=1e6, neginf=-1e6)
+            
+            # Convert running statistics to tensors
+            running_mean = torch.FloatTensor(self.running_mean).to(obs.device)
+            running_std = torch.FloatTensor(self.running_std).to(obs.device)
+            
+            # Normalize using running statistics
+            obs_normalized = (obs - running_mean) / (running_std + self.eps)
+            
+            # Clip to reasonable range
+            obs_normalized = torch.clamp(obs_normalized, -10, 10)
+            
+            return obs_normalized.to(dtype=torch.float32)
+            
         else:
             raise ValueError(f"Unsupported observation type: {type(obs)}")
+
+    def reset(self, **kwargs):
+        """Reset the environment and running statistics"""
+        obs = self.env.reset(**kwargs)
+        
+        # Reset running statistics
+        obs_shape = self.observation_space.shape
+        self.running_mean = np.zeros(obs_shape[-1], dtype=np.float32)
+        self.running_std = np.ones(obs_shape[-1], dtype=np.float32)
+        self.count = 0
+        
+        return self.observation(obs)
 
 
 class StackObservation(gym.ObservationWrapper):

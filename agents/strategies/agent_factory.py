@@ -1,132 +1,178 @@
 """
-Agent Factory module for creating different types of trading agents.
+Agent Factory: creates trading agents by type.
 
-This module provides a centralized factory for instantiating various trading agents
-based on their name/type. It supports both single and multi-agent strategies.
+Supported agent types:
+  - sb3_ppo / sb3_sac / sb3_td3 / sb3_a2c  (SB3-based, recommended)
+  - momentum / meanreversion                 (strategy-specialised PPO agents)
+  - multi / multiagent                       (MultiAgentManager)
+  - assetspecific                            (AssetSpecificAgentFactory)
 """
 
-from typing import Optional, Dict, Any, Union, List
+from typing import Any, Dict, List, Optional
 
 import gymnasium as gym
-import numpy as np
 import logging
+import numpy as np
+import torch
 
-# Single Agents
-from agents.strategies.single.dummy_agent import DummyAgent
-from agents.strategies.single.ppo_agent import PPOAgent
+from agents.sb3.sb3_agent_wrapper import SB3AgentWrapper
 
-# Multi Agents
+# Multi / strategy agents (kept)
 from agents.strategies.multi.mean_reversion_ppo_agent import MeanReversionPPOAgent
 from agents.strategies.multi.momentum_ppo_agent import MomentumPPOAgent
 from agents.strategies.multi.multi_agent_manager import MultiAgentManager
 
-# Default dummy spaces for testing
-# For PPO agents, observation space must be 2D (window_size, features)
-# Assuming OHLCV data format: open, high, low, close, volume
-WINDOW_SIZE = 20
-N_FEATURES = 5  # OHLCV format
-dummy_obs_space = gym.spaces.Box(
-    low=-np.inf,
-    high=np.inf,
-    shape=(WINDOW_SIZE, N_FEATURES),
-    dtype=np.float32
-)
-dummy_act_space = gym.spaces.Box(
-    low=-1.0,
-    high=1.0,
-    shape=(1,),
-    dtype=np.float32
-)
+# Advanced
+from agents.strategies.advanced.asset_specific_agents import AssetSpecificAgentFactory
 
 logger = logging.getLogger(__name__)
 
+SB3_TYPES = {"sb3ppo", "sb3sac", "sb3td3", "sb3a2c", "ppo", "sac", "td3", "a2c"}
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
 def create_agent(
     agent_type: str,
+    strategy: Optional[str] = None,
     config: Optional[Dict[str, Any]] = None,
-    observation_space: Optional[gym.spaces.Box] = None,
-    action_space: Optional[gym.spaces.Box] = None,
-) -> Union[DummyAgent, PPOAgent, MeanReversionPPOAgent, MomentumPPOAgent, MultiAgentManager]:
-    """Create an agent based on type and configuration.
-    
-    Args:
-        agent_type: Type of agent to create (e.g. "Dummy", "PPO", "MeanReversion")
-        config: Agent configuration dictionary (optional)
-        observation_space: Observation space (optional)
-        action_space: Action space (optional)
-        
-    Returns:
-        Created agent instance
-        
-    Raises:
-        ValueError: If agent_type is not supported or if required config is missing
+    observation_space: Optional[gym.spaces.Space] = None,
+    action_space: Optional[gym.spaces.Space] = None,
+):
     """
-    # Initialize empty config if None
+    Create a trading agent.
+
+    Args:
+        agent_type: Agent type string (see module docstring)
+        strategy: Optional strategy hint for multi-strategy agents
+        config: Configuration dictionary
+        observation_space: Gymnasium observation space
+        action_space: Gymnasium action space
+
+    Returns:
+        Instantiated agent object
+    """
     if config is None:
         config = {}
+
+    # Normalise type string
+    agent_type_norm = agent_type.lower().replace("_", "").replace("-", "")
+    if strategy:
+        strategy = strategy.lower().replace("_", "").replace("-", "")
+
+    device = config.get("device", "cuda" if torch.cuda.is_available() else "cpu")
+
+    if observation_space is None:
+        obs_dim = config.get("observation_size", 10)
+        observation_space = gym.spaces.Box(
+            low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
+        )
+    if action_space is None:
+        action_dim = config.get("action_dim", 1)
+        action_space = gym.spaces.Box(
+            low=-1.0, high=1.0, shape=(action_dim,), dtype=np.float32
+        )
+
+    logger.info(f"Creating agent: type={agent_type}, strategy={strategy}")
+
+    # ------------------------------------------------------------------
+    # SB3-based agents (primary path)
+    # ------------------------------------------------------------------
+    if agent_type_norm in SB3_TYPES:
+        # Normalise to sb3_xxx format expected by the wrapper
+        algo = agent_type_norm.replace("sb3", "")  # "" for plain "ppo" etc.
+        algo_key = algo if algo else agent_type_norm  # "ppo", "sac", ...
+
+        return SB3AgentWrapper(
+            algo_type=algo_key,
+            observation_space=observation_space,
+            action_space=action_space,
+            feature_extractor=config.get("feature_extractor"),
+            feature_extractor_kwargs=config.get("feature_extractor_kwargs", {}),
+            sb3_params=config.get("sb3_params", {}),
+            device=device,
+            verbose=config.get("verbose", 0),
+        )
+
+    # ------------------------------------------------------------------
+    # Momentum PPO
+    # ------------------------------------------------------------------
+    elif agent_type_norm in ("momentum", "momentumppo"):
+        return MomentumPPOAgent(
+            observation_space=observation_space,
+            action_space=action_space,
+            device=device,
+            **_filtered(config),
+        )
+
+    # ------------------------------------------------------------------
+    # Mean-reversion PPO
+    # ------------------------------------------------------------------
+    elif agent_type_norm in ("meanreversion", "meanreversionppo"):
+        return MeanReversionPPOAgent(
+            observation_space=observation_space,
+            action_space=action_space,
+            device=device,
+            **_filtered(config),
+        )
+
+    # ------------------------------------------------------------------
+    # MultiAgentManager
+    # ------------------------------------------------------------------
+    elif agent_type_norm in ("multi", "multiagent", "multiagentmanager"):
+        return MultiAgentManager(
+            agent_configs=config.get("agent_configs", []),
+            device=device,
+            ensemble_method=config.get("ensemble_method", "weighted"),
+        )
+
+    # ------------------------------------------------------------------
+    # Asset-specific agents
+    # ------------------------------------------------------------------
+    elif agent_type_norm == "assetspecific":
+        return AssetSpecificAgentFactory.create_agent(
+            asset_id=config.get("asset_id", "unknown"),
+            asset_type=config.get("asset_type", "unknown"),
+            observation_space=observation_space,
+            action_space=action_space,
+            config=config,
+        )
+
+    # ------------------------------------------------------------------
+    # Unknown type
+    # ------------------------------------------------------------------
     else:
-        # Create a copy to avoid modifying the original
-        config = config.copy()
-        
-    # Remove observation_space and action_space from config if they exist
-    # to avoid passing them twice
-    config.pop("observation_space", None)
-    config.pop("action_space", None)
-    
-    # Use provided spaces or defaults
-    obs_space = observation_space or dummy_obs_space
-    act_space = action_space or dummy_act_space
-    
-    # Create agent based on type
-    agent_type = agent_type.lower()
-    
-    try:
-        if agent_type == "dummy":
-            return DummyAgent(
-                observation_space=obs_space,
-                action_space=act_space,
-                **config
-            )
-        elif agent_type == "ppo":
-            return PPOAgent(
-                observation_space=obs_space,
-                action_space=act_space,
-                **config
-            )
-        elif agent_type == "meanreversion":
-            return MeanReversionPPOAgent(
-                observation_space=obs_space,
-                action_space=act_space,
-                **config
-            )
-        elif agent_type == "momentum":
-            return MomentumPPOAgent(
-                observation_space=obs_space,
-                action_space=act_space,
-                **config
-            )
-        elif agent_type == "multiagent":
-            # MultiAgentManager requires a list of agent configs
-            if "agents" not in config:
-                config["agents"] = []  # Provide empty list as default
-            return MultiAgentManager(agent_configs=config["agents"])
-        else:
-            raise ValueError(f"Unsupported agent type: {agent_type}")
-            
-    except TypeError as e:
-        logger.error(f"Failed to create agent of type {agent_type}: {str(e)}")
-        raise
+        available = list_available_agents()
+        raise ValueError(
+            f"Unknown agent type '{agent_type}'. "
+            f"Available types: {list(available.keys())}"
+        )
+
 
 def list_available_agents() -> Dict[str, str]:
-    """
-    Returns a dictionary of available agent types and their descriptions.
-    
-    Returns:
-        Dict mapping agent names to their descriptions
-    """
+    """Return a mapping of agent type → description."""
     return {
-        "Dummy": "Simple dummy agent for testing",
-        "PPO": "Single PPO agent for general trading",
-        "MeanReversion": "Mean reversion strategy using PPO",
-        "Momentum": "Momentum-based strategy using PPO",
-        "MultiAgent": "Manager for multiple trading agents"
-    } 
+        "sb3_ppo": "Stable-Baselines3 PPO (recommended)",
+        "sb3_sac": "Stable-Baselines3 SAC (off-policy, continuous actions)",
+        "sb3_td3": "Stable-Baselines3 TD3 (off-policy, continuous actions)",
+        "sb3_a2c": "Stable-Baselines3 A2C",
+        "momentum": "Momentum-based strategy PPO agent",
+        "meanreversion": "Mean-reversion strategy PPO agent",
+        "multi": "MultiAgentManager (ensemble of agents)",
+        "assetspecific": "Asset-class-specific agent",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Private helpers
+# ---------------------------------------------------------------------------
+
+_SKIP_KEYS = {"type", "strategy", "observation_space", "action_space", "device",
+              "feature_extractor", "feature_extractor_kwargs", "sb3_params",
+              "verbose", "algo_type"}
+
+
+def _filtered(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Remove factory-level keys before passing config to an agent constructor."""
+    return {k: v for k, v in config.items() if k not in _SKIP_KEYS}

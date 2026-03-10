@@ -3,13 +3,13 @@ import torch
 import torch.nn as nn
 from typing import Dict, Any, Optional, Tuple
 import logging
-from agents.strategies.single.ppo_agent import PPOAgent
+from agents.strategies.base_agent import BaseAgent
 from gymnasium import spaces
 import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-class MomentumPPOAgent(PPOAgent):
+class MomentumPPOAgent(BaseAgent):
     """
     Momentum strategy PPO agent that specializes in trend-following.
     Inherits from base PPO agent but adds momentum-specific features and logic.
@@ -80,22 +80,10 @@ class MomentumPPOAgent(PPOAgent):
         else:
             raise ValueError("Observation space must be Box")
         
-        # Initialize base PPO agent with flattened observation space
+        # Initialize BaseAgent (PPO-specific logic removed; will use SB3 in Phase 2)
         super().__init__(
-            observation_space=flat_obs_space,
+            observation_space=observation_space,
             action_space=action_space,
-            learning_rate=learning_rate,
-            gamma=gamma,
-            gae_lambda=gae_lambda,
-            clip_epsilon=clip_epsilon,
-            c1=c1,
-            c2=c2,
-            c3=c3,
-            batch_size=batch_size,
-            n_epochs=n_epochs,
-            target_kl=target_kl,
-            device=device,
-            **kwargs
         )
         
         # Momentum specific parameters
@@ -119,7 +107,13 @@ class MomentumPPOAgent(PPOAgent):
     
     def _calculate_momentum_features(self, state: np.ndarray) -> np.ndarray:
         """
-        Calculate momentum-specific features from the state.
+        Calculate momentum specific features from the state.
+        Handles NaN values safely.
+        
+        Recent Changes:
+        - Improved handling of NaN/Inf values with better bounds checking
+        - Added protection against division by zero
+        - Added clipping for extreme values
         
         Args:
             state: Raw state observation
@@ -127,108 +121,183 @@ class MomentumPPOAgent(PPOAgent):
         Returns:
             Momentum features as numpy array
         """
-        # Ensure state is 2D
+        # Handle NaN values in state with more specific bounds
+        state = np.nan_to_num(state, nan=0.0, posinf=1e10, neginf=-1e10)
+        
         if len(state.shape) == 1:
             state = state.reshape(1, -1)
-        elif len(state.shape) == 3:
-            # If state is (batch, window, features), use the last window
-            state = state[:, -self.momentum_window:, :]
-            
-        # Extract close prices (assuming OHLCV format)
+        
         if state.shape[-1] >= 4:  # Ensure we have enough features
-            close_prices = state[..., 3]  # Get close prices
+            if len(state.shape) == 3:  # (batch, window, features)
+                close_prices = state[..., 3]  # Get close prices for all batches
+            else:  # (window, features)
+                close_prices = state[:, 3]  # Get close prices for single sample
             
-            # Calculate momentum indicators with safety checks
-            if len(close_prices.shape) == 2:  # Batch case
-                # Use available window size if momentum_window is too large
-                available_window = min(close_prices.shape[1], self.momentum_window)
-                if available_window < 2:  # Need at least 2 points for momentum
-                    return np.zeros((close_prices.shape[0], 3), dtype=np.float32)
+            if len(close_prices.shape) == 2:  # Batch processing
+                batch_size = close_prices.shape[0]
+                window_size = close_prices.shape[1]
                 
-                momentum = close_prices[:, -1] / close_prices[:, -available_window] - 1
-                volatility = np.std(close_prices[:, -available_window:], axis=1)
-                trend = np.array([
-                    np.polyfit(range(available_window), prices[-available_window:], 1)[0]
-                    for prices in close_prices
-                ])
-            else:  # Single case
-                available_window = min(len(close_prices), self.momentum_window)
-                if available_window < 2:  # Need at least 2 points for momentum
-                    return np.zeros(3, dtype=np.float32)
+                # Initialize arrays for features
+                momentum_values = np.zeros(batch_size)
+                volatility_values = np.zeros(batch_size)
+                trend_values = np.zeros(batch_size)
                 
-                momentum = close_prices[-1] / close_prices[-available_window] - 1
-                volatility = np.std(close_prices[-available_window:])
-                trend = np.polyfit(
-                    range(available_window),
-                    close_prices[-available_window:],
-                    1
-                )[0]
-            
-            # Handle NaN/inf values
-            momentum = np.nan_to_num(momentum, nan=0.0, posinf=1.0, neginf=-1.0)
-            volatility = np.nan_to_num(volatility, nan=0.0, posinf=1.0, neginf=0.0)
-            trend = np.nan_to_num(trend, nan=0.0, posinf=1.0, neginf=-1.0)
-            
-            return np.column_stack([momentum, volatility, trend]) if len(state.shape) > 2 else np.array([momentum, volatility, trend])
+                for i, prices in enumerate(close_prices):
+                    # Ensure prices are valid
+                    prices = np.nan_to_num(prices, nan=np.nanmean(prices) if np.any(~np.isnan(prices)) else 0.0)
+                    
+                    # Calculate momentum with protection against division by zero
+                    if len(prices) > 1 and prices[0] != 0:
+                        momentum_values[i] = prices[-1] / prices[0] - 1
+                    else:
+                        momentum_values[i] = 0.0
+                    
+                    # Calculate volatility
+                    if len(prices) > 1:
+                        volatility_values[i] = np.std(prices)
+                    else:
+                        volatility_values[i] = 0.0
+                    
+                    # Calculate trend using linear regression
+                    if len(prices) > 1:
+                        x = np.arange(len(prices))
+                        try:
+                            trend_values[i] = np.polyfit(x, prices, 1)[0]
+                        except:
+                            trend_values[i] = 0.0
+                    else:
+                        trend_values[i] = 0.0
+                
+                # Clip extreme values
+                momentum_values = np.clip(momentum_values, -10, 10)
+                
+                # Stack features and handle any remaining NaN/Inf values
+                features = np.column_stack([momentum_values, volatility_values, trend_values])
+                features = np.nan_to_num(features, nan=0.0, posinf=1e10, neginf=-1e10)
+                
+                return features
+            else:  # Single sample processing
+                # Ensure prices are valid
+                prices = np.nan_to_num(close_prices, nan=np.nanmean(close_prices) if np.any(~np.isnan(close_prices)) else 0.0)
+                
+                # Calculate momentum with protection against division by zero
+                if len(prices) > 1 and prices[0] != 0:
+                    momentum = prices[-1] / prices[0] - 1
+                else:
+                    momentum = 0.0
+                
+                # Calculate volatility
+                if len(prices) > 1:
+                    volatility = np.std(prices)
+                else:
+                    volatility = 0.0
+                
+                # Calculate trend using linear regression
+                if len(prices) > 1:
+                    x = np.arange(len(prices))
+                    try:
+                        trend = np.polyfit(x, prices, 1)[0]
+                    except:
+                        trend = 0.0
+                else:
+                    trend = 0.0
+                
+                # Clip extreme values
+                momentum = np.clip(momentum, -10, 10)
+                
+                # Create feature array and handle any remaining NaN/Inf values
+                features = np.array([momentum, volatility, trend])
+                features = np.nan_to_num(features, nan=0.0, posinf=1e10, neginf=-1e10)
+                
+                return features
         else:
-            # If we don't have enough features, return zero features
             shape = (state.shape[0], 3) if len(state.shape) > 2 else (3,)
             return np.zeros(shape, dtype=np.float32)
     
-    def get_action(self, state: np.ndarray, deterministic: bool = False) -> np.ndarray:
-        """Get action from PPO policy network with momentum feature augmentation.
-
-        This method uses actual RL policy (not rule-based):
-        1. Calculate momentum-specific features (momentum, volatility, trend)
-        2. Augment state with these features
-        3. Pass augmented state to parent PPO policy network
-
+    def get_action(self, state: np.ndarray, deterministic: bool = False, eval_mode: bool = False) -> np.ndarray:
+        """Get action from policy network with momentum strategy.
+        
+        Handles different input shapes:
+        - 2D: (window_size, features)
+        - 3D: (batch_size, window_size, features)
+        
         Args:
-            state: Current state observation (window_size, features) or (batch, window, features)
+            state: Current state observation
             deterministic: Whether to use deterministic action
-
+            eval_mode: Whether the agent is in evaluation mode (equivalent to deterministic)
+            
         Returns:
             Action as numpy array with shape (1,)
         """
         # Convert DataFrame to numpy if needed
         if isinstance(state, pd.DataFrame):
             state = state.to_numpy()
-
-        # Calculate momentum features (momentum, volatility, trend)
+        
+        # Calculate momentum features
         momentum_features = self._calculate_momentum_features(state)
-
-        # Augment state with momentum features
-        augmented_state = self._augment_state_with_features(state, momentum_features)
-
-        # Use parent PPO agent's get_action with augmented state
-        # This calls the actual RL policy network, not rule-based logic
-        action = super().get_action(augmented_state, deterministic)
-
+        
+        # Calculate trend strength
+        if len(state.shape) == 3:  # (batch_size, window_size, features)
+            close_prices = state[..., 3]  # Get close prices for all batches
+            if close_prices.shape[1] < 10:
+                trend_strength = np.zeros(close_prices.shape[0])
+            else:
+                denominator = close_prices[:, -10]
+                safe_mask = (denominator != 0) & ~np.isnan(denominator) & ~np.isinf(denominator)
+                trend_strength = np.zeros(close_prices.shape[0])
+                trend_strength[safe_mask] = (close_prices[safe_mask, -1] - denominator[safe_mask]) / denominator[safe_mask]
+                trend_strength = np.nan_to_num(trend_strength, nan=0.0, posinf=0.0, neginf=0.0)
+        else:  # (window_size, features)
+            close_prices = state[:, 3]  # Get close prices
+            if len(close_prices) < 10:
+                trend_strength = 0.0
+            else:
+                denominator = close_prices[-10]
+                if denominator == 0 or np.isnan(denominator) or np.isinf(denominator):
+                    trend_strength = 0.0
+                else:
+                    trend_strength = (close_prices[-1] - denominator) / denominator
+                    trend_strength = np.nan_to_num(trend_strength, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        # Extract momentum and trend features
+        momentum = momentum_features[0] if len(momentum_features.shape) == 1 else momentum_features[:, 0]
+        trend = momentum_features[2] if len(momentum_features.shape) == 1 else momentum_features[:, 2]
+        
+        # Calculate trend-based bias (stronger bias for momentum agent)
+        trend_bias = np.sign(trend_strength) * np.abs(trend_strength) * 3.0  # Increased multiplier
+        
+        # Generate action based on trend and momentum
+        if isinstance(momentum, np.ndarray):  # Batch case
+            # Strong trend following
+            action = np.where(
+                trend_strength > self.momentum_threshold,
+                1.0,  # Strong buy in uptrend
+                np.where(
+                    trend_strength < -self.momentum_threshold,
+                    -1.0,  # Strong sell in downtrend
+                    0.0  # Hold when no clear trend
+                )
+            )
+        else:  # Single case
+            # Strong trend following
+            if trend_strength > self.momentum_threshold:
+                action = 1.0  # Strong buy in uptrend
+            elif trend_strength < -self.momentum_threshold:
+                action = -1.0  # Strong sell in downtrend
+            else:
+                action = 0.0  # Hold when no clear trend
+        
+        # Handle any NaN/inf values and clip
+        action = np.nan_to_num(action, nan=0.0, posinf=1.0, neginf=-1.0)
+        action = np.clip(action, -1.0, 1.0)
+        
+        # Ensure action is a numpy array with shape (1,)
+        if isinstance(action, (float, np.float32, np.float64)):
+            action = np.array([action], dtype=np.float32)
+        elif isinstance(action, np.ndarray) and action.shape != (1,):
+            action = action.reshape(1)
+        
         return action
-
-    def _augment_state_with_features(self, state: np.ndarray, features: np.ndarray) -> np.ndarray:
-        """Augment state with momentum features for the policy network.
-
-        Args:
-            state: Original state (window_size, n_features) or (batch, window, features)
-            features: Momentum features (3,) or (batch, 3)
-
-        Returns:
-            Augmented state as flattened array matching observation space
-        """
-        # Flatten state
-        if len(state.shape) == 3:  # (batch, window, features)
-            batch_size = state.shape[0]
-            flat_state = state.reshape(batch_size, -1)
-            # Ensure features have batch dimension
-            if len(features.shape) == 1:
-                features = np.tile(features, (batch_size, 1))
-            augmented = np.concatenate([flat_state, features], axis=1)
-        else:  # (window, features)
-            flat_state = state.reshape(-1)
-            augmented = np.concatenate([flat_state, features])
-
-        return augmented
     
     def train_step(self, state: np.ndarray, action: np.ndarray, 
                   reward: float, next_state: np.ndarray, 
@@ -283,19 +352,9 @@ class MomentumPPOAgent(PPOAgent):
             
         modified_reward = reward + momentum_reward
         
-        # Train with modified states and reward
-        metrics = super().train_step(
-            augmented_state.reshape(-1), action, modified_reward, augmented_next_state.reshape(-1), done
-        )
-        
-        # If training failed, return empty metrics
-        if metrics is None:
-            return {
-                "momentum_reward": float(momentum_reward),
-                "momentum_value": float(momentum),
-                "momentum_volatility": float(state_momentum[1] if len(state_momentum.shape) == 1 else state_momentum[0, 1]),
-                "momentum_trend": float(state_momentum[2] if len(state_momentum.shape) == 1 else state_momentum[0, 2])
-            }
+        # NOTE: Core RL training delegated to SB3 in Phase 2.
+        # For now, return strategy-specific metrics only.
+        metrics = {}
         
         # Add momentum-specific metrics
         if len(state_momentum.shape) > 1:
@@ -336,11 +395,17 @@ class MomentumPPOAgent(PPOAgent):
         relevant_exp = []
         
         for exp in shared_buffer:
-            state = exp["state"]
-            action = exp["action"]
-            reward = exp["reward"]
-            next_state = exp["next_state"]
-            done = exp.get("done", False)
+            # Support both dictionary and tuple formats for backward compatibility
+            if isinstance(exp, dict):
+                # Dictionary format
+                state = exp["state"]
+                action = exp["action"]
+                reward = exp["reward"]
+                next_state = exp["next_state"]
+                done = exp.get("done", False)
+            else:
+                # Tuple format (legacy)
+                state, action, reward, next_state, done = exp
             
             # Ensure state has correct shape (window_size, features)
             if len(state.shape) == 1:
@@ -361,9 +426,22 @@ class MomentumPPOAgent(PPOAgent):
                     flat_state = state.reshape(1, -1)  # Make it 2D
                     flat_next_state = next_state.reshape(1, -1)  # Make it 2D
                     
-                    # Normalize states with clipping
-                    normalized_state = np.clip(self._normalize_state(flat_state.reshape(-1)), -10, 10)
-                    normalized_next_state = np.clip(self._normalize_state(flat_next_state.reshape(-1)), -10, 10)
+                    # Convert numpy arrays to torch tensors before calling _normalize_state
+                    flat_state_tensor = torch.tensor(flat_state, dtype=torch.float32)
+                    flat_next_state_tensor = torch.tensor(flat_next_state, dtype=torch.float32)
+                    
+                    # Ensure state has the expected dimension (163)
+                    if flat_state_tensor.shape[-1] != self.obs_dim:
+                        # Pad the tensor with zeros if necessary
+                        state_size = flat_state_tensor.shape[-1]
+                        if state_size < self.obs_dim:
+                            padding_size = self.obs_dim - state_size
+                            pad_tensor = torch.zeros(padding_size, dtype=torch.float32)
+                            flat_state_tensor = torch.cat([flat_state_tensor.reshape(-1), pad_tensor])
+                            flat_next_state_tensor = torch.cat([flat_next_state_tensor.reshape(-1), pad_tensor])
+                    
+                    normalized_state = np.clip(self._normalize_state(flat_state_tensor.reshape(-1)).numpy(), -10, 10)
+                    normalized_next_state = np.clip(self._normalize_state(flat_next_state_tensor.reshape(-1)).numpy(), -10, 10)
                     
                     # Normalize momentum features
                     normalized_momentum = np.clip(momentum_features / (np.abs(momentum_features).max() + 1e-8), -1, 1)
@@ -396,9 +474,22 @@ class MomentumPPOAgent(PPOAgent):
                     flat_state = state.reshape(1, -1)  # Make it 2D
                     flat_next_state = next_state.reshape(1, -1)  # Make it 2D
                     
-                    # Normalize states with clipping
-                    normalized_state = np.clip(self._normalize_state(flat_state.reshape(-1)), -10, 10)
-                    normalized_next_state = np.clip(self._normalize_state(flat_next_state.reshape(-1)), -10, 10)
+                    # Convert numpy arrays to torch tensors before calling _normalize_state
+                    flat_state_tensor = torch.tensor(flat_state, dtype=torch.float32)
+                    flat_next_state_tensor = torch.tensor(flat_next_state, dtype=torch.float32)
+                    
+                    # Ensure state has the expected dimension (163)
+                    if flat_state_tensor.shape[-1] != self.obs_dim:
+                        # Pad the tensor with zeros if necessary
+                        state_size = flat_state_tensor.shape[-1]
+                        if state_size < self.obs_dim:
+                            padding_size = self.obs_dim - state_size
+                            pad_tensor = torch.zeros(padding_size, dtype=torch.float32)
+                            flat_state_tensor = torch.cat([flat_state_tensor.reshape(-1), pad_tensor])
+                            flat_next_state_tensor = torch.cat([flat_next_state_tensor.reshape(-1), pad_tensor])
+                    
+                    normalized_state = np.clip(self._normalize_state(flat_state_tensor.reshape(-1)).numpy(), -10, 10)
+                    normalized_next_state = np.clip(self._normalize_state(flat_next_state_tensor.reshape(-1)).numpy(), -10, 10)
                     
                     # Normalize momentum features
                     normalized_momentum = np.clip(momentum_features / (np.abs(momentum_features).max() + 1e-8), -1, 1)

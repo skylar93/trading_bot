@@ -1,5 +1,7 @@
 """
 Live trading page for the Trading Bot UI
+
+This page is responsible for UI presentation only. All trading logic is handled by RealTimeTradingManager.
 """
 
 import streamlit as st
@@ -9,13 +11,13 @@ from typing import Optional
 from components.charts import create_price_chart, create_portfolio_chart
 from components.metrics import display_trading_metrics, display_portfolio_metrics, display_recent_trades
 from components.controls import trading_controls, debug_controls, indicator_controls
-from deployment.web_interface.utils.data_stream import DataStream
-from deployment.web_interface.utils.state import init_session_state, update_portfolio_history
+from deployment.web_interface.utils.state import init_session_state
+from deployment.web_interface.realtime_trading_manager import RealTimeTradingManager
 
 logger = logging.getLogger(__name__)
 
 async def render_live_trading():
-    """Render live trading page"""
+    """Render live trading page (UI presentation only)"""
     try:
         st.title("Live Trading")
 
@@ -33,38 +35,31 @@ async def render_live_trading():
         elif is_trading:
             st.warning("⚠️ Live Trading Mode - Real trades will be executed!")
 
-        # Initialize data stream if not exists
-        if "data_stream" not in st.session_state:
-            st.session_state.data_stream = DataStream(
-                symbol=settings["symbol"],
-                timeframe=settings["timeframe"]
-            )
+        # Initialize manager if not exists
+        if "live_trading_manager" not in st.session_state:
+            st.session_state.live_trading_manager = RealTimeTradingManager()
 
-        # Start data stream if not running
-        if not st.session_state.data_stream.is_running:
-            asyncio.create_task(st.session_state.data_stream.start())
-
-        # Get current market data
-        data = st.session_state.data_stream.get_current_data()
+        manager = st.session_state.live_trading_manager
         
-        if not data.empty:
-            # Calculate indicators if selected
-            indicators = {}
-            if any(selected_indicators.values()):
-                indicators = st.session_state.data_stream.calculate_indicators(data)
-                
-                # Filter selected indicators
-                indicators = {
-                    k: v for k, v in indicators.items()
-                    if k.split("_")[0].lower() in selected_indicators
-                    and selected_indicators[k.split("_")[0].lower()]
-                }
+        # Configure manager with current settings
+        manager.configure(settings)
 
+        # Start or stop trading based on UI controls
+        if is_trading and not manager.is_running:
+            asyncio.create_task(manager.start())
+        elif not is_trading and manager.is_running:
+            asyncio.create_task(manager.stop())
+
+        # Get UI update data from manager
+        ui_data = manager.update_ui(selected_indicators, debug_mode)
+        
+        # Display UI elements based on the data provided by the manager
+        if ui_data["price_data"] is not None and not ui_data["price_data"].empty:
             # Create and display price chart
             col1, col2 = st.columns([2, 1])
             
             with col1:
-                price_chart = create_price_chart(data, indicators)
+                price_chart = create_price_chart(ui_data["price_data"], ui_data["indicators"])
                 if price_chart:
                     st.plotly_chart(price_chart, use_container_width=True)
                 else:
@@ -72,36 +67,24 @@ async def render_live_trading():
 
             with col2:
                 # Display portfolio metrics
-                current_price = st.session_state.data_stream.get_latest_price()
-                if current_price:
-                    portfolio_value = settings["initial_balance"]  # TODO: Calculate actual portfolio value
+                if ui_data["latest_price"]:
+                    # Use portfolio value from manager
+                    portfolio_value = ui_data["portfolio_history"][-1]["value"] if ui_data["portfolio_history"] else settings["initial_balance"]
                     display_portfolio_metrics(portfolio_value, settings["initial_balance"])
 
-                    # Update portfolio history
-                    update_portfolio_history(portfolio_value)
-
                     # Display portfolio chart
-                    if st.session_state.portfolio_history:
-                        portfolio_chart = create_portfolio_chart(st.session_state.portfolio_history)
+                    if ui_data["portfolio_history"]:
+                        portfolio_chart = create_portfolio_chart(ui_data["portfolio_history"])
                         if portfolio_chart:
                             st.plotly_chart(portfolio_chart, use_container_width=True)
 
             # Display trading metrics
             st.subheader("Trading Performance")
-            metrics = {  # TODO: Calculate actual metrics
-                "sharpe_ratio": 1.5,
-                "win_rate": 65.0,
-                "max_drawdown": -5.2,
-                "profit_factor": 1.8,
-                "total_trades": 42,
-                "avg_trade": 125.50
-            }
-            display_trading_metrics(metrics)
+            display_trading_metrics(ui_data["metrics"])
 
             # Display recent trades
             st.subheader("Recent Trades")
-            trades = []  # TODO: Get actual trades
-            display_recent_trades(trades)
+            display_recent_trades(ui_data["trade_history"])
 
         else:
             st.warning("Waiting for market data...")
@@ -109,8 +92,8 @@ async def render_live_trading():
         # Debug information
         if debug_mode:
             st.sidebar.subheader("Debug Information")
-            st.sidebar.write("Last Update:", st.session_state.data_stream.last_update)
-            st.sidebar.write("Data Buffer Size:", len(st.session_state.data_stream.data_buffer))
+            st.sidebar.write("Last Update:", ui_data["last_update"])
+            st.sidebar.write("Data Buffer Size:", ui_data["data_buffer_size"])
 
     except Exception as e:
         logger.error(f"Error in live trading page: {str(e)}", exc_info=True)

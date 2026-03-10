@@ -20,7 +20,7 @@ from training.utils.config_manager import ConfigManager
 @pytest.fixture
 def sample_data():
     """Create sample market data with $ prefix columns."""
-    dates = pd.date_range(start="2025-01-01", periods=200, freq="H")
+    dates = pd.date_range(start="2025-01-01", periods=200, freq="h")
     df = pd.DataFrame(
         {
             "$open": np.random.normal(100, 1, 200).cumsum(),
@@ -107,8 +107,7 @@ def test_training_to_hyperopt_flow(test_config, sample_data):
              patch("ray.init"):
             
             best_config, opt_results = run_hyperparameter_optimization(
-                config=test_config,  # Pass config directly
-                experiment_id="test_exp"
+                config=test_config  # Pass config directly
             )
             
             # Verify we got optimization results
@@ -147,7 +146,8 @@ def test_config_to_training_flow(test_config, sample_data):
 @pytest.mark.integration
 def test_checkpoint_resume_flow(test_config, sample_data):
     """
-    Test the flow of saving checkpoints and resuming training.
+    Test that we can resume training from a checkpoint.
+    
     This verifies that we can:
     1. Start training and save checkpoints
     2. Resume training from a checkpoint

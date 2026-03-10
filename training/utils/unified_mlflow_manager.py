@@ -178,6 +178,29 @@ class MLflowManager:
             raise mlflow.exceptions.MlflowException("No active run")
         mlflow.log_params(params)
 
+    def log_metric(self, key: str, value: float, step: Optional[int] = None):
+        """Log a single metric to MLflow.
+        
+        Args:
+            key: Metric name
+            value: Metric value
+            step: Step value
+        """
+        if not mlflow.active_run():
+            raise mlflow.exceptions.MlflowException("No active run")
+        mlflow.log_metric(key, value, step=step)
+        
+    def set_tag(self, key: str, value: str):
+        """Set a tag in the current run.
+        
+        Args:
+            key: Tag name
+            value: Tag value
+        """
+        if not mlflow.active_run():
+            raise mlflow.exceptions.MlflowException("No active run")
+        mlflow.set_tag(key, value)
+
     def log_model(self, model: nn.Module, artifact_path: str):
         """Log PyTorch model to MLflow."""
         if not mlflow.active_run():
@@ -393,8 +416,15 @@ class MLflowManager:
 
     @property
     def active_run(self):
-        """Get the current active run."""
+        """Get the active run."""
         return self._active_run
+    
+    @property
+    def run_id(self):
+        """Get the ID of the active run."""
+        if self._active_run:
+            return self._active_run.info.run_id
+        return None
 
     def __enter__(self):
         """Context manager entry."""
@@ -406,3 +436,54 @@ class MLflowManager:
         status = "FAILED" if exc_type is not None else "FINISHED"
         self.end_run(status=status)
         return False  # Don't suppress exceptions 
+
+    def get_metric_history(self) -> Dict[str, List]:
+        """
+        Get metrics history for the current run.
+        
+        Returns:
+            Dictionary with metric histories
+        """
+        client = mlflow.tracking.MlflowClient()
+        
+        if not self.run_id:
+            return {}
+        
+        metrics = {}
+        for metric in client.get_metric_history(self.run_id, "episode_reward"):
+            if "episode_reward" not in metrics:
+                metrics["episode_reward"] = []
+            metrics["episode_reward"].append({
+                "step": metric.step,
+                "value": metric.value,
+                "timestamp": metric.timestamp
+            })
+        
+        return metrics
+    
+    def get_run_url(self) -> Optional[str]:
+        """
+        Get the MLflow UI URL for the current run.
+        
+        Returns:
+            URL string for accessing the run in MLflow UI, or None if not available
+        """
+        if not self.run_id:
+            return None
+            
+        try:
+            tracking_uri = mlflow.get_tracking_uri()
+            if tracking_uri.startswith("http"):
+                # For remote tracking server
+                base_url = tracking_uri
+            else:
+                # For local file store, suggest how to start mlflow UI
+                base_url = "http://localhost:5000"  # Default mlflow UI port
+                print(f"MLflow tracking URI is local: {tracking_uri}")
+                print("To view the UI, run: mlflow ui --port 5000")
+            
+            experiment_id = mlflow.get_experiment_by_name(self.experiment_name).experiment_id
+            return f"{base_url}/#/experiments/{experiment_id}/runs/{self.run_id}"
+        except Exception as e:
+            logging.warning(f"Failed to get MLflow UI URL: {str(e)}")
+            return None 

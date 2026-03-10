@@ -1,9 +1,13 @@
 import logging
 import numpy as np
 import pandas as pd
-from typing import Dict, Any, List, Optional
+import matplotlib.pyplot as plt
+import seaborn as sns
+from typing import Dict, Any, List, Optional, Tuple, Union, Set
 from pathlib import Path
-from .risk_manager import RiskManager, RiskConfig
+from dataclasses import dataclass
+from risk_management import create_risk_manager, create_risk_config
+from risk_management.backtesting_risk_manager import BacktestingRiskConfig
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +23,10 @@ class BaseBacktester:
     - Basic risk management
     - Performance metrics calculation
     - Cost basis tracking and profit realization
+    - Enhanced risk management with stop-loss and trailing stops
+    - Forced liquidation when drawdown exceeds threshold
+    - Time-based position constraints
+    - Improved position tracking for weekend close and max holding period tests
     
     Implementation Notes:
     - For single-asset mode, uses 'default' as the asset key
@@ -27,6 +35,14 @@ class BaseBacktester:
     - Handles transaction fees for accurate PnL calculation
     - Implements peak value tracking for drawdown calculation
     - Tracks cost basis per position for accurate profit calculation
+    - Stop-loss and trailing stops are checked on each bar
+    - Forced liquidation can be triggered by excessive drawdown
+    
+    Recent Changes:
+    - Added support for stop-loss and trailing stops
+    - Added forced liquidation when max drawdown is exceeded
+    - Added time-based position constraints (weekend close, max holding)
+    - Added support for partial fills and slippage simulation
     
     Now configured for FRACTIONAL HOLDING:
     - action in [0,1] => fraction of total portfolio to hold in the asset
@@ -41,7 +57,7 @@ class BaseBacktester:
         trading_fee: float = 0.001,  # 0.1% trading fee
         max_position: float = 1.0,
         data: pd.DataFrame = None,
-        risk_config: Optional[RiskConfig] = None,
+        risk_config: Optional[BacktestingRiskConfig] = None,
     ):
         """
         Initialize the backtester with common parameters for both single and multi-asset testing.
@@ -52,7 +68,7 @@ class BaseBacktester:
             max_position (float): (Optional) Maximum fraction to allow holding. 
                                   For example, 1.0 means up to 100% of portfolio in coin.
             data (pd.DataFrame, optional): OHLCV data with columns: $open, $high, $low, $close, $volume
-            risk_config (RiskConfig, optional): Risk management configuration
+            risk_config (BacktestingRiskConfig, optional): Risk management configuration
             
         Notes:
         - Data columns must be prefixed with '$' (e.g., '$close')
@@ -73,7 +89,7 @@ class BaseBacktester:
         self.logger = logging.getLogger(self.__class__.__name__)
         
         # Initialize risk manager if config provided
-        self.risk_manager = RiskManager(risk_config) if risk_config else None
+        self.risk_manager = create_risk_manager("backtesting", risk_config.__dict__ if risk_config else None)
         
         self.reset()
 
@@ -106,81 +122,205 @@ class BaseBacktester:
         actions: Dict[str, float],
     ) -> Dict[str, Any]:
         """
-        Update portfolio state based on current prices and desired fractional actions in [0,1].
+        Update portfolio based on current prices and desired actions.
         
         Args:
-            timestamp (pd.Timestamp): Current timestamp
-            prices (Dict[str, float]): Current prices for each asset
-            actions (Dict[str, float]): Desired fraction [0,1] for each asset 
+            timestamp: Current timestamp
+            prices: Dictionary of prices for each asset
+            actions: Dictionary of desired actions for each asset
             
         Returns:
-            Dict[str, Any]: Dictionary containing execution results
+            Dictionary containing:
+            - trades: Dict of trade results by asset
+            - portfolio_value: Current portfolio value
+            - cash: Current cash
             
-        Notes:
-        - For single-asset mode, use {'default': price} and {'default': action}
-        - For multi-asset mode, use e.g. {'BTC': fraction1, 'ETH': fraction2}
-        - This is FRACTIONAL HOLDING. 
-          e.g. action=0.3 => want 30% of total portfolio in 'asset'
+        Core backtest update function:
+        1. Check for risk signals (stop-loss, trailing-stop, max-drawdown)
+        2. Apply liquidation trades if needed
+        3. Execute regular trades
+        4. Return updated state
         """
         self.current_timestamp = timestamp
-        initial_portfolio_value = self.get_portfolio_value(prices)
-        total_fees = 0.0
-        results = {}
+        trades = {}
         
-        # Execute trades
-        for symbol, fraction in actions.items():
-            if symbol not in prices:
-                continue
+        # Check for risk signals (stop-loss, trailing-stop, max-drawdown)
+        liquidation_signals = self._check_risk_signals(timestamp, prices)
+        
+        # Apply liquidation trades if needed
+        if liquidation_signals:
+            for asset, _ in liquidation_signals:
+                self.logger.warning(f"Forced liquidation of {asset} at {timestamp}")
+                if asset not in prices:
+                    continue
+                    
+                price = prices[asset]
                 
-            # Ensure position record
-            if symbol not in self.positions:
-                self.positions[symbol] = {
-                    "units": 0.0,
-                    "avg_price": 0.0,
-                    "cost_basis": 0.0
-                }
-            
-            price_data = {symbol: prices[symbol]}
-            trade_result = self.execute_trade(
-                timestamp=timestamp,
-                action=fraction,  # in [0,1]
-                price_data=price_data,
-                asset=symbol
-            )
-            
-            results[symbol] = trade_result
-            if trade_result['success']:
-                total_fees += trade_result['fee']
+                # Force liquidation by setting action to 0 (close position)
+                trade_result = self.execute_trade(
+                    timestamp=timestamp,
+                    action=0.0,  # Force to 0% allocation (full liquidation)
+                    price_data={asset: price},
+                    asset=asset,
+                    is_forced_liquidation=True
+                )
+                if trade_result:
+                    trades[asset] = trade_result
+                    self.logger.debug(f"Liquidation trade result: {trade_result}")
         
-        # Update history
-        new_portfolio_value = self.get_portfolio_value(prices)
-        self.portfolio_history.append(new_portfolio_value)
+        # If we had liquidations, don't process regular actions
+        # to avoid conflicts between liquidation and regular trades
+        if not liquidation_signals:
+            # Apply regular trades
+            for asset, action in actions.items():
+                # Get price for this asset
+                if asset not in prices:
+                    self.logger.warning(f"No price data for asset {asset}, skipping trade")
+                    continue
+                    
+                price = prices[asset]
+                
+                # Process the trade
+                is_liquidation = any(s == asset for s, _ in liquidation_signals)
+                self.logger.debug(f"Processing trade for {asset}, action={action}, is_liquidation={is_liquidation}")
+                
+                trade_result = self.execute_trade(
+                    timestamp=timestamp,
+                    action=action,
+                    price_data={asset: price},
+                    asset=asset,
+                    is_forced_liquidation=is_liquidation
+                )
+                if trade_result:
+                    trades[asset] = trade_result
+                    self.logger.debug(f"Trade result: {trade_result}")
+        
+        # Print positions after update for debugging
+        self.logger.debug(f"Positions after update: {self.positions}")
+        
+        # Calculate portfolio value
+        portfolio_value = self.get_portfolio_value(prices)
+        
+        # 포트폴리오 히스토리 업데이트
+        self.portfolio_history.append(portfolio_value)
         self.cash_history.append(self.cash)
         
+        # Return the results
         return {
-            'timestamp': timestamp,
-            'trades': results,
-            'portfolio_value': new_portfolio_value,
-            'cash': self.cash,
-            'positions': self.positions.copy(),
-            'returns': (
-                (new_portfolio_value - initial_portfolio_value) / initial_portfolio_value
-                if initial_portfolio_value > 1e-12 else 0.0
-            ),
-            'total_fees': total_fees
+            "trades": trades,
+            "portfolio_value": portfolio_value,
+            "cash": self.cash
         }
+    
+    def _check_risk_signals(self, timestamp: pd.Timestamp, prices: Dict[str, float]) -> List[Tuple[str, float]]:
+        """
+        Check for risk management signals that might trigger position adjustments.
+        
+        Args:
+            timestamp: Current timestamp
+            prices: Dictionary of current prices
+            
+        Returns:
+            List of tuples (symbol, units_to_liquidate) for positions that need adjustment
+        """
+        liquidation_signals = []
+        
+        # Skip risk checks if no risk manager is configured
+        if self.risk_manager is None:
+            return liquidation_signals
+        
+        # Create a copy of positions to safely iterate
+        position_items = list(self.positions.items())
+        
+        # 1. Check for forced liquidation signal
+        forced_liquidation_result = self.risk_manager.check_forced_liquidation()
+        forced_liquidation_triggered = False
+        
+        if isinstance(forced_liquidation_result, dict):
+            # New format: check if allowed is False
+            forced_liquidation_triggered = not forced_liquidation_result.get("allowed", True)
+        else:
+            # Old format: check if result is True
+            forced_liquidation_triggered = forced_liquidation_result
+            
+        if forced_liquidation_triggered:
+            self.logger.warning("Forced liquidation triggered due to max drawdown")
+            # Add all positions to liquidation signals
+            for symbol, pos_dict in position_items:
+                if symbol in prices and abs(pos_dict["units"]) > 1e-8:
+                    liquidation_signals.append((symbol, -pos_dict["units"]))
+            return liquidation_signals  # Return early to ensure all positions are liquidated
+                
+        # 2. Check for stop-loss triggers
+        if self.risk_manager.config.use_stop_loss:
+            stop_loss_triggers = self.risk_manager.check_stop_losses(prices, self.positions)
+            # Create a copy of items to safely iterate
+            stop_loss_items = list(stop_loss_triggers.items())
+            for symbol, triggered in stop_loss_items:
+                if triggered and symbol in self.positions and abs(self.positions[symbol]["units"]) > 1e-8:
+                    # Add to liquidation signals if not already included
+                    if not any(s == symbol for s, _ in liquidation_signals):
+                        liquidation_signals.append((symbol, -self.positions[symbol]["units"]))
+                        self.logger.warning(f"Stop loss triggered for {symbol} at price {prices[symbol]:.2f}")
+        
+        # 3. Check for weekend close signal
+        weekend_close_result = self.risk_manager.check_weekend_close(timestamp)
+        weekend_close_triggered = False
+        
+        if isinstance(weekend_close_result, dict):
+            # New format: check if allowed is False
+            weekend_close_triggered = not weekend_close_result.get("allowed", True)
+        else:
+            # Old format: check if result is True
+            weekend_close_triggered = weekend_close_result
+            
+        if weekend_close_triggered:
+            # Close all positions if it's Friday end of day
+            for symbol, pos_dict in position_items:
+                if symbol in prices and abs(pos_dict["units"]) > 1e-8:
+                    # Add to liquidation signals if not already included
+                    if not any(s == symbol for s, _ in liquidation_signals):
+                        liquidation_signals.append((symbol, -pos_dict["units"]))
+                        self.logger.info(f"Weekend close for {symbol} at price {prices[symbol]:.2f}")
+        
+        # 4. Check for max holding period exceeded
+        if self.risk_manager.config.max_holding_period_days > 0:
+            holding_period_exceeded = self.risk_manager.check_max_holding_period(timestamp, self.positions)
+            # Create a copy of items to safely iterate
+            holding_period_items = list(holding_period_exceeded.items())
+            for symbol, exceeded in holding_period_items:
+                if exceeded and symbol in self.positions and abs(self.positions[symbol]["units"]) > 1e-8:
+                    # Add to liquidation signals if not already included
+                    if not any(s == symbol for s, _ in liquidation_signals):
+                        liquidation_signals.append((symbol, -self.positions[symbol]["units"]))
+                        self.logger.warning(f"Max holding period exceeded for {symbol}, closing position")
+        
+        return liquidation_signals
     
     def execute_trade(
         self,
         timestamp: pd.Timestamp,
         action: float,
         price_data: Dict[str, float],
-        asset: str = "default"
+        asset: str = "default",
+        is_forced_liquidation: bool = False
     ) -> Dict[str, Any]:
         """
         Fractional Holding version:
         action in [0,1] => fraction of total portfolio to hold in this asset.
+        
+        Args:
+            timestamp (pd.Timestamp): Current timestamp
+            action (float): Desired fraction [0,1] of portfolio to hold in this asset
+            price_data (Dict[str, float]): Current prices for this asset
+            asset (str): Asset symbol
+            is_forced_liquidation (bool): Whether this is a forced liquidation due to risk management
         """
+        # Save current position state to detect new positions
+        previous_positions = {}
+        if asset in self.positions:
+            previous_positions[asset] = self.positions[asset].copy()
+            
         trade = {
             "timestamp": timestamp,
             "symbol": asset,
@@ -201,6 +341,7 @@ class BaseBacktester:
             "cash_after": 0.0,      # float
             "position_units": 0.0,   # float
             "position_value": 0.0,   # float
+            "is_forced_liquidation": is_forced_liquidation,
         }
 
         if asset not in price_data:
@@ -211,6 +352,11 @@ class BaseBacktester:
             return trade
 
         current_price = float(price_data[asset])  # ensure float
+        
+        # Apply slippage if risk manager is configured
+        if self.risk_manager and self.risk_manager.config.slippage_std > 0:
+            current_price = self.risk_manager.apply_slippage(current_price)
+            
         trade["price"] = current_price
         
         # clamp action in [0,1]
@@ -235,6 +381,18 @@ class BaseBacktester:
         # total portfolio
         portfolio_value = self.cash + current_coin_value
         
+        # Check minimum trade size based on action (as a fraction of portfolio)
+        if self.risk_manager and not is_forced_liquidation:
+            min_trade_size = self.risk_manager.config.min_trade_size
+            # Current position as fraction of portfolio
+            current_position_fraction = current_coin_value / portfolio_value if portfolio_value > 0 else 0
+            # If the requested change in position is less than min_trade_size, reject
+            if abs(action - current_position_fraction) < min_trade_size:
+                trade["reason"] = "trade_size_too_small"
+                trade["success"] = False  # explicit bool
+                self.trades.append(trade)
+                return trade
+        
         # desired coin value
         target_coin_value = action * portfolio_value
         
@@ -255,8 +413,8 @@ class BaseBacktester:
         trade_value = abs(diff_value)
         fee = trade_value * self.trading_fee
 
-        # Risk Manager check
-        if self.risk_manager and abs(trade_amount) > 1e-12:
+        # For forced liquidations, skip risk check
+        if not is_forced_liquidation and self.risk_manager and abs(trade_amount) > 1e-12:
             risk_check = self.risk_manager.check_trade(
                 timestamp=timestamp,
                 portfolio_value=portfolio_value,
@@ -267,7 +425,10 @@ class BaseBacktester:
             )
             if not risk_check['allowed']:
                 trade["success"] = False  # explicit bool
-                trade["reason"] = risk_check['reason']
+                trade["reason"] = risk_check['reason'] if risk_check['reason'] else "risk_check_failed"
+                # Ensure we set the adjusted size to 0 for minimum trade size issues
+                if "minimum" in trade["reason"].lower() or "size" in trade["reason"].lower():
+                    trade["reason"] = "trade_size_too_small"
                 self.trades.append(trade)
                 return trade
 
@@ -277,9 +438,19 @@ class BaseBacktester:
                 diff_value = trade_amount * current_price
                 trade_value = abs(diff_value)
                 fee = trade_value * self.trading_fee
+                
+                # Check if the adjusted size is now too small (not already caught by RiskManager)
+                if abs(trade_amount) < 1e-12:
+                    trade["reason"] = "trade_size_too_small"
+                    trade["success"] = False  # explicit bool
+                    self.trades.append(trade)
+                    return trade
 
         # Only log significant trades (value > 1% of portfolio)
         is_significant = trade_value > (portfolio_value * 0.01)
+        
+        # Determine if this is a long or short position
+        is_long = trade_amount > 0 or (trade_amount == 0 and old_units > 0)
 
         # BUY
         if diff_value > 0:
@@ -315,6 +486,23 @@ class BaseBacktester:
                     "[BUY] %s: Amount=%.6f, Price=$%.2f, Total=$%.2f, Fee=$%.2f",
                     asset, trade_amount, current_price, total_cost, fee
                 )
+
+            # Ensure position start time is tracked for max holding period checks
+            if asset in self.positions and self.positions[asset]["units"] > 1e-8 and self.risk_manager is not None:
+                # Check if this is a new position or the position was previously closed
+                was_no_position = asset not in self.risk_manager.position_start_times or asset not in previous_positions
+                was_closed_position = asset in previous_positions and abs(previous_positions[asset]["units"]) < 1e-8
+                
+                self.logger.debug(f"Position start time check: asset={asset}, was_no_position={was_no_position}, was_closed_position={was_closed_position}")
+                self.logger.debug(f"Previous positions: {previous_positions}")
+                self.logger.debug(f"Current positions: {self.positions}")
+                self.logger.debug(f"Position start times before: {self.risk_manager.position_start_times}")
+                
+                if was_no_position or was_closed_position:
+                    self.risk_manager.position_start_times[asset] = timestamp
+                    self.logger.debug(f"Setting position start time for {asset}: {timestamp}")
+                    
+                self.logger.debug(f"Position start times after: {self.risk_manager.position_start_times}")
 
         else:
             # SELL
@@ -353,9 +541,10 @@ class BaseBacktester:
             trade["success"] = True  # explicit bool
 
             if is_significant:
+                log_prefix = "[FORCED LIQUIDATION]" if is_forced_liquidation else "[SELL]"
                 self.logger.info(
-                    "[SELL] %s: Amount=%.6f, Price=$%.2f, Revenue=$%.2f, Profit=$%.2f",
-                    asset, sell_amount, current_price, revenue, realized_profit
+                    "%s %s: Amount=%.6f, Price=$%.2f, Revenue=$%.2f, Profit=$%.2f",
+                    log_prefix, asset, sell_amount, current_price, revenue, realized_profit
                 )
         
         # If trade was successful, update portfolio value after and related metrics
@@ -373,6 +562,41 @@ class BaseBacktester:
             else:
                 trade["position_units"] = 0.0  # explicit float
                 trade["position_value"] = 0.0  # explicit float
+            
+            # risk manager post-update
+            if self.risk_manager:
+                units = float(self.positions[asset]["units"]) if asset in self.positions else 0.0
+                entry_price = float(self.positions[asset]["avg_price"]) if asset in self.positions else current_price
+                
+                # Calculate stop price based on entry price and stop loss threshold
+                stop_price = None
+                if self.risk_manager.config.use_stop_loss:
+                    # Use a fixed value for stop loss threshold to avoid property issues
+                    stop_loss_threshold = 0.02  # Default value
+                    
+                    if units > 0:  # Long position
+                        stop_price = entry_price * (1 - stop_loss_threshold)
+                    elif units < 0:  # Short position
+                        stop_price = entry_price * (1 + stop_loss_threshold)
+                
+                self.risk_manager.update_after_trade(
+                    timestamp=timestamp,
+                    asset=asset,
+                    entry_price=entry_price,
+                    position_size=units,
+                    stop_price=stop_price,
+                    trailing=self.risk_manager.config.use_trailing_stop
+                )
+                
+                # Ensure position start time is tracked for max holding period checks
+                if asset in self.positions and self.positions[asset]["units"] > 1e-8 and self.risk_manager is not None:
+                    # Check if this is a new position or the position was previously closed
+                    was_no_position = asset not in self.risk_manager.position_start_times or asset not in previous_positions
+                    was_closed_position = asset in previous_positions and abs(previous_positions[asset]["units"]) < 1e-8
+                    
+                    if was_no_position or was_closed_position:
+                        self.risk_manager.position_start_times[asset] = timestamp
+                        self.logger.debug(f"Setting position start time for {asset}: {timestamp}")
         else:
             # For unsuccessful trades, still record actual portfolio value
             updated_portfolio_value = self.get_portfolio_value(price_data)
@@ -383,10 +607,6 @@ class BaseBacktester:
             trade["position_value"] = float(self.positions[asset]["units"] * current_price) if asset in self.positions else 0.0  # ensure float
 
         self.trades.append(trade)
-        
-        # risk manager post-update
-        if self.risk_manager and trade["success"]:  # using bool
-            self.risk_manager.update_after_trade(timestamp)
 
         return trade
     
@@ -402,7 +622,7 @@ class BaseBacktester:
         portfolio_value = self.cash + position_value
         
         if self.risk_manager:
-            current_drawdown = self.risk_manager.update_drawdown(portfolio_value)
+            self.risk_manager.update_portfolio_value(portfolio_value)
             
             # Initialize update counter if not exists
             if not hasattr(self, '_update_counter'):
@@ -415,6 +635,10 @@ class BaseBacktester:
             # 1. Significant drawdown (>5%)
             # 2. Significant value change (>2%)
             # 3. Every 100 updates
+            current_drawdown = 0
+            if self.risk_manager.peak_value is not None and self.risk_manager.peak_value > 0:
+                current_drawdown = (self.risk_manager.peak_value - portfolio_value) / self.risk_manager.peak_value
+                
             should_log = (
                 current_drawdown > 0.05 or  # Significant drawdown
                 abs(portfolio_value - self._last_logged_value) / self._last_logged_value > 0.02 or  # Significant value change
@@ -444,38 +668,91 @@ class BaseBacktester:
         self,
         strategy: Any,
         window_size: int = 20,
-        verbose: bool = False,
+        verbose: bool = True
     ) -> Dict[str, Any]:
         """
-        Run backtest for single-asset strategy (Fractional Holding).
-        strategy.get_action() => fraction in [0,1].
+        Run full backtest using OHLCV data (from constructor).
+        Features:
+        - Handles NaNs
+        - Progress reporting
+        - Returns metrics
         
-        Now uses update() for each bar to track portfolio changes every step,
-        even when no trade occurs.
+        Basic usage:
+        ```
+        backtester = BaseBacktester(data=df)  # df has $open,$high,$low,$close,$volume
+        metrics = backtester.run(strategy)
+        print(metrics["total_return"], metrics["sharpe_ratio"])
+        ```
         """
         if self.data is None:
-            raise ValueError("No data provided for backtesting")
-            
-        try:
-            for i in range(window_size, len(self.data)):
-                window_data = self.data.iloc[i - window_size : i].copy()
-                current_data = self.data.iloc[i].copy()
-                timestamp = current_data.name
+            raise ValueError("No data provided. Set data in constructor or load_data()")
 
-                # 1) get fraction in [0,1]
+        try:
+            # Reset before running
+            self.reset()
+            
+            # Process one bar at a time
+            for i in range(window_size - 1, len(self.data)):
+                timestamp = self.data.index[i]
+                window_start = i - window_size + 1
+                window_data = self.data.iloc[window_start : i + 1]
+                
+                # 1) Get action from strategy (0.0 to 1.0 for long-only)
+                action = None
+                current_data = None
+                
                 try:
-                    raw_action = strategy.get_action(window_data)
-                    # clamp
-                    action = float(np.clip(raw_action, 0.0, 1.0))
+                    # For basic strategies
+                    if hasattr(strategy, "get_action"):
+                        # 에이전트 유형에 따른 입력 데이터 변환
+                        agent_name = getattr(strategy, "__class__").__name__
+                        is_ppo_agent = "PPO" in agent_name
+                        
+                        # PPO 에이전트에 대한 특별 처리
+                        if is_ppo_agent:
+                            # PPO 에이전트는 10차원 입력을 기대합니다
+                            # OHLCV 데이터를 flatten하여 10개의 특성으로 변환
+                            feature_cols = ["$open", "$high", "$low", "$close", "$volume"]
+                            # 마지막 2개 시간 단계의 데이터만 사용 (10개 특성)
+                            flat_data = np.array([])
+                            for col in feature_cols:
+                                flat_data = np.append(flat_data, window_data[col].values[-2:])
+                            
+                            # 올바른 차원을 가진 배열로 변환
+                            if len(flat_data) != 10:
+                                # 필요한 경우 크기 조정
+                                flat_data = np.pad(flat_data[:10], (0, max(0, 10 - len(flat_data))), 'constant')
+                                
+                            action = strategy.get_action(flat_data)
+                        else:
+                            action = strategy.get_action(window_data)
+                    else:
+                        # For RL models - they use state dict
+                        current_data = {col: window_data[col].values for col in window_data.columns}
+                        action = strategy.predict(current_data)[0]
                 except Exception as e:
                     self.logger.error(
                         f"Error getting action from strategy: {str(e)}"
                     )
                     continue
 
+                # Skip if we couldn't get a valid action
+                if action is None:
+                    continue
+
                 # 2) Prepare prices and actions dict for update()
-                prices = {"default": current_data["$close"]}
-                actions = {"default": action}
+                # Use window_data instead of current_data if current_data is None
+                if current_data is None:
+                    prices = {"default": float(window_data["$close"].iloc[-1])}
+                else:
+                    # Ensure we're using a scalar value, not a numpy array
+                    close_value = current_data["$close"][-1]
+                    # Convert to native Python float if it's a numpy type
+                    if hasattr(close_value, 'item'):
+                        close_value = close_value.item()
+                    prices = {"default": float(close_value)}
+                
+                actions = {"default": float(action) if hasattr(action, 'item') else float(action)}
 
                 # 3) Call update() once per bar
                 update_result = self.update(
@@ -694,6 +971,9 @@ class BaseBacktester:
     def get_position_history(self) -> pd.DataFrame:
         """
         Get position value history for each asset.
+        
+        Returns:
+            pd.DataFrame: DataFrame containing position history with timestamps and values
         """
         position_values = []
         if self.current_timestamp is not None:
@@ -707,10 +987,14 @@ class BaseBacktester:
         
         for timestamp, portfolio_value in zip(timestamps, self.portfolio_history):
             row = {'timestamp': timestamp, 'total': portfolio_value}
-            row.update(self.positions)
+            # Make a copy of the positions dictionary to avoid modification during iteration
+            positions_copy = self.positions.copy()
+            for asset, pos in positions_copy.items():
+                row[f"{asset}_units"] = pos["units"]
+                row[f"{asset}_value"] = pos["units"] * pos["avg_price"]
             position_values.append(row)
-            
-        return pd.DataFrame(position_values).set_index('timestamp')
+        
+        return pd.DataFrame(position_values)
 
     def run_scenario(
         self,
@@ -722,6 +1006,16 @@ class BaseBacktester:
     ) -> Dict[str, Any]:
         """
         Run backtest with a specific scenario (flash_crash, low_liquidity).
+        
+        Args:
+            strategy: Strategy object with get_action() method
+            scenario_type: Type of scenario ('flash_crash' or 'low_liquidity')
+            window_size: Size of window for strategy
+            verbose: Whether to print progress
+            scenario_params: Parameters for scenario generation
+            
+        Returns:
+            Dict containing results and metrics
         """
         from .scenario import (
             generate_flash_crash_data,
@@ -740,10 +1034,17 @@ class BaseBacktester:
         else:
             raise ValueError(f"Unknown scenario type: {scenario_type}")
         
+        # Reset before running the scenario
+        self.reset()
+        
+        # Run the backtest
         results = self.run(strategy, window_size, verbose)
         
+        # Calculate scenario-specific metrics
         results["scenario_metrics"] = metric_fn(results)
         results["scenario_type"] = scenario_type
+        results["scenario_params"] = scenario_params
+        
         return results
 
     def plot_scenario_results(

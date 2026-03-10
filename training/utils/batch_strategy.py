@@ -163,7 +163,7 @@ class AdaptiveBatchStrategy(BatchStrategy):
             Dictionary of data characteristics
         """
         return {
-            "volatility": float(data.std().mean()),
+            "volatility": float(data.std(numeric_only=True).mean()),
             "missing_ratio": float(data.isna().mean().mean()),
             "unique_ratio": float(
                 np.mean(

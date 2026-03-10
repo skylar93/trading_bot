@@ -4,27 +4,27 @@ import unittest
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from training.backtesting.risk_manager import RiskManager, RiskConfig
+from risk_management import create_risk_manager
 
 
 class TestRiskManager(unittest.TestCase):
     def setUp(self):
         """Set up test cases"""
-        self.config = RiskConfig(
-            max_position_size=0.2,
-            stop_loss_pct=0.02,
-            max_drawdown_pct=0.15,
-            daily_trade_limit=10,
-            min_trade_size=0.01,
-            max_leverage=1.0,
-            volatility_lookback=20,
-            risk_free_rate=0.02,
-            var_confidence_level=0.95,
-            correlation_window=30,
-            max_correlation=0.7,
-            portfolio_var_limit=0.02
-        )
-        self.risk_manager = RiskManager(self.config)
+        self.config = {
+            "max_position_size": 0.2,
+            "stop_loss_pct": 0.02,
+            "max_drawdown_pct": 0.15,
+            "daily_trade_limit": 10,
+            "min_trade_size": 0.01,
+            "max_leverage": 1.0,
+            "volatility_lookback": 20,
+            "risk_free_rate": 0.02,
+            "var_confidence_level": 0.95,
+            "correlation_window": 30,
+            "max_correlation": 0.7,
+            "portfolio_var_limit": 0.02
+        }
+        self.risk_manager = create_risk_manager("backtesting", self.config)
 
         # Create sample price data for volatility calculation
         dates = pd.date_range(start="2024-01-01", periods=100, freq="1h")
@@ -52,7 +52,7 @@ class TestRiskManager(unittest.TestCase):
         size = self.risk_manager.calculate_position_size(
             portfolio_value=portfolio_value, price=price, volatility=None
         )
-        expected_size = portfolio_value * self.config.max_position_size
+        expected_size = portfolio_value * self.config["max_position_size"]
         self.assertAlmostEqual(size, expected_size, delta=0.01)
 
         # Position size with volatility scaling
@@ -69,7 +69,7 @@ class TestRiskManager(unittest.TestCase):
             portfolio_value=small_portfolio, price=price, volatility=None
         )
         self.assertTrue(
-            small_size <= small_portfolio * self.config.max_position_size
+            small_size <= small_portfolio * self.config["max_position_size"]
         )
 
     def test_trade_limits(self):
@@ -77,7 +77,7 @@ class TestRiskManager(unittest.TestCase):
         timestamp = pd.Timestamp("2024-01-01 10:00:00")
 
         # Should allow trades up to limit
-        for i in range(self.config.daily_trade_limit):
+        for i in range(self.config["daily_trade_limit"]):
             self.assertTrue(
                 self.risk_manager.check_trade_limits(timestamp),
                 f"Trade {i+1} should be allowed",
@@ -106,7 +106,7 @@ class TestRiskManager(unittest.TestCase):
         long_stop = self.risk_manager.calculate_stop_loss(
             entry_price=entry_price, position_size=position_size, is_long=True
         )
-        expected_long_stop = entry_price * (1 - self.config.stop_loss_pct)
+        expected_long_stop = entry_price * (1 - self.config["stop_loss_pct"])
         self.assertAlmostEqual(
             long_stop,
             expected_long_stop,
@@ -118,7 +118,7 @@ class TestRiskManager(unittest.TestCase):
         short_stop = self.risk_manager.calculate_stop_loss(
             entry_price=entry_price, position_size=position_size, is_long=False
         )
-        expected_short_stop = entry_price * (1 + self.config.stop_loss_pct)
+        expected_short_stop = entry_price * (1 + self.config["stop_loss_pct"])
         self.assertAlmostEqual(
             short_stop,
             expected_short_stop,
@@ -146,7 +146,7 @@ class TestRiskManager(unittest.TestCase):
 
         # Max drawdown exceeded
         current_value = initial_value * (
-            1 - self.config.max_drawdown_pct * 1.1
+            1 - self.config["max_drawdown_pct"] * 1.1
         )
         self.assertTrue(
             self.risk_manager.check_max_drawdown(initial_value, current_value),
@@ -156,7 +156,7 @@ class TestRiskManager(unittest.TestCase):
     def test_leverage_limits(self):
         """Test leverage limits"""
         portfolio_value = 10000
-        position_value = portfolio_value * self.config.max_leverage * 0.5
+        position_value = portfolio_value * self.config["max_leverage"] * 0.5
 
         # Test within limits
         self.assertTrue(
@@ -167,7 +167,7 @@ class TestRiskManager(unittest.TestCase):
         )
 
         # Test exceeding limits
-        large_position = portfolio_value * self.config.max_leverage * 1.1
+        large_position = portfolio_value * self.config["max_leverage"] * 1.1
         self.assertFalse(
             self.risk_manager.check_leverage_limits(
                 portfolio_value, large_position
@@ -273,12 +273,19 @@ class TestRiskManager(unittest.TestCase):
         
         portfolio_value = 10000
         positions = {
-            "BTC": 3000,
-            "ETH": 4000,
-            "SOL": 3000
+            "BTC": {"units": 1.0, "avg_price": 3000, "cost_basis": 3000},
+            "ETH": {"units": 2.0, "avg_price": 2000, "cost_basis": 4000},
+            "SOL": {"units": 30.0, "avg_price": 100, "cost_basis": 3000}
         }
         
-        portfolio_var = self.risk_manager.get_portfolio_var(positions, portfolio_value)
+        # Create a prices dictionary for current prices
+        prices = {
+            "BTC": 3000,
+            "ETH": 2000,
+            "SOL": 100
+        }
+        
+        portfolio_var = self.risk_manager.get_portfolio_var(portfolio_value, positions, prices)
         self.assertTrue(portfolio_var > 0, "Portfolio VaR should be positive")
         self.assertTrue(portfolio_var < 1, "Portfolio VaR should be less than 100%")
 

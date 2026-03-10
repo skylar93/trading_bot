@@ -216,7 +216,7 @@ def show_training():
                     next_state, reward, done, truncated, info = env.step(
                         action
                     )
-                    agent.train(state, action, reward, next_state, done)
+                    agentstate, action, reward, next_state, done)
                     episode_reward += reward
 
                 # Evaluate on validation set

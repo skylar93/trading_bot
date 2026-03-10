@@ -126,3 +126,88 @@
   - Implement circuit breakers for unexpected market conditions
   - Log full stack traces but show user-friendly messages
   - Document recovery procedures for common failure modes 
+
+  Python Standards
+
+Version: Python 3.10+ (favor new features: structural pattern matching, etc.).
+Formatting & Linting: Use ruff with pyproject.toml or config file to enforce PEP8, handle imports, docstring checks, and more.
+Type Hints: All functions, methods, and class attributes must have Python type hints via the typing module (e.g., List[str], Dict[str, Any]).
+Docstrings: Google-style docstrings for every public function/class, describing parameters, return values, raises, and usage examples.
+Testing: Use pytest for test coverage. Provide at least 90% coverage on key modules (particularly train_pipeline.py, single_asset_rl_env.py, multi_agent_env.py, etc.).
+Imports & Dependencies: Manage dependencies in a pyproject.toml or requirements.txt; for environment usage, prefer conda or venv.
+Project Architecture
+
+Single vs. Multi-Agent:
+single_asset_rl_env.py: For single-agent training logic.
+multi_agent_env.py: For multi-agent logic.
+Training Pipeline:
+train_pipeline.py: Orchestrates both single and multi-agent training flows.
+agent_factory.py: Central place for agent creation (PPO, Momentum, MeanReversion, etc.).
+env_factory.py: Creates either SingleAssetRLTradingEnv or MultiAgentTradingEnv based on config.
+Configuration:
+training_config.yaml or similar for unified environment/agent/training/hyperopt/HPC parameters.
+config_manager.py for loading, validating, and merging config updates.
+Hyperopt & HPC:
+Use hyperopt_ray.py (Ray Tune) or HPC scripts for distributed/hyperparameter optimization.
+HPC logic (SLURM) in slurm_generator.py or run_hyperparameter_optimization(...).
+ML/AI Conventions
+
+Logging & Tracking:
+Integrate with mlflow or tensorboard for experiment tracking; log at least final metrics, best model scores, etc.
+Reproducibility:
+Provide a random seed in config (training.seed).
+Log the seed and environment details in your MLflow run or console logs.
+Backtesting:
+Keep advanced logic in separate modules (base_backtester.py, etc.).
+Ensure you handle fractional or discrete trades consistently.
+Performance & Concurrency
+
+Use async/await for I/O-bound routines or if it clearly benefits concurrency (e.g., calling external APIs).
+For CPU-bound tasks (like big data transforms or RL steps) consider multi-process or HPC cluster resources if needed.
+Carefully manage memory usage to avoid leaks in multi-agent loops or large replay buffers.
+API & Demos (If Using FastAPI/Gradio)
+
+For any real-time or streaming demos, place them in demo/ or app/ folder, using fastapi or gradio.
+Validate input data with pydantic models if building an HTTP API.
+Keep the “demo UI” logic minimal, calling well-tested pipeline functions.
+Documentation & Examples
+
+Provide usage examples in a README.md or docstrings:
+python
+Copy
+def my_function(foo: int, bar: str) -> bool:
+    """
+    Returns True if `foo` and `bar` satisfy some condition.
+
+    Args:
+      foo (int): ...
+      bar (str): ...
+
+    Returns:
+      bool: ...
+    
+    Example:
+        >>> result = my_function(42, "hello")
+        >>> print(result)  # True
+    """
+    ...
+Keep docs near the code so that maintainers understand usage quickly.
+Testing Strategy
+
+Unit Tests: Write a test file per major module (test_single_asset_rl_env.py, test_train_pipeline.py, etc.).
+Integration Tests: If you have multi-agent synergy or HPC logic, create integration tests that verify the pipeline end-to-end with minimal epochs.
+Edge Cases: Test data loading with missing columns, agent creation with invalid config, environment stepping near boundary conditions (like a short final dataset or negative positions).
+Security & Error Handling
+
+Raise specific exceptions for user/data errors (ValueError, FileNotFoundError, etc.).
+Use logging for errors/warnings. No bare except:.
+If building an HTTP endpoint with fastapi, handle security with Oauth2 or JWT if needed.
+Version Control & Workflow
+
+Each feature/fix in a branch, merged via pull request.
+CI pipeline runs ruff, pytest, and possibly coverage checks.
+Tag releases and keep a CHANGELOG.md.
+Simplify Where Possible
+
+Do not over-engineer. Keep the code maintainable and flexible.
+Clarify docstrings and comments where logic is nontrivial.
