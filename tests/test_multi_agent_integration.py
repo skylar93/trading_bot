@@ -21,8 +21,6 @@ from agents.strategies.test_agent_factory import create_test_agent, create_test_
 try:
     from agents.strategies.agent_factory import create_agent
     from agents.strategies.multi.multi_agent_manager import MultiAgentManager
-    from agents.strategies.meta_agent import MetaAgent
-    from agents.strategies.hierarchical_agent import HierarchicalAgent
     USE_REAL_AGENTS = True
 except ImportError:
     logging.warning("Using test agent factory for all agent implementations")
@@ -237,6 +235,7 @@ def test_shared_capital_integration(sample_data, agent_configs):
         assert env.capital_allocations[agent_id] != initial_allocations[agent_id], \
             f"Capital allocation for {agent_id} should change after reallocation"
 
+@pytest.mark.skip(reason="MetaAgent removed in Week 1 refactor")
 def test_meta_agent_integration(sample_data, agent_configs, meta_agent_config):
     """Test integration with meta-agent for ensemble decisions"""
     # Skip this test if we're using mocks, as meta-agent needs real implementation
@@ -332,6 +331,7 @@ def test_meta_agent_integration(sample_data, agent_configs, meta_agent_config):
     assert manager.meta_agent_id in manager.agents, "Meta agent should be in agents dictionary"
     assert callable(getattr(manager.agents[manager.meta_agent_id], "get_action", None)), "Meta agent should have get_action method"
 
+@pytest.mark.skip(reason="HierarchicalAgent removed in Week 1 refactor")
 def test_hierarchical_agent_integration(sample_data):
     """Test integration with hierarchical agent"""
     # Skip this test if we're using test agents

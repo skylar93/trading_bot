@@ -3,13 +3,13 @@ import torch
 import torch.nn as nn
 from typing import Dict, Any, Optional, Tuple
 import logging
-from agents.strategies.single.ppo_agent import PPOAgent
+from agents.strategies.base_agent import BaseAgent
 from gymnasium import spaces
 import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-class MomentumPPOAgent(PPOAgent):
+class MomentumPPOAgent(BaseAgent):
     """
     Momentum strategy PPO agent that specializes in trend-following.
     Inherits from base PPO agent but adds momentum-specific features and logic.
@@ -80,22 +80,10 @@ class MomentumPPOAgent(PPOAgent):
         else:
             raise ValueError("Observation space must be Box")
         
-        # Initialize base PPO agent with flattened observation space
+        # Initialize BaseAgent (PPO-specific logic removed; will use SB3 in Phase 2)
         super().__init__(
-            observation_space=flat_obs_space,
+            observation_space=observation_space,
             action_space=action_space,
-            learning_rate=learning_rate,
-            gamma=gamma,
-            gae_lambda=gae_lambda,
-            clip_epsilon=clip_epsilon,
-            c1=c1,
-            c2=c2,
-            c3=c3,
-            batch_size=batch_size,
-            n_epochs=n_epochs,
-            target_kl=target_kl,
-            device=device,
-            **kwargs
         )
         
         # Momentum specific parameters
@@ -108,7 +96,7 @@ class MomentumPPOAgent(PPOAgent):
         # Log unused config keys
         unused_keys = [key for key in kwargs.keys() if key not in self.__init__.__code__.co_varnames]
         if unused_keys:
-            self.logger.warning(f"Ignoring unused config keys in MomentumPPOAgent: {unused_keys}")
+            logger.warning(f"Ignoring unused config keys in MomentumPPOAgent: {unused_keys}")
         
         logger.info(
             f"Initialized MomentumPPOAgent with window={self.momentum_window}, "
@@ -364,19 +352,9 @@ class MomentumPPOAgent(PPOAgent):
             
         modified_reward = reward + momentum_reward
         
-        # Train with modified states and reward
-        metrics = super().train_step(
-            augmented_state.reshape(-1), action, modified_reward, augmented_next_state.reshape(-1), done
-        )
-        
-        # If training failed, return empty metrics
-        if metrics is None:
-            return {
-                "momentum_reward": float(momentum_reward),
-                "momentum_value": float(momentum),
-                "momentum_volatility": float(state_momentum[1] if len(state_momentum.shape) == 1 else state_momentum[0, 1]),
-                "momentum_trend": float(state_momentum[2] if len(state_momentum.shape) == 1 else state_momentum[0, 2])
-            }
+        # NOTE: Core RL training delegated to SB3 in Phase 2.
+        # For now, return strategy-specific metrics only.
+        metrics = {}
         
         # Add momentum-specific metrics
         if len(state_momentum.shape) > 1:
@@ -547,3 +525,11 @@ class MomentumPPOAgent(PPOAgent):
             }
             
         return super().learn_from_shared_experience(relevant_exp)
+
+    def save(self, path: str) -> None:
+        """No-op: heuristic agent has no model weights to persist."""
+        pass
+
+    def load(self, path: str) -> None:
+        """No-op: heuristic agent has no model weights to load."""
+        pass

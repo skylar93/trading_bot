@@ -819,132 +819,93 @@ class BaseBacktester:
                     'total_trade_attempts': len(self.trades)
                 }
 
-            returns = np.diff(values) / values[:-1]  # returns as decimals
-            
-            # Calculate total return as decimal
-            total_return = (values[-1] / values[0]) - 1  # decimal form (e.g., -0.0864)
-            
-            # Calculate Sharpe ratio (this is a ratio, not a percentage)
-            if len(returns) > 1 and np.std(returns)>0:
-                sharpe_ratio = np.sqrt(252) * np.mean(returns) / np.std(returns)
+            # Log returns for statistically correct Sharpe/Sortino
+            log_returns = np.log(values[1:] / values[:-1])
+
+            # Total return
+            total_return = (values[-1] / values[0]) - 1
+
+            # Sharpe ratio: annualized, log-return based
+            if len(log_returns) > 1 and np.std(log_returns) > 0:
+                sharpe_ratio = np.sqrt(252) * np.mean(log_returns) / np.std(log_returns, ddof=1)
             else:
                 sharpe_ratio = 0.0
-            
-            # Calculate Sortino ratio (this is a ratio, not a percentage)
-            downside_returns = returns[returns < 0]
-            if len(downside_returns) > 0 and np.std(downside_returns)>0:
-                sortino_ratio = np.sqrt(252) * np.mean(returns) / np.std(downside_returns)
+
+            # Sortino ratio: penalises downside deviation only
+            downside = log_returns[log_returns < 0]
+            if len(downside) > 1:
+                sortino_ratio = np.sqrt(252) * np.mean(log_returns) / np.std(downside, ddof=1)
             else:
                 sortino_ratio = 0.0
-            
-            # Calculate max drawdown as decimal
-            peak = values[0]
-            max_dd = 0.0  # decimal form (e.g., 0.152)
-            for val in values[1:]:
-                if val>peak:
-                    peak=val
-                dd = (peak-val)/peak
-                max_dd = max(max_dd, dd)
-            
-            # Calculate win rate with detailed debugging
-            successful_trades = []
+
+            # Max drawdown (vectorised)
+            running_max = np.maximum.accumulate(values)
+            drawdowns = (running_max - values) / running_max
+            max_dd = float(np.max(drawdowns))
+
+            # Calmar ratio: annualised return / max drawdown
+            n_steps = len(values)
+            annual_return = (values[-1] / values[0]) ** (252 / n_steps) - 1 if n_steps > 1 else 0.0
+            calmar_ratio = annual_return / max_dd if max_dd > 1e-9 else 0.0
+
+            # Profit factor & PnL-weighted win rate (sell trades only)
+            gross_profit = 0.0
+            gross_loss = 0.0
             profitable_trades = 0
-            total_trades = 0
-            sell_trades = 0
-            buy_trades = 0
-            
-            print("\n=== Starting Win Rate Calculation ===")
-            print(f"Total trades to analyze: {len(self.trades)}")
-            
-            # Let's examine first few trades in detail
-            for idx, t in enumerate(self.trades[:5]):  # Look at first 5 trades
-                print(f"\nTrade {idx+1} Details:")
-                print(f"Raw success: {t.get('success')} (type: {type(t.get('success'))})")
-                print(f"Raw type: {t.get('type')} (type: {type(t.get('type'))})")
-                print(f"Raw profit: {t.get('profit')} (type: {type(t.get('profit'))})")
-            
-            # Now process all trades
-            for idx, t in enumerate(self.trades):
-                # Get raw values first for debugging
+            total_completed = 0
+
+            for t in self.trades:
                 raw_success = t.get("success")
-                raw_type = t.get("type")
-                raw_profit = t.get("profit")
-                
-                # Now process them
                 success = (isinstance(raw_success, bool) and raw_success) or \
-                         (isinstance(raw_success, str) and raw_success.lower() == "true")
-                
-                trade_type = str(raw_type).strip().lower() if raw_type else "none"
-                
+                          (isinstance(raw_success, str) and raw_success.lower() == "true")
+                if not success:
+                    continue
+                trade_type = str(t.get("type", "")).strip().lower()
+                if trade_type != "sell":
+                    continue
                 try:
-                    profit = float(str(raw_profit).replace("$", "").replace(",", "").strip()) \
-                            if raw_profit is not None else 0.0
+                    profit = float(t.get("profit", 0) or 0)
                 except (ValueError, TypeError):
                     profit = 0.0
-                
-                if success:
-                    total_trades += 1
-                    if trade_type == "sell":
-                        sell_trades += 1
-                        if profit > 0:
-                            profitable_trades += 1
-                            if idx < 5:  # Print details for first 5 profitable trades
-                                print(f"\nFound profitable sell trade #{idx+1}:")
-                                print(f"  Processed success: {success}")
-                                print(f"  Processed type: {trade_type}")
-                                print(f"  Processed profit: {profit}")
-                    elif trade_type == "buy":
-                        buy_trades += 1
-                        portfolio_before = float(t.get("portfolio_value_before", 0))
-                        portfolio_after = float(t.get("portfolio_value_after", 0))
-                        if portfolio_after > portfolio_before:
-                            profitable_trades += 1
-            
-            # Calculate win rate
-            win_rate = profitable_trades / total_trades if total_trades > 0 else 0.0
-            
-            print("\n=== Win Rate Calculation Summary ===")
-            print(f"Total trades processed: {len(self.trades)}")
-            print(f"Successful trades: {total_trades}")
-            print(f"Buy trades: {buy_trades}")
-            print(f"Sell trades: {sell_trades}")
-            print(f"Profitable trades: {profitable_trades}")
-            print(f"Final win rate: {win_rate:.1%}")
-            
-            metrics = {
-                'total_return': (values[-1] / values[0]) - 1,
+                total_completed += 1
+                if profit > 0:
+                    gross_profit += profit
+                    profitable_trades += 1
+                else:
+                    gross_loss += abs(profit)
+
+            win_rate = profitable_trades / total_completed if total_completed > 0 else 0.0
+            profit_factor = gross_profit / gross_loss if gross_loss > 1e-9 else (np.inf if gross_profit > 0 else 0.0)
+
+            return {
+                'total_return': total_return,
                 'sharpe_ratio': sharpe_ratio,
                 'sortino_ratio': sortino_ratio,
+                'calmar_ratio': calmar_ratio,
                 'max_drawdown': max_dd,
-                'total_trades': total_trades,
-                'win_rate': win_rate,  # This is now correctly stored
+                'profit_factor': profit_factor,
+                'total_trades': total_completed,
+                'win_rate': win_rate,
                 'final_balance': self.cash,
                 'final_portfolio_value': values[-1],
-                'successful_trades': total_trades,
-                'total_trade_attempts': len(self.trades)
+                'successful_trades': total_completed,
+                'total_trade_attempts': len(self.trades),
             }
-            
-            # Log the metrics we're returning
-            print("\nReturning metrics:")
-            for key, value in metrics.items():
-                print(f"{key}: {value}")
-                
-            return metrics
         except Exception as e:
-            print(f"Error calculating metrics: {str(e)}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Error calculating metrics: {e}", exc_info=True)
             return {
                 'total_return': 0.0,
                 'sharpe_ratio': 0.0,
                 'sortino_ratio': 0.0,
+                'calmar_ratio': 0.0,
                 'max_drawdown': 0.0,
+                'profit_factor': 0.0,
                 'total_trades': 0,
                 'win_rate': 0.0,
                 'final_balance': self.cash,
                 'final_portfolio_value': self.cash,
                 'successful_trades': 0,
-                'total_trade_attempts': len(self.trades)
+                'total_trade_attempts': len(self.trades),
             }
 
     def get_returns(self) -> pd.Series:
