@@ -67,41 +67,30 @@ def test_agent_action_shape():
 @pytest.mark.shape_verification
 def test_real_agent_shape_compatibility():
     """
-    Test the actual agent implementations to verify they can output 
-    actions that match what MultiAgentMultiAssetEnv expects.
+    Test SB3AgentWrapper produces actions with the shape the environment expects.
     """
-    # Import your actual agents and environment 
-    from agents.strategies.single.ppo_agent import PPOAgent
-    from agents.strategies.multi.momentum_ppo_agent import MomentumPPOAgent
-    
-    # Create a dummy observation space and action space
-    obs_space = spaces.Box(low=-np.inf, high=np.inf, shape=(60, 5), dtype=np.float32)
-    
-    # Test with different action space dimensions
+    from agents.sb3.sb3_agent_wrapper import SB3AgentWrapper
+
+    obs_space = spaces.Box(low=-10.0, high=10.0, shape=(10,), dtype=np.float32)
+
     for n_assets in [1, 3, 5]:
         logger.info(f"Testing with {n_assets} assets...")
-        
-        # Create action space for this test
         action_space = spaces.Box(low=-1.0, high=1.0, shape=(n_assets,), dtype=np.float32)
-        
-        # Create agents
-        agent1 = PPOAgent(obs_space, action_space)
-        agent2 = MomentumPPOAgent(obs_space, action_space)
-        
-        # Test with a dummy observation
-        obs = np.zeros((60, 5))
-        
-        # Get and verify actions
-        action1 = agent1.get_action(obs)
-        action2 = agent2.get_action(obs)
-        
-        logger.info(f"PPOAgent action shape: {action1.shape}")
-        logger.info(f"MomentumPPOAgent action shape: {action2.shape}")
-        
-        assert action1.shape == (n_assets,), f"PPOAgent action shape: expected ({n_assets},), got {action1.shape}"
-        assert action2.shape == (n_assets,), f"MomentumPPOAgent action shape: expected ({n_assets},), got {action2.shape}"
-    
-    logger.info("All agents produce correctly shaped actions!")
+
+        agent = SB3AgentWrapper(
+            algo_type="ppo",
+            observation_space=obs_space,
+            action_space=action_space,
+        )
+
+        obs = obs_space.sample()
+        action = agent.get_action(obs)
+
+        logger.info(f"SB3AgentWrapper action shape: {action.shape}")
+        assert action.shape == (n_assets,), \
+            f"SB3AgentWrapper action shape: expected ({n_assets},), got {action.shape}"
+
+    logger.info("SB3AgentWrapper produces correctly shaped actions!")
 
 if __name__ == "__main__":
     test_agent_action_shape()

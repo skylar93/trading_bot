@@ -301,6 +301,7 @@ def test_delete_run(mlflow_manager):
 def test_log_figure(mlflow_manager):
     """Test figure logging for both matplotlib and plotly"""
     import matplotlib.pyplot as plt
+    plotly = pytest.importorskip("plotly", reason="plotly not installed")
     import plotly.graph_objects as go
     
     # Test matplotlib figure

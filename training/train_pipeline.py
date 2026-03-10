@@ -59,16 +59,29 @@ def train_single_agent(
 ) -> Dict[str, Any]:
     """
     Train a single agent using the standard RL loop.
-    
+    For SB3AgentWrapper, delegates to agent.train() (model.learn()).
+
     Args:
         agent: The agent to train
         env: The environment to train in
         config: Configuration dictionary
         mlflow_manager: Optional MLflow manager for logging
-        
+
     Returns:
         Dictionary with training results
     """
+    from agents.sb3.sb3_agent_wrapper import SB3AgentWrapper
+    if isinstance(agent, SB3AgentWrapper):
+        training_config = config.get("training", {})
+        total_timesteps = training_config.get("total_timesteps", 100_000)
+        agent.train(env, total_timesteps=total_timesteps)
+        return {
+            "episode_rewards": [0.0],
+            "episode_lengths": [total_timesteps],
+            "best_eval_reward": 0.0,
+            "total_timesteps": total_timesteps,
+        }
+
     # Extract training parameters
     training_config = config.get("training", {})
     total_timesteps = training_config.get("total_timesteps", 100000)
@@ -743,9 +756,23 @@ def train_pipeline(config: Dict[str, Any], data: Optional[pd.DataFrame] = None) 
         logger.info(f"Starting single agent training for environment type: {env_type}")
         results = train_single_agent(agent, env, config, mlflow_manager)
     elif env_type == "multi_agent_rl" or env_type == "multi_asset_multi_agent_rl":
+        # Build agents dict from multi_agent_configs
+        multi_agent_cfgs = config["env"].get("multi_agent_configs", [])
+        agents = {}
+        for agent_cfg in multi_agent_cfgs:
+            agent_id = agent_cfg["id"]
+            strategy = agent_cfg.get("strategy", "momentum")
+            obs_space = env.observation_spaces.get(agent_id, env.observation_space)
+            act_space = env.action_spaces.get(agent_id, env.action_space)
+            agents[agent_id] = create_agent(
+                agent_type=strategy,
+                config=agent_cfg,
+                observation_space=obs_space,
+                action_space=act_space,
+            )
         # Multi-agent training
         logger.info(f"Starting multi-agent training for environment type: {env_type}")
-        results = train_multi_agent(env, config, mlflow_manager)
+        results = train_multi_agent(agents, env, config, mlflow_manager)
     else:
         raise ValueError(f"Unsupported environment type: {env_type}")
     

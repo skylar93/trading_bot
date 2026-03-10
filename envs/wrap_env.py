@@ -1,7 +1,13 @@
 import gymnasium as gym
 import numpy as np
+import torch
 from gymnasium import spaces
 from typing import Dict, Any, Tuple, Optional, Union, List, Callable
+
+try:
+    import mlflow as _mlflow
+except ImportError:
+    _mlflow = None  # type: ignore[assignment]
 
 
 class NormalizeObservation(gym.ObservationWrapper):
@@ -99,15 +105,15 @@ class NormalizeObservation(gym.ObservationWrapper):
 
     def reset(self, **kwargs):
         """Reset the environment and running statistics"""
-        obs = self.env.reset(**kwargs)
-        
+        obs, info = self.env.reset(**kwargs)
+
         # Reset running statistics
         obs_shape = self.observation_space.shape
         self.running_mean = np.zeros(obs_shape[-1], dtype=np.float32)
         self.running_std = np.ones(obs_shape[-1], dtype=np.float32)
         self.count = 0
-        
-        return self.observation(obs)
+
+        return self.observation(obs), info
 
 
 class StackObservation(gym.ObservationWrapper):
@@ -208,7 +214,8 @@ class MLflowLoggingWrapper(gym.Wrapper):
     def __init__(self, env, experiment_name="trading_bot"):
         super().__init__(env)
         self.experiment_name = experiment_name
-        mlflow.set_experiment(experiment_name)
+        if _mlflow is not None:
+            _mlflow.set_experiment(experiment_name)
         self.episode_count = 0
         self.step_count = 0
 
@@ -217,13 +224,14 @@ class MLflowLoggingWrapper(gym.Wrapper):
         obs, info = self.env.reset(**kwargs)
 
         # Log reset metrics
-        mlflow.log_metrics(
-            {
-                "initial_balance": info.get("balance", 0),
-                "initial_price": info.get("current_price", 0),
-            },
-            step=self.episode_count,
-        )
+        if _mlflow is not None:
+            _mlflow.log_metrics(
+                {
+                    "initial_balance": info.get("balance", 0),
+                    "initial_price": info.get("current_price", 0),
+                },
+                step=self.episode_count,
+            )
 
         return obs, info
 
@@ -234,27 +242,29 @@ class MLflowLoggingWrapper(gym.Wrapper):
         self.step_count += 1
 
         # Log step metrics
-        mlflow.log_metrics(
-            {
-                "step_reward": reward,
-                "portfolio_value": info.get("portfolio_value", 0),
-                "position_size": info.get("position_size", 0),
-            },
-            step=self.step_count,
-        )
+        if _mlflow is not None:
+            _mlflow.log_metrics(
+                {
+                    "step_reward": reward,
+                    "portfolio_value": info.get("portfolio_value", 0),
+                    "position_size": info.get("position_size", 0),
+                },
+                step=self.step_count,
+            )
 
         if terminated or truncated:
             self.episode_count += 1
             # Log episode metrics
-            mlflow.log_metrics(
-                {
-                    "episode_return": info["episode"]["r"],
-                    "episode_length": info["episode"]["l"],
-                    "total_trades": info.get("total_trades", 0),
-                    "win_rate": info.get("win_rate", 0),
-                },
-                step=self.episode_count,
-            )
+            if _mlflow is not None:
+                _mlflow.log_metrics(
+                    {
+                        "episode_return": info["episode"]["r"],
+                        "episode_length": info["episode"]["l"],
+                        "total_trades": info.get("total_trades", 0),
+                        "win_rate": info.get("win_rate", 0),
+                    },
+                    step=self.episode_count,
+                )
 
         return observation, reward, terminated, truncated, info
 

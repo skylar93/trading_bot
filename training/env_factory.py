@@ -161,22 +161,23 @@ def create_env(
     
     # Create environment based on type
     if env_type == "single_asset_rl":
-        # Create single-asset environment with only supported parameters
+        from envs.rewards import RewardConfig
+        reward_config = RewardConfig(
+            pnl_weight=env_config.get("pnl_weight", 0.4),
+            sharpe_weight=env_config.get("sharpe_weight", 0.3),
+            drawdown_weight=env_config.get("drawdown_weight", 0.2),
+            cost_weight=env_config.get("cost_weight", 0.1),
+        )
         env = SingleAssetRLTradingEnv(
             data=data,
             window_size=env_config.get("window_size", 20),
-            initial_capital=env_config.get("initial_balance", 10000.0),
+            initial_capital=env_config.get("initial_balance", env_config.get("initial_capital", 10000.0)),
             trading_fee=env_config.get("trading_fee", 0.001),
             max_position_size=env_config.get("max_position_size", 1.0),
-            # Risk reward parameters
-            risk_adjusted_reward=env_config.get("risk_adjusted_reward", True),
-            sharpe_lookback=env_config.get("sharpe_lookback", 30),
-            sharpe_weight=env_config.get("sharpe_weight", 0.5),
-            drawdown_penalty=env_config.get("drawdown_penalty", True),
-            # Friction parameters
+            reward_config=reward_config,
             apply_slippage=env_config.get("apply_slippage", True),
             slippage_factor=env_config.get("slippage_factor", 0.0005),
-            partial_fills=env_config.get("partial_fills", True)
+            partial_fills=env_config.get("partial_fills", True),
         )
         
         logger.info(f"Created single-agent environment: {env}")

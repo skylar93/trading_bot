@@ -126,12 +126,11 @@ class TestSB3Training:
         assert os.path.exists(f"{save_path}.zip")
 
         # Load into a fresh agent and predict
-        agent2 = SB3AgentWrapper(
-            algo_type="ppo",
+        agent2 = SB3AgentWrapper.load(
+            save_path,
             observation_space=env.observation_space,
             action_space=env.action_space,
         )
-        agent2.load(save_path, env=env)
         obs = env.reset()
         action, _ = agent2.model.predict(obs, deterministic=True)
         assert action is not None

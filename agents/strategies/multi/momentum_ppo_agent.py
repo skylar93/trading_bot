@@ -96,7 +96,7 @@ class MomentumPPOAgent(BaseAgent):
         # Log unused config keys
         unused_keys = [key for key in kwargs.keys() if key not in self.__init__.__code__.co_varnames]
         if unused_keys:
-            self.logger.warning(f"Ignoring unused config keys in MomentumPPOAgent: {unused_keys}")
+            logger.warning(f"Ignoring unused config keys in MomentumPPOAgent: {unused_keys}")
         
         logger.info(
             f"Initialized MomentumPPOAgent with window={self.momentum_window}, "
@@ -525,3 +525,11 @@ class MomentumPPOAgent(BaseAgent):
             }
             
         return super().learn_from_shared_experience(relevant_exp)
+
+    def save(self, path: str) -> None:
+        """No-op: heuristic agent has no model weights to persist."""
+        pass
+
+    def load(self, path: str) -> None:
+        """No-op: heuristic agent has no model weights to load."""
+        pass

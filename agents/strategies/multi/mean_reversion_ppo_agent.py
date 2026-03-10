@@ -100,7 +100,7 @@ class MeanReversionPPOAgent(BaseAgent):
         # Log unused config keys
         unused_keys = [key for key in kwargs.keys() if key not in self.__init__.__code__.co_varnames]
         if unused_keys:
-            self.logger.warning(f"Ignoring unused config keys in MeanReversionPPOAgent: {unused_keys}")
+            logger.warning(f"Ignoring unused config keys in MeanReversionPPOAgent: {unused_keys}")
         
         logger.info(
             f"Initialized MeanReversionPPOAgent with RSI window={self.rsi_window}, "
@@ -496,3 +496,11 @@ class MeanReversionPPOAgent(BaseAgent):
             return super().learn_from_shared_experience(filtered_buffer)
         else:
             return {}
+
+    def save(self, path: str) -> None:
+        """No-op: heuristic agent has no model weights to persist."""
+        pass
+
+    def load(self, path: str) -> None:
+        """No-op: heuristic agent has no model weights to load."""
+        pass

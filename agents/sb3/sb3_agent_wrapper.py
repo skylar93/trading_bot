@@ -107,9 +107,7 @@ class SB3AgentWrapper(BaseAgent):
 
     def get_action(self, observation: np.ndarray, deterministic: bool = False) -> np.ndarray:
         if self.model is None:
-            raise RuntimeError(
-                "Model not initialized. Call train() or load() first."
-            )
+            self._lazy_init()
         action, _ = self.model.predict(observation, deterministic=deterministic)
         return action
 
@@ -150,7 +148,7 @@ class SB3AgentWrapper(BaseAgent):
 
     def save(self, path: str) -> None:
         if self.model is None:
-            raise RuntimeError("No model to save. Train first.")
+            self._lazy_init()
         os.makedirs(os.path.dirname(path) if os.path.dirname(path) else ".", exist_ok=True)
         self.model.save(path)
         logger.info(f"Model saved to {path}")
@@ -158,6 +156,34 @@ class SB3AgentWrapper(BaseAgent):
     def load(self, path: str, env=None) -> None:
         self.model = self._algo_class.load(path, env=env, device=self._device)
         logger.info(f"Model loaded from {path}")
+
+    @classmethod
+    def load(  # type: ignore[override]  # noqa: F811
+        cls,
+        path: str,
+        observation_space: gym.spaces.Space,
+        action_space: gym.spaces.Space,
+        algo_type: str = "ppo",
+        device: str = "auto",
+    ) -> "SB3AgentWrapper":
+        """Classmethod: load a saved SB3 model and wrap it in a new instance."""
+        algo_class = _get_algo_class(algo_type)
+        wrapper = cls.__new__(cls)
+        # Minimal init without calling BaseAgent constructor
+        wrapper.observation_space = observation_space
+        wrapper.action_space = action_space
+        wrapper.algo_type = algo_type.lower().replace("sb3_", "")
+        wrapper._algo_class = algo_class
+        wrapper._device = device
+        wrapper._sb3_params = {}
+        wrapper._feature_extractor = None
+        wrapper._feature_extractor_kwargs = {}
+        wrapper._policy = "MlpPolicy"
+        wrapper._policy_kwargs = {}
+        wrapper._verbose = 0
+        wrapper.model = algo_class.load(path, device=device)
+        logger.info(f"Loaded {algo_type.upper()} model from {path}")
+        return wrapper
 
     def train_step(self, experience: Dict[str, Any]) -> Dict[str, float]:
         raise NotImplementedError(
@@ -168,6 +194,30 @@ class SB3AgentWrapper(BaseAgent):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _lazy_init(self) -> None:
+        """Initialise the SB3 model with a DummyVecEnv wrapping the stored spaces."""
+        from stable_baselines3.common.vec_env import DummyVecEnv
+        import gymnasium as gym
+
+        def _make_env():
+            class _FakeEnv(gym.Env):
+                def __init__(self, obs_space, act_space):
+                    self.observation_space = obs_space
+                    self.action_space = act_space
+
+                def reset(self, **kwargs):
+                    return self.observation_space.sample(), {}
+
+                def step(self, action):
+                    obs = self.observation_space.sample()
+                    return obs, 0.0, True, False, {}
+
+            return _FakeEnv(self.observation_space, self.action_space)
+
+        dummy_env = DummyVecEnv([_make_env])
+        self._create_model(dummy_env)
+        logger.debug("Lazy-initialised model via DummyVecEnv")
 
     def _create_model(self, env) -> None:
         """Instantiate the SB3 model with the provided environment."""
