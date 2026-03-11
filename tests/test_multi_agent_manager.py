@@ -31,68 +31,21 @@ from agents.strategies.agent_factory import create_agent
 logging.basicConfig(level=logging.INFO)
 
 # Import dependencies with fallback for testing
-try:
-    from agents.strategies.advanced.meta_agent import MetaAgent
-    from agents.strategies.base_agent import BaseAgent
-    USE_REAL_AGENTS = False
-except ImportError:
-    logging.warning("Using mock agents for testing")
-    from agents.strategies.base_agent import BaseAgent
-    from agents.strategies.single.dummy_agent import DummyAgent
-    from agents.strategies.test_agent_factory import create_test_multi_agent_manager
-    
-    # Create mock classes for testing
-    class MockMetaAgent(BaseAgent):
-        def __init__(self, *args, **kwargs):
-            super().__init__(dummy_obs_space, dummy_act_space)
-        
-        def get_action(self, *args, **kwargs):
-            return np.array([0.0])
-            
-        def train_step(self, *args, **kwargs):
-            return {"loss": 0.0}
-    
-    class MockMultiAgentManager:
-        def __init__(self, agent_configs, **kwargs):
-            self.agents = {}
-            self.meta_agent_id = None
-            for cfg in agent_configs:
-                agent_id = cfg.get("id", f"agent_{len(self.agents)}")
-                self.agents[agent_id] = DummyAgent(dummy_obs_space, dummy_act_space)
-                if cfg.get("type") == "meta":
-                    self.meta_agent_id = agent_id
-            
-            self.agent_performance = {agent_id: {"weight": 1.0, "returns": []} for agent_id in self.agents}
-            self.action_correlation = {agent_id: {} for agent_id in self.agents}
-            self.recent_actions = {agent_id: [] for agent_id in self.agents}
-            self.synergy_score = 0.5
-            
-        def act(self, observations, deterministic=False):
-            return {agent_id: agent.get_action(observations[agent_id], deterministic) 
-                   for agent_id, agent in self.agents.items()}
-                   
-        def train_step(self, experiences):
-            return {agent_id: {"loss": 0.0} for agent_id in self.agents}
-            
-        def _update_action_correlations(self):
-            pass
-            
-        def _update_weights_based_on_performance(self, returns):
-            pass
-            
-        def _identify_market_regime(self, state):
-            return "ranging"
-            
-        def _calculate_volatility(self, state):
-            return 0.01
-            
-        def _calculate_trend(self, state):
-            return 0.0
-    
-    # Use mocks instead of real classes
-    MultiAgentManager = MockMultiAgentManager
-    MetaAgent = MockMetaAgent
-    USE_REAL_AGENTS = False
+from agents.strategies.base_agent import BaseAgent
+from agents.strategies.test_agent_factory import create_test_multi_agent_manager
+
+# MetaAgent removed; define a minimal mock used by meta-agent tests
+class MetaAgent(BaseAgent):
+    def __init__(self, *args, **kwargs):
+        super().__init__(dummy_obs_space, dummy_act_space)
+
+    def get_action(self, *args, **kwargs):
+        return np.array([0.0])
+
+    def train_step(self, *args, **kwargs):
+        return {"loss": 0.0}
+
+USE_REAL_AGENTS = False
 
 # Dummy spaces for testing
 dummy_obs_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(10,), dtype=np.float32)

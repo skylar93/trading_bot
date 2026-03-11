@@ -3,13 +3,13 @@ import torch
 import torch.nn as nn
 from typing import Dict, Any, Optional, Tuple
 import logging
-from agents.strategies.single.ppo_agent import PPOAgent
+from agents.strategies.base_agent import BaseAgent
 from gymnasium import spaces
 import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-class MeanReversionPPOAgent(PPOAgent):
+class MeanReversionPPOAgent(BaseAgent):
     """
     Mean Reversion strategy PPO agent that specializes in trading when assets deviate from their mean.
     Inherits from base PPO agent but adds mean reversion specific features and logic.
@@ -82,22 +82,10 @@ class MeanReversionPPOAgent(PPOAgent):
         else:
             raise ValueError("Observation space must be Box")
         
-        # Initialize base PPO agent with flattened observation space
+        # Initialize BaseAgent (PPO-specific logic removed; will use SB3 in Phase 2)
         super().__init__(
-            observation_space=flat_obs_space,
+            observation_space=observation_space,
             action_space=action_space,
-            learning_rate=learning_rate,
-            gamma=gamma,
-            gae_lambda=gae_lambda,
-            clip_epsilon=clip_epsilon,
-            c1=c1,
-            c2=c2,
-            c3=c3,
-            batch_size=batch_size,
-            n_epochs=n_epochs,
-            target_kl=target_kl,
-            device=device,
-            **kwargs
         )
         
         # Mean reversion specific parameters
@@ -112,7 +100,7 @@ class MeanReversionPPOAgent(PPOAgent):
         # Log unused config keys
         unused_keys = [key for key in kwargs.keys() if key not in self.__init__.__code__.co_varnames]
         if unused_keys:
-            self.logger.warning(f"Ignoring unused config keys in MeanReversionPPOAgent: {unused_keys}")
+            logger.warning(f"Ignoring unused config keys in MeanReversionPPOAgent: {unused_keys}")
         
         logger.info(
             f"Initialized MeanReversionPPOAgent with RSI window={self.rsi_window}, "
@@ -438,20 +426,8 @@ class MeanReversionPPOAgent(PPOAgent):
         
         modified_reward = reward + reversion_reward
         
-        # Train with modified states and reward
-        metrics = super().train_step(
-            augmented_state.reshape(-1), action, modified_reward, augmented_next_state.reshape(-1), done
-        )
-        
-        # If training failed, return empty metrics
-        if metrics is None:
-            return {
-                "reversion_reward": float(reversion_reward),
-                "rsi_value": float(rsi),
-                "bb_upper_dist": float(bb_upper_dist),
-                "bb_lower_dist": float(bb_lower_dist)
-            }
-        
+        # NOTE: Core RL training delegated to SB3 in Phase 2.
+        metrics = {}
         # Add reversion-specific metrics
         if len(state_reversion.shape) > 1:
             metrics.update({
@@ -520,3 +496,11 @@ class MeanReversionPPOAgent(PPOAgent):
             return super().learn_from_shared_experience(filtered_buffer)
         else:
             return {}
+
+    def save(self, path: str) -> None:
+        """No-op: heuristic agent has no model weights to persist."""
+        pass
+
+    def load(self, path: str) -> None:
+        """No-op: heuristic agent has no model weights to load."""
+        pass

@@ -5,6 +5,12 @@ from typing import Dict, Any, Tuple, Optional
 import logging
 import collections
 
+from envs.rewards import MultiComponentReward, RewardConfig
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from training.regime.regime_detector import RegimeDetector
+
 logger = logging.getLogger(__name__)
 
 
@@ -42,28 +48,21 @@ class SingleAssetRLTradingEnv(gym.Env):
         trading_fee: float = 0.001,
         window_size: int = 20,
         max_position_size: float = 1.0,
-        # Risk reward shaping parameters
-        risk_adjusted_reward: bool = True,
-        sharpe_lookback: int = 30,
-        sharpe_weight: float = 0.5,
-        drawdown_penalty: bool = True,
-        max_drawdown_penalty_threshold: float = 0.1,
         # Friction parameters
         apply_slippage: bool = True,
         slippage_factor: float = 0.0005,
         partial_fills: bool = True,
         min_fill_rate: float = 0.8,
         volume_slippage_factor: float = 0.1,
-        # Additional stability parameters
-        scale_ohlcv: bool = True,
-        price_scale_factor: float = 1000.0,
-        volume_scale_factor: float = 1e6,
+        # Reward configuration
+        reward_config: Optional[RewardConfig] = None,
+        # Stability
         min_episode_steps: int = 30,
         reward_scale: float = 1.0,
         # Optional pre-computed sentiment features (Week 13)
         sentiment_data: Optional[pd.DataFrame] = None,
     ):
-        """Initialize environment
+        """Initialize environment.
 
         Args:
             data: DataFrame with OHLCV data (optional)
@@ -71,21 +70,25 @@ class SingleAssetRLTradingEnv(gym.Env):
             trading_fee: Trading fee as fraction of trade value
             window_size: Number of time steps to include in state
             max_position_size: Maximum position size as fraction of capital
-            risk_adjusted_reward: Whether to use risk-adjusted rewards
-            sharpe_lookback: Number of steps to use for rolling Sharpe calculation
-            sharpe_weight: Weight of Sharpe ratio in reward calculation (0-1)
-            drawdown_penalty: Whether to apply drawdown penalties
-            max_drawdown_penalty_threshold: Drawdown threshold for applying penalties
             apply_slippage: Whether to apply slippage to trades
             slippage_factor: Base slippage factor (as fraction of price)
             partial_fills: Whether to simulate partial fills
             min_fill_rate: Minimum fill rate for partial fills (0-1)
             volume_slippage_factor: Factor for volume-based slippage calculation
-            scale_ohlcv: Whether to scale OHLCV data to prevent numerical instability
-            price_scale_factor: Factor to scale price data (OHLC)
-            volume_scale_factor: Factor to scale volume data
+            reward_config: MultiComponentReward configuration (uses defaults if None)
             min_episode_steps: Minimum number of steps before allowing early termination
-            reward_scale: Factor to scale rewards (smaller values = more stable)
+
+        Observations are log-return based, bounded to [-10, 10]:
+            col 0: log(open[t] / close[t-1])
+            col 1: log(high[t] / close[t-1])
+            col 2: log(low[t]  / close[t-1])
+            col 3: log(close[t] / close[t-1])
+            col 4: log(vol[t]  / mean_vol_in_window)
+
+        If *regime_detector* is provided the observation space is extended to
+        (window_size, 8) with the last 3 columns being the current regime
+        probabilities [P(low_vol), P(medium_vol), P(high_vol)] broadcast
+        across every row in the window.
         """
         super().__init__()
         
@@ -125,27 +128,23 @@ class SingleAssetRLTradingEnv(gym.Env):
         self.trading_fee = trading_fee
         self.window_size = window_size
         self.max_position_size = max_position_size
-        
-        # Risk reward parameters
-        self.risk_adjusted_reward = risk_adjusted_reward
-        self.sharpe_lookback = sharpe_lookback
-        self.sharpe_weight = sharpe_weight
-        self.drawdown_penalty = drawdown_penalty
-        self.max_drawdown_penalty_threshold = max_drawdown_penalty_threshold
-        
+
         # Friction parameters
         self.apply_slippage = apply_slippage
         self.slippage_factor = slippage_factor
         self.partial_fills = partial_fills
         self.min_fill_rate = min_fill_rate
         self.volume_slippage_factor = volume_slippage_factor
-        
-        # Stability parameters
-        self.scale_ohlcv = scale_ohlcv
-        self.price_scale_factor = price_scale_factor
-        self.volume_scale_factor = volume_scale_factor
+
+        # Stability
         self.min_episode_steps = min_episode_steps
-        self.reward_scale = reward_scale
+
+        # Reward function
+        self.reward_fn = MultiComponentReward(reward_config or RewardConfig())
+
+        # Regime detector (optional — Week 6)
+        self.regime_detector = regime_detector
+        self._n_obs_features = 8 if regime_detector is not None else 5
 
         # Sentiment data (optional, pre-computed and aligned to price data)
         self.sentiment_data = None
@@ -173,17 +172,14 @@ class SingleAssetRLTradingEnv(gym.Env):
             dtype=np.float32
         )
 
-        # Initialize state variables
+        # State variables (set in reset)
         self.current_step = None
         self.current_position = None
         self.current_capital = None
         self.portfolio_value = None
-        self.previous_portfolio_value = None  # Added to track previous portfolio value
+        self.previous_portfolio_value = None
         self.done = None
         self.trades = []
-        
-        # Risk tracking variables
-        self.returns_buffer = collections.deque(maxlen=sharpe_lookback)
         self.peak_portfolio_value = None
         self.last_trade_size = 0
         self.last_fill_rate = 1.0
@@ -192,7 +188,7 @@ class SingleAssetRLTradingEnv(gym.Env):
         logger.info(
             f"Initialized TradingEnvironment with window_size={window_size}, "
             f"initial_capital={initial_capital}, trading_fee={trading_fee}, "
-            f"risk_adjusted_reward={risk_adjusted_reward}, apply_slippage={apply_slippage}"
+            f"apply_slippage={apply_slippage}"
         )
         
         # STEP 1-A: Check if data is long enough
@@ -220,13 +216,13 @@ class SingleAssetRLTradingEnv(gym.Env):
         self.previous_portfolio_value = self.initial_capital
         self.done = False
         self.trades = []
-        
-        # Reset risk tracking variables
-        self.returns_buffer.clear()
         self.peak_portfolio_value = self.initial_capital
         self.last_trade_size = 0
         self.last_fill_rate = 1.0
         self.last_slippage = 0.0
+
+        # Reset reward function internal state
+        self.reward_fn.reset()
 
         # Get observation using _get_observation which handles padding
         observation = self._get_observation()
@@ -288,17 +284,7 @@ class SingleAssetRLTradingEnv(gym.Env):
         self.last_trade_size = 0
         self.last_fill_rate = 1.0
         self.last_slippage = 0.0
-        
-        # Initialize reward debug information
-        reward_debug = {
-            "basic_reward": 0.0,
-            "sharpe_component": 0.0,
-            "drawdown_penalty": 0.0,
-            "final_reward": 0.0,
-            "portfolio_change": 0.0,
-            "pre_portfolio": self.previous_portfolio_value,
-            "post_portfolio": 0.0,
-        }
+        step_trade_cost = 0.0  # accumulated transaction cost this step
         
         # Execute trade if there is a position change
         if abs(actual_change) > 1e-8:  # Small epsilon to handle float precision
@@ -423,7 +409,8 @@ class SingleAssetRLTradingEnv(gym.Env):
             self.current_capital += capital_change
             # Use the actual_change after fill rate application
             self.current_position += actual_change
-            
+            step_trade_cost = trade_cost  # capture for reward calculation
+
             trade_log_details["capital_after"] = self.current_capital
             trade_log_details["position_after"] = self.current_position
 
@@ -516,229 +503,61 @@ class SingleAssetRLTradingEnv(gym.Env):
              self.portfolio_value = 1e10 # 상한선 설정
              final_reward_on_termination = -5.0 
 
-        # 에피소드 강제 종료 조건 확인 (최소 스텝 이후)
+        # Episode forced termination check (after min_episode_steps)
         min_steps_elapsed = (self.current_step - self.window_size) >= self.min_episode_steps
         if FORCE_TERMINATION and min_steps_elapsed:
             self.done = True
-            observation = self._get_observation() # 최종 상태 가져오기
+            observation = self._get_observation()
             info = self._get_info()
             info["early_termination_reason"] = TERMINATION_REASON
-            info["reward_debug"] = reward_debug # Add reward debug info
-            info["reward_debug"]["final_reward"] = final_reward_on_termination # Overwrite final reward
-            
-            # 종료 시 최종 보상을 설정 (위에서 정의한 값 사용)
-            # reward_debug 업데이트는 생략하거나 기본값으로 둘 수 있음
-            # 주의: 이 return 문은 reward 계산 로직 전에 위치해야 함
-            return observation, final_reward_on_termination, self.done, False, info
+            penalty = (
+                self.reward_fn.config.bankruptcy_penalty
+                if TERMINATION_REASON == "bankruptcy"
+                else self.reward_fn.config.nan_inf_penalty
+            )
+            return observation, penalty, self.done, False, info
         elif FORCE_TERMINATION and not min_steps_elapsed:
-            self.logger.warning(f"Portfolio value issue detected ({TERMINATION_REASON}) but delaying termination until min_steps {self.min_episode_steps} reached.")
-            # 경고는 하지만 일단 진행 (최소 스텝 보장 위해). 단, reward 계산 시 문제 발생 가능성 있음.
-            # 이 경우, 아래 reward 계산 로직에서 여전히 문제가 발생할 수 있으므로 주의 필요.
-            # 안전하게 하려면, 문제가 발생했을 때 포트폴리오 가치를 이전 값으로 되돌리는 로직 유지
-            if TERMINATION_REASON == "bankruptcy" or TERMINATION_REASON == "nan_inf_portfolio":
-                 self.portfolio_value = max(CRITICAL_LOW_THRESHOLD, self.previous_portfolio_value)
-                 self.logger.warning(f"Reverted portfolio value to {self.portfolio_value:.4f} temporarily.")
+            self.logger.warning(
+                f"Portfolio issue ({TERMINATION_REASON}) but delaying termination until "
+                f"min_steps {self.min_episode_steps} reached."
+            )
+            if TERMINATION_REASON in ("bankruptcy", "nan_inf_portfolio"):
+                self.portfolio_value = max(CRITICAL_LOW_THRESHOLD, self.previous_portfolio_value)
+                self.logger.warning(f"Reverted portfolio value to {self.portfolio_value:.4f} temporarily.")
 
 
         # --- END: 강화된 포트폴리오 가치 체크 ---
-        
-        # Update peak portfolio value for drawdown calculation
-        # 포트폴리오 가치가 유효한 경우에만 peak 업데이트
-        if not (np.isnan(self.portfolio_value) or np.isinf(self.portfolio_value) or self.portfolio_value <= 0):
-             self.peak_portfolio_value = max(self.peak_portfolio_value, self.portfolio_value)
 
-        # Calculate basic reward (change in portfolio value) using log returns with ratio clipping
-        eps = 1e-8 # Small epsilon to prevent division by zero
-        current_val = max(self.portfolio_value, eps)
-        previous_val = max(self.previous_portfolio_value, eps)
+        # Update peak portfolio value (only when valid)
+        if np.isfinite(self.portfolio_value) and self.portfolio_value > 0:
+            self.peak_portfolio_value = max(self.peak_portfolio_value, self.portfolio_value)
 
-        ratio = current_val / previous_val
+        # Compute reward via MultiComponentReward
+        reward, reward_components = self.reward_fn.compute(
+            portfolio_value=self.portfolio_value,
+            prev_portfolio_value=self.previous_portfolio_value,
+            peak_portfolio_value=self.peak_portfolio_value,
+            trade_cost=step_trade_cost,
+        )
 
-        # Winsorization/Clipping the ratio before taking log
-        # (예: 99% 손실 ~ 100배 이익 범위까지만 허용)
-        ratio_clipped = np.clip(ratio, 0.01, 100.0) 
-
-        log_return = np.log(ratio_clipped) # 이제 log_return 값은 극단적으로 튀지 않음
-
-        reward_step_raw = log_return # 스케일링 없이 사용
-
-        # 클리핑 범위는 Winsorization 후의 로그 리턴 범위에 맞게 설정 (예: log(0.01) ~ log(100))
-        # 이 범위는 약 -4.6 ~ +4.6 이므로, [-5.0, 5.0] 정도면 충분할 수 있음
-        REWARD_CLIP_RANGE = 5.0 
-
-        # Final clipping check (should rarely trigger now)
-        if np.isnan(reward_step_raw) or np.isinf(reward_step_raw) or abs(reward_step_raw) > REWARD_CLIP_RANGE:
-             self.logger.warning(f"⚠️ CLAMPED LOG RETURN after ratio clipping: {reward_step_raw:.4f}, capping to range [{-REWARD_CLIP_RANGE}, {REWARD_CLIP_RANGE}]")
-             if np.isnan(reward_step_raw):
-                 reward_step = 0.0
-             else:
-                 reward_step = np.clip(reward_step_raw, -REWARD_CLIP_RANGE, REWARD_CLIP_RANGE)
-        else:
-             reward_step = reward_step_raw
-
-        # reward_scale 적용 (이건 유지하거나 필요시 조정)
-        reward_step = reward_step * self.reward_scale
-            
-        # Update reward debug information
-        reward_debug["basic_reward"] = reward_step # Store the final scaled and clipped reward
-        # Store the unscaled log return for comparison
-        reward_debug["portfolio_change"] = log_return 
-        reward_debug["post_portfolio"] = self.portfolio_value
-        
-        # Update returns buffer for Sharpe calculation
-        # Use the scaled and clipped reward_step for the buffer
-        self.returns_buffer.append(reward_step) 
-        
-        # Calculate final reward with risk adjustment
-        try:
-            reward = self._calculate_risk_adjusted_reward(reward_step, reward_debug)
-            
-            # Apply final tighter reward clipping (±5 instead of ±100)
-            if np.isnan(reward) or np.isinf(reward) or abs(reward) > 5.0:
-                self.logger.warning(f"❌ FINAL REWARD IS INVALID: {reward}, fallback to [-5, 5]")
-                if np.isnan(reward):
-                    reward = 0.0
-                else:
-                    reward = np.clip(reward, -5.0, 5.0)
-        except Exception as e:
-            self.logger.error(f"❌ ERROR calculating risk-adjusted reward: {str(e)}")
-            # Use the adjusted clip range for the fallback reward
-            reward = np.clip(reward_step, -REWARD_CLIP_RANGE * self.reward_scale, REWARD_CLIP_RANGE * self.reward_scale) if not np.isnan(reward_step) else 0.0
-        
-        # Update info with reward debug
         observation = self._get_observation()
         info = self._get_info()
-        info["reward_debug"] = reward_debug
-        
-        # If we decided self.done = True above, we can forcibly end now
-        if self.done and self.current_step < len(self.data):  # Only early termination, not normal end
-            # Smaller penalty for capital <= 1.0
-            if self.current_capital <= 1.0:
-                reward = -1.0  # Reduced from -10.0 to -1.0 for stability
-            elif self.portfolio_value < 1.0:
-                reward = -0.5  # Reduced from -5.0 to -0.5 for stability
+        info["reward_components"] = reward_components
 
-            observation = self._get_observation()
-            info = self._get_info()
-            info["reward_debug"] = reward_debug
-            info["early_termination"] = True  # Add flag for agent to know this was early termination
+        # Early termination (capital gone, min_steps already passed)
+        if self.done and self.current_step < len(self.data):
+            penalty = self.reward_fn.config.bankruptcy_penalty
+            info["early_termination"] = True
+            return observation, penalty, True, False, info
 
-            return observation, reward, True, False, info
-        
-        # DEBUG: Log step summary periodically
         if self.current_step % 10 == 0:
             self.logger.info(
                 f"🔄 STEP {self.current_step}: portfolio={self.portfolio_value:.2f}, "
-                f"position={self.current_position:.4f}, reward={reward:.4f}"
+                f"position={self.current_position:.4f}, reward={reward:.4f}, "
+                f"components={reward_components}"
             )
-            self.logger.info(f"📈 REWARD DEBUG: {reward_debug}")
-        
-        return observation, reward, self.done, False, info
 
-    def _calculate_risk_adjusted_reward(self, basic_reward: float, reward_debug: dict = None) -> float:
-        """
-        Calculate risk-adjusted reward incorporating Sharpe ratio and drawdown penalties.
-        
-        Args:
-            basic_reward: The basic reward (change in portfolio value)
-            reward_debug: Optional dictionary to store reward components for debugging
-            
-        Returns:
-            float: Risk-adjusted reward
-        """
-        # Start with basic reward
-        final_reward = basic_reward
-        
-        # Calculate Sharpe component if enabled and we have enough data
-        sharpe_component = 0.0
-        if self.risk_adjusted_reward and len(self.returns_buffer) > 3:
-            try:
-                # Calculate mean and standard deviation of returns
-                returns_array = np.array(list(self.returns_buffer))
-                
-                # Check for NaN/Inf values in returns buffer
-                if np.any(np.isnan(returns_array)) or np.any(np.isinf(returns_array)):
-                    self.logger.warning(f"❌ NaN/Inf values in returns buffer: {returns_array}")
-                    # Clean up the returns array
-                    returns_array = np.array([r for r in returns_array if not np.isnan(r) and not np.isinf(r)])
-                    if len(returns_array) < 3:
-                        # Not enough valid returns, skip Sharpe calculation
-                        if reward_debug is not None:
-                            reward_debug["sharpe_component"] = 0.0
-                        return basic_reward
-                
-                mean_return = np.mean(returns_array)
-                std_return = np.std(returns_array) + 1e-8  # avoid division by zero
-                
-                # DEBUG: Log Sharpe calculation details
-                self.logger.debug(f"📊 SHARPE CALC: mean={mean_return:.6f}, std={std_return:.6f}, n={len(returns_array)}")
-                
-                sharpe_proxy = mean_return / std_return
-                
-                # Avoid extreme values
-                sharpe_proxy = np.clip(sharpe_proxy, -10.0, 10.0)
-                sharpe_component = sharpe_proxy
-                
-                # Mix in the Sharpe component
-                if self.sharpe_weight > 0:
-                    final_reward = (1 - self.sharpe_weight) * basic_reward + self.sharpe_weight * sharpe_proxy
-                    
-                # DEBUG: Log Sharpe contribution
-                self.logger.debug(f"📈 SHARPE CONTRIB: sharpe={sharpe_proxy:.4f}, weight={self.sharpe_weight:.2f}")
-                
-                # Store in debug info if provided
-                if reward_debug is not None:
-                    reward_debug["sharpe_component"] = sharpe_component
-            except Exception as e:
-                self.logger.error(f"❌ ERROR in Sharpe calculation: {str(e)}")
-                # Keep the basic reward if there's an error
-                if reward_debug is not None:
-                    reward_debug["sharpe_component"] = 0.0
-        
-        # Calculate drawdown penalty if enabled
-        drawdown_penalty = 0.0
-        if self.drawdown_penalty and self.peak_portfolio_value > 0:
-            try:
-                drawdown = (self.peak_portfolio_value - self.portfolio_value) / self.peak_portfolio_value
-                
-                # DEBUG: Log drawdown details
-                self.logger.debug(f"📉 DRAWDOWN: current={drawdown:.4f}, threshold={self.max_drawdown_penalty_threshold:.4f}")
-                
-                # Apply penalty if drawdown exceeds threshold
-                if drawdown > self.max_drawdown_penalty_threshold:
-                    # Penalty scales with severity of drawdown
-                    penalty_factor = 1.0 + (drawdown - self.max_drawdown_penalty_threshold) * 10.0
-                    # Scale the penalty based on the drawer threshold
-                    penalty = -0.1 * penalty_factor * drawdown
-                    
-                    # Clip penalty to prevent extreme values
-                    penalty = np.clip(penalty, -1.0, 0.0)
-                    
-                    # DEBUG: Log penalty details
-                    self.logger.debug(f"⚠️ DRAWDOWN PENALTY: factor={penalty_factor:.4f}, penalty={penalty:.4f}")
-                    
-                    drawdown_penalty = penalty
-                    final_reward += penalty
-                    
-                # Store in debug info if provided
-                if reward_debug is not None:
-                    reward_debug["drawdown_penalty"] = drawdown_penalty
-            except Exception as e:
-                self.logger.error(f"❌ ERROR in drawdown calculation: {str(e)}")
-                # Keep the reward without drawdown penalty if there's an error
-                if reward_debug is not None:
-                    reward_debug["drawdown_penalty"] = 0.0
-        
-        # Final safety check for reward value
-        if np.isnan(final_reward) or np.isinf(final_reward):
-            self.logger.warning(f"❌ INVALID FINAL REWARD: {final_reward}, using basic reward")
-            final_reward = basic_reward
-            
-        # Store in debug info if provided
-        if reward_debug is not None:
-            reward_debug["final_reward"] = final_reward
-        
-        return final_reward
+        return observation, reward, self.done, False, info
 
     def _calculate_fill_rate(self, trade_size: float, volume: float) -> float:
         """
@@ -858,34 +677,42 @@ class SingleAssetRLTradingEnv(gym.Env):
         return base_fee * (1.0 - discount)
 
     def _get_observation(self) -> np.ndarray:
-        """Get current observation (window of OHLCV data)
-        
-        Returns:
-            np.ndarray: Observation with shape (window_size, 5) containing OHLCV data.
-            If current_step < window_size, the observation is padded with the first row's data.
-            
-        Note:
-            The policy network expects a flattened observation vector of shape (window_size * 5,)
-            but we return the original shape (window_size, 5) here since the policy network
-            will handle reshaping internally.
+        """Return log-return-based observation, clipped to [-10, 10].
+
+        Shape (window_size, 5) normally, or (window_size, 8) when a
+        regime_detector is attached (+3 regime probability columns).
+
+        Features per timestep (all relative to previous close):
+            col 0: log(open[t]  / close[t-1])
+            col 1: log(high[t]  / close[t-1])
+            col 2: log(low[t]   / close[t-1])
+            col 3: log(close[t] / close[t-1])
+            col 4: log(vol[t]   / mean_vol_in_window)
+
+        When regime_detector is set (cols 5-7, same value broadcast over all rows):
+            col 5: P(low_vol)
+            col 6: P(medium_vol)
+            col 7: P(high_vol)
+
+        For t=0 in the window, close[t-1] is data[start_idx-1] if available,
+        otherwise data[start_idx] itself (giving log-return = 0 for that row).
         """
+        eps = 1e-10
         start_idx = self.current_step - self.window_size
         end_idx = self.current_step
-        
-        # Handle negative start index with padding
-        if start_idx < 0:
-            pad_size = abs(start_idx)
-            # Get available data up to current step
-            partial_data = self.data.iloc[:end_idx]
-            
-            # If no data available yet, pad with first row
-            if len(partial_data) == 0:
-                pad_data = pd.DataFrame([self.data.iloc[0]] * self.window_size)
-                window_data = pad_data
-            else:
-                # Pad with first available row
-                pad_data = pd.DataFrame([partial_data.iloc[0]] * pad_size)
-                window_data = pd.concat([pad_data, partial_data], axis=0)
+
+        # reset() guarantees current_step >= window_size, so start_idx >= 0
+        window_data = self.data.iloc[start_idx:end_idx]
+
+        close = window_data["$close"].values.astype(np.float64)
+        high  = window_data["$high"].values.astype(np.float64)
+        low   = window_data["$low"].values.astype(np.float64)
+        open_ = window_data["$open"].values.astype(np.float64)
+        vol   = window_data["$volume"].values.astype(np.float64)
+
+        # Reference close for the first row in the window
+        if start_idx > 0:
+            ref_close = float(self.data.iloc[start_idx - 1]["$close"])
         else:
             # Normal case: slice the window
             window_data = self.data.iloc[start_idx:end_idx]
@@ -987,17 +814,11 @@ class SingleAssetRLTradingEnv(gym.Env):
 
     def _get_info(self) -> Dict[str, Any]:
         """Get current state information"""
-        # Calculate current drawdown
         drawdown = 0.0
-        if self.peak_portfolio_value > 0:
+        if self.peak_portfolio_value and self.peak_portfolio_value > 0:
             drawdown = (self.peak_portfolio_value - self.portfolio_value) / self.peak_portfolio_value
-            
-        # Calculate Sharpe ratio if we have enough data
-        sharpe_ratio = 0.0
-        if len(self.returns_buffer) > 3:
-            mean_return = np.mean(self.returns_buffer)
-            std_return = np.std(self.returns_buffer) + 1e-8
-            sharpe_ratio = mean_return / std_return
+
+        sharpe_ratio = self.reward_fn.get_sharpe_ratio()
             
         return {
             "step": self.current_step,

@@ -59,16 +59,29 @@ def train_single_agent(
 ) -> Dict[str, Any]:
     """
     Train a single agent using the standard RL loop.
-    
+    For SB3AgentWrapper, delegates to agent.train() (model.learn()).
+
     Args:
         agent: The agent to train
         env: The environment to train in
         config: Configuration dictionary
         mlflow_manager: Optional MLflow manager for logging
-        
+
     Returns:
         Dictionary with training results
     """
+    from agents.sb3.sb3_agent_wrapper import SB3AgentWrapper
+    if isinstance(agent, SB3AgentWrapper):
+        training_config = config.get("training", {})
+        total_timesteps = training_config.get("total_timesteps", 100_000)
+        agent.train(env, total_timesteps=total_timesteps)
+        return {
+            "episode_rewards": [0.0],
+            "episode_lengths": [total_timesteps],
+            "best_eval_reward": 0.0,
+            "total_timesteps": total_timesteps,
+        }
+
     # Extract training parameters
     training_config = config.get("training", {})
     total_timesteps = training_config.get("total_timesteps", 100000)
@@ -743,9 +756,23 @@ def train_pipeline(config: Dict[str, Any], data: Optional[pd.DataFrame] = None) 
         logger.info(f"Starting single agent training for environment type: {env_type}")
         results = train_single_agent(agent, env, config, mlflow_manager)
     elif env_type == "multi_agent_rl" or env_type == "multi_asset_multi_agent_rl":
+        # Build agents dict from multi_agent_configs
+        multi_agent_cfgs = config["env"].get("multi_agent_configs", [])
+        agents = {}
+        for agent_cfg in multi_agent_cfgs:
+            agent_id = agent_cfg["id"]
+            strategy = agent_cfg.get("strategy", "momentum")
+            obs_space = env.observation_spaces.get(agent_id, env.observation_space)
+            act_space = env.action_spaces.get(agent_id, env.action_space)
+            agents[agent_id] = create_agent(
+                agent_type=strategy,
+                config=agent_cfg,
+                observation_space=obs_space,
+                action_space=act_space,
+            )
         # Multi-agent training
         logger.info(f"Starting multi-agent training for environment type: {env_type}")
-        results = train_multi_agent(env, config, mlflow_manager)
+        results = train_multi_agent(agents, env, config, mlflow_manager)
     else:
         raise ValueError(f"Unsupported environment type: {env_type}")
     
@@ -1157,5 +1184,384 @@ def evaluate_with_manager(env, manager, num_episodes: int = 5) -> Dict[str, List
         # Add episode returns for each agent
         for agent_id, return_ in episode_returns.items():
             returns[agent_id].append(return_)
-    
-    return returns 
+
+
+# ---------------------------------------------------------------------------
+# SB3-native training pipeline
+# ---------------------------------------------------------------------------
+
+def build_cvar_callback(config: Dict[str, Any], mlflow_manager=None):
+    """
+    Build a CVaRCallback from the ``risk`` section of the training config.
+
+    Returns ``None`` when ``risk.cvar_enabled`` is False (the default).
+
+    Example config section::
+
+        risk:
+          cvar_enabled: true
+          cvar_alpha: 0.05
+          cvar_threshold: -0.02
+          penalty_scale: 2.0
+          ent_coef_scale: 2.0
+          max_ent_coef: 0.1
+          use_lagrangian: false
+          lagrangian_lr: 0.01
+          log_interval: 1
+
+    Returns:
+        CVaRCallback if enabled, else None.
+    """
+    from agents.sb3.cvar_callback import CVaRCallback
+
+    risk_cfg = config.get("risk", {})
+    if not risk_cfg.get("cvar_enabled", False):
+        return None
+
+    return CVaRCallback(
+        alpha=risk_cfg.get("cvar_alpha", 0.05),
+        cvar_threshold=risk_cfg.get("cvar_threshold", -0.02),
+        penalty_scale=risk_cfg.get("penalty_scale", 2.0),
+        ent_coef_scale=risk_cfg.get("ent_coef_scale", 2.0),
+        max_ent_coef=risk_cfg.get("max_ent_coef", 0.1),
+        use_lagrangian=risk_cfg.get("use_lagrangian", False),
+        lagrangian_lr=risk_cfg.get("lagrangian_lr", 0.01),
+        log_interval=risk_cfg.get("log_interval", 1),
+        mlflow_manager=mlflow_manager,
+    )
+
+
+def train_sb3_agent(
+    sb3_agent,
+    train_env,
+    config: Dict[str, Any],
+    eval_env=None,
+    mlflow_manager=None,
+) -> Dict[str, Any]:
+    """
+    Train an SB3AgentWrapper using model.learn() with proper callbacks.
+
+    Args:
+        sb3_agent: SB3AgentWrapper instance (wraps PPO/SAC/TD3/A2C).
+        train_env: Vectorised training environment (VecEnv).
+        config: Full training config dict.
+        eval_env: Optional separate vectorised environment for EvalCallback.
+        mlflow_manager: Optional MLflowManager for metric logging.
+
+    Returns:
+        Dict with 'agent', 'model_path', 'best_model_path', 'total_timesteps'.
+    """
+    from stable_baselines3.common.callbacks import CallbackList
+    from training.callbacks.sb3_callbacks import (
+        MLflowLoggingCallback,
+        SB3CheckpointCallback,
+        SB3EvalCallback,
+    )
+
+    training_cfg = config.get("training", {})
+    total_timesteps = training_cfg.get("total_timesteps", 100_000)
+    checkpoint_interval = training_cfg.get("checkpoint_interval", 50_000)
+    eval_interval = training_cfg.get("eval_interval", 10_000)
+    log_interval = training_cfg.get("log_interval", 1_000)
+    n_eval_episodes = training_cfg.get("n_eval_episodes", 5)
+
+    paths_cfg = config.get("paths", {})
+    checkpoint_dir = paths_cfg.get("checkpoint_dir", "checkpoints")
+    best_model_dir = os.path.join(checkpoint_dir, "best")
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    os.makedirs(best_model_dir, exist_ok=True)
+
+    # Build callback list
+    callbacks = [
+        MLflowLoggingCallback(
+            mlflow_manager=mlflow_manager,
+            log_interval=log_interval,
+        ),
+        SB3CheckpointCallback(
+            save_freq=checkpoint_interval,
+            save_path=checkpoint_dir,
+            mlflow_manager=mlflow_manager,
+        ),
+    ]
+
+    if eval_env is not None:
+        callbacks.append(
+            SB3EvalCallback(
+                eval_env=eval_env,
+                mlflow_manager=mlflow_manager,
+                n_eval_episodes=n_eval_episodes,
+                eval_freq=eval_interval,
+                best_model_save_path=best_model_dir,
+                verbose=1,
+            )
+        )
+
+    # Optionally attach CVaR constraint callback
+    cvar_cb = build_cvar_callback(config, mlflow_manager=mlflow_manager)
+    if cvar_cb is not None:
+        callbacks.append(cvar_cb)
+        logger.info("CVaR constraint callback attached (alpha=%.2f, threshold=%.4f)",
+                    cvar_cb.alpha, cvar_cb.cvar_threshold)
+
+    callback = CallbackList(callbacks)
+
+    logger.info(
+        f"Starting SB3 training: {total_timesteps:,} timesteps, "
+        f"algo={sb3_agent.algo_type}"
+    )
+
+    sb3_agent.train(train_env, total_timesteps=total_timesteps, callbacks=callback)
+
+    # Save final model
+    final_path = os.path.join(checkpoint_dir, "final_model")
+    sb3_agent.save(final_path)
+    logger.info(f"Training complete. Final model saved to {final_path}.zip")
+
+    if mlflow_manager is not None:
+        try:
+            mlflow_manager.log_artifact(f"{final_path}.zip")
+        except Exception:
+            pass
+
+    best_path = os.path.join(best_model_dir, "best_model")
+    return {
+        "agent": sb3_agent,
+        "model_path": final_path,
+        "best_model_path": best_path if os.path.exists(f"{best_path}.zip") else None,
+        "total_timesteps": total_timesteps,
+    }
+
+
+def train_ensemble_agent(
+    ensemble,
+    train_env,
+    config: Dict[str, Any],
+    eval_env=None,
+    mlflow_manager=None,
+) -> Dict[str, Any]:
+    """
+    Train an EnsembleManager (PPO + SAC + TD3) sequentially on train_env.
+
+    After training, evaluates each agent on eval_env (if provided) and
+    updates the ensemble weights based on rolling Sharpe.
+
+    Args:
+        ensemble: EnsembleManager instance.
+        train_env: Gymnasium-compatible or VecEnv training environment.
+        config: Full training config dict. Reads ``training.total_timesteps``
+                and optionally ``ensemble.rebalance_interval``.
+        eval_env: Optional evaluation environment for weight updates.
+        mlflow_manager: Optional MLflowManager for experiment tracking.
+
+    Returns:
+        {
+            "agent_results"   : {agent_id: train_result_dict},
+            "final_weights"   : {agent_id: float},
+            "ensemble_metrics": dict,
+        }
+    """
+    from agents.ensemble.ensemble_manager import EnsembleManager
+
+    training_cfg = config.get("training", {})
+    total_timesteps = training_cfg.get("total_timesteps", 100_000)
+    ensemble_cfg = config.get("ensemble", {})
+    rebalance_interval = ensemble_cfg.get(
+        "rebalance_interval", getattr(ensemble, "rebalance_interval", 1000)
+    )
+
+    paths_cfg = config.get("paths", {})
+    checkpoint_dir = paths_cfg.get("checkpoint_dir", "checkpoints")
+    ensemble_save_dir = os.path.join(checkpoint_dir, "ensemble")
+
+    logger.info(
+        "Starting ensemble training: %d agents, %s total timesteps",
+        len(ensemble),
+        f"{total_timesteps:,}",
+    )
+
+    if mlflow_manager is not None:
+        try:
+            mlflow_manager.log_params({
+                "ensemble_method": ensemble.method,
+                "ensemble_n_agents": len(ensemble),
+                "ensemble_total_timesteps": total_timesteps,
+            })
+        except Exception:
+            pass
+
+    agent_results = ensemble.train_all(train_env, total_timesteps=total_timesteps)
+
+    # Post-training evaluation and weight update
+    if eval_env is not None:
+        logger.info("Evaluating ensemble agents on eval_env …")
+        eval_metrics = ensemble.evaluate_agents(eval_env, n_eval_episodes=5)
+        ensemble.update_weights(eval_metrics)
+
+        if mlflow_manager is not None:
+            try:
+                for agent_id, m in eval_metrics.items():
+                    mlflow_manager.log_metrics({
+                        f"ensemble_{agent_id}_mean_reward": m["mean_reward"],
+                        f"ensemble_{agent_id}_std_reward": m["std_reward"],
+                    })
+                for agent_id, w in ensemble.get_weights().items():
+                    mlflow_manager.log_metrics({f"ensemble_weight_{agent_id}": w})
+            except Exception:
+                pass
+
+    # Save ensemble checkpoint
+    ensemble.save(ensemble_save_dir)
+    logger.info("Ensemble training complete. Saved to %s", ensemble_save_dir)
+
+    return {
+        "agent_results": agent_results,
+        "final_weights": ensemble.get_weights(),
+        "ensemble_metrics": ensemble.get_ensemble_metrics(),
+        "ensemble_save_dir": ensemble_save_dir,
+    }
+
+
+def run_walk_forward_validation(
+    df: pd.DataFrame,
+    env_factory: "Callable",
+    agent_factory: "Callable",
+    config: Optional[Dict[str, Any]] = None,
+    mlflow_manager=None,
+) -> "WalkForwardResult":
+    """
+    Run walk-forward validation on a full dataset.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Complete OHLCV dataset (all rows, no pre-splitting needed).
+    env_factory : callable
+        ``env_factory(df_slice) -> gym.Env`` — creates a *fresh* env from a
+        DataFrame slice.  Must accept a single positional argument.
+    agent_factory : callable
+        ``agent_factory(env) -> agent`` — creates a *fresh*, untrained agent
+        compatible with ``SB3AgentWrapper.train()``.
+    config : dict, optional
+        Full training config.  Reads ``validation`` sub-key for window sizes.
+        Falls back to sensible defaults if not provided.
+    mlflow_manager : optional
+        If provided, fold and aggregate metrics are logged to MLflow.
+
+    Returns
+    -------
+    WalkForwardResult
+        Dataclass with per-fold results and aggregate OOS / IS metrics.
+
+    Example
+    -------
+    >>> result = run_walk_forward_validation(df, env_factory, agent_factory, config)
+    >>> print(result.stability_ratio, result.stability_rating)
+    """
+    from training.validation.walk_forward import WalkForwardValidator, WalkForwardResult
+
+    cfg = (config or {}).get("validation", {})
+
+    validator = WalkForwardValidator(
+        train_window=cfg.get("train_window", 252),
+        val_window=cfg.get("val_window", 63),
+        test_window=cfg.get("test_window", 21),
+        step_size=cfg.get("step_size", 21),
+        total_timesteps_per_fold=cfg.get(
+            "total_timesteps_per_fold",
+            (config or {}).get("training", {}).get("total_timesteps", 10_000),
+        ),
+        mlflow_manager=mlflow_manager,
+    )
+
+    logger.info(
+        "Walk-forward validation: train=%d val=%d test=%d step=%d",
+        validator.train_window,
+        validator.val_window,
+        validator.test_window,
+        validator.step_size,
+    )
+
+    result = validator.validate(df, env_factory=env_factory, agent_factory=agent_factory)
+
+    logger.info(
+        "Walk-forward complete: n_folds=%d  OOS_Sharpe=%.3f±%.3f  "
+        "stability=%.3f (%s)",
+        result.n_folds,
+        result.oos_sharpe_mean,
+        result.oos_sharpe_std,
+        result.stability_ratio,
+        result.stability_rating,
+    )
+
+    return result
+
+
+def run_hyperopt_optuna(
+    df: "pd.DataFrame",
+    config: Optional[Dict[str, Any]],
+    env_factory: "Callable",
+    agent_factory: "Callable",
+    mlflow_manager=None,
+) -> "HyperoptResult":
+    """
+    Run Optuna-based hyperparameter optimisation.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Full dataset. Split internally at config['hyperopt']['train_ratio'].
+    config : dict
+        Full training config. Reads ``hyperopt`` sub-key for study settings.
+    env_factory : callable
+        ``env_factory(df_slice, config) -> gym.Env``
+    agent_factory : callable
+        ``agent_factory(env, config) -> agent``
+    mlflow_manager : optional
+        MLflowManager for logging best params.
+
+    Returns
+    -------
+    HyperoptResult
+        Dataclass with best params, best metrics, Pareto front, and per-trial details.
+    """
+    from training.hyperopt.hyperopt_optuna import run_hyperopt, HyperoptResult
+
+    cfg = config or {}
+    hp_cfg = cfg.get("hyperopt", {})
+
+    n_trials = hp_cfg.get("n_trials", 50)
+    train_ratio = hp_cfg.get("train_ratio", 0.7)
+    multi_objective = hp_cfg.get("multi_objective", False)
+    timeout = hp_cfg.get("timeout", None)
+    study_name = hp_cfg.get("study_name", "trading_hyperopt")
+
+    logger.info(
+        "Hyperopt (Optuna): n_trials=%d  multi_objective=%s  study=%s",
+        n_trials,
+        multi_objective,
+        study_name,
+    )
+
+    result = run_hyperopt(
+        df=df,
+        config=cfg,
+        env_factory=env_factory,
+        agent_factory=agent_factory,
+        n_trials=n_trials,
+        train_ratio=train_ratio,
+        multi_objective=multi_objective,
+        timeout=timeout,
+        mlflow_manager=mlflow_manager,
+        study_name=study_name,
+    )
+
+    logger.info(
+        "Hyperopt complete: best_sharpe=%.4f  best_max_dd=%.4f  "
+        "completed=%d/%d",
+        result.best_sharpe,
+        result.best_max_drawdown,
+        result.n_completed,
+        result.n_trials,
+    )
+
+    return result

@@ -129,25 +129,164 @@ hpc:
   ray_object_store_memory: "8G"
   ray_num_workers: 4
 
+ensemble:
+  enabled: false                  # Set true to use EnsembleManager instead of single agent
+  method: "rolling_validation"   # rolling_validation | weighted_average | best
+  rebalance_interval: 1000       # steps between weight rebalancing
+  validation_window: 200         # episode returns kept per agent for Sharpe calc
+  softmax_temperature: 1.0
+  agents:
+    - id: "ppo_conservative"
+      type: "sb3_ppo"
+      risk_profile: "conservative"
+      weight_init: 0.4
+      params:
+        ent_coef: 0.005
+        clip_range: 0.1
+        learning_rate: 0.0003
+        n_steps: 2048
+    - id: "sac_moderate"
+      type: "sb3_sac"
+      risk_profile: "moderate"
+      weight_init: 0.35
+      params:
+        ent_coef: "auto"
+        learning_rate: 0.0003
+    - id: "td3_aggressive"
+      type: "sb3_td3"
+      risk_profile: "aggressive"
+      weight_init: 0.25
+      params:
+        learning_rate: 0.001
+        policy_delay: 2
+
+regime:
+  enabled: false               # Set true to attach RegimeDetector to env + ensemble
+  method: "hmm"                # "hmm" (GaussianHMM) or "threshold" (volatility percentile)
+  n_states: 3                  # Number of HMM hidden states (maps to low/medium/high vol)
+  vol_window: 20               # Rolling volatility window for threshold detector
+  n_iter: 100                  # HMM EM iterations
+  covariance_type: "diag"      # HMM covariance: "diag" (faster) or "full"
+  fallback_on_error: true      # Fall back to threshold if HMM inference fails
+  random_state: 42
+  # Weight multipliers by risk_profile per regime (applied before re-normalising)
+  # regime 0 = low_vol/trending, 1 = medium_vol/ranging, 2 = high_vol/crisis
+  weight_multipliers:
+    low_vol:
+      conservative: 1.5
+      moderate: 1.0
+      aggressive: 0.5
+    medium_vol:
+      conservative: 1.0
+      moderate: 1.0
+      aggressive: 1.0
+    high_vol:
+      conservative: 0.8
+      moderate: 1.5
+      aggressive: 0.3
+
+risk:
+  # ── CVaR (Conditional Value at Risk) constraint (Week 9) ─────────────────
+  cvar_enabled: false           # master switch; set true to attach CVaRCallback
+  cvar_alpha: 0.05              # tail probability (0.05 = worst 5% of rewards)
+  cvar_threshold: -0.02         # max acceptable CVaR; values below trigger penalty
+  penalty_scale: 2.0            # divisor for rollout advantages/returns on violation
+  ent_coef_scale: 2.0           # ent_coef multiplier on violation; decays when satisfied
+  max_ent_coef: 0.1             # hard ceiling on entropy coefficient
+  use_lagrangian: false         # enable Lagrangian dual variable (dual ascent)
+  lagrangian_lr: 0.01           # learning rate for Lagrangian update
+  log_interval: 1               # log every N rollout-ends (on-policy) / CVaR checks
+
+  # ── Daily loss limit (Week 10) ────────────────────────────────────────────
+  use_daily_loss_limit: false   # halt trading when daily P&L < -daily_loss_limit
+  daily_loss_limit: 0.03        # 3% daily drawdown ceiling
+
+  # ── Max-correlation constraint (Week 10) ─────────────────────────────────
+  max_correlation: 0.8          # reject new position if |corr| with existing > this
+
+  # ── Regime-aware position limits (Week 10) ───────────────────────────────
+  regime_position_limits:
+    low_vol: 1.0                # no reduction in low-volatility / trending regime
+    medium_vol: 0.75            # 25% reduction in medium-volatility regime
+    high_vol: 0.5               # 50% reduction in high-volatility / crisis regime
+
+  # ── Kelly Criterion position sizing (Week 10) ────────────────────────────
+  position_sizing: "kelly_half" # sizing method exposed to downstream components
+  kelly:
+    method: "kelly_half"        # "kelly_full" | "kelly_half" | "kelly_fractional" | "fixed"
+    kelly_fraction: 0.5         # fractional Kelly multiplier (used when method=kelly_fractional)
+    max_position_fraction: 0.25 # hard cap: max fraction of portfolio per asset
+    min_position_fraction: 0.01 # positions below this threshold are treated as 0
+    max_leverage: 1.0           # total gross-exposure cap across all positions
+    confidence_scaling: true    # multiply fraction by signal confidence
+
+validation:
+  method: "walk_forward"          # "walk_forward" | "holdout" | "kfold"
+  train_window: 252               # rows in training slice (≈1 trading year at daily)
+  val_window: 63                  # rows in validation slice (≈1 quarter)
+  test_window: 21                 # rows in OOS test slice (≈1 month)
+  step_size: 21                   # rows to advance between folds (≈1 month)
+  total_timesteps_per_fold: 10000 # SB3 timesteps per fold (override training.total_timesteps)
+  # Stability rating thresholds (OOS Sharpe / IS Sharpe)
+  #   >= 0.7 → "strong"
+  #   >= 0.5 → "decent"
+  #   >= 0.3 → "marginal"
+  #   <  0.3 → "overfitting"
+
 hyperopt:
-  framework: "ray"  # or "optuna", "hyperopt"
-  num_samples: 50  # Number of trials to run
-  max_concurrent_trials: 4  # Maximum number of trials to run in parallel
-  search_algorithm: "random"  # or "bayesian", "pbt", "bohb"
-  metric: "mean_reward"  # Metric to optimize
-  mode: "max"  # Optimization direction
-  # Parameter search space (example for PPO agent)
+  # ── Optuna settings (Week 8 rebuild) ────────────────────────────────────
+  enabled: false
+  n_trials: 50                    # total Optuna trial budget
+  n_startup_trials: 10            # random trials before TPE warms up
+  multi_objective: false          # true → Pareto (Sharpe + max_drawdown)
+  timeout: null                   # wall-clock budget in seconds (null = unlimited)
+  study_name: "trading_hyperopt"
+  eval_episodes: 3                # episodes per trial evaluation
+  trial_timesteps: 10000          # SB3 timesteps per trial (overrides training.total_timesteps)
+  train_ratio: 0.7                # fraction of data used for within-trial training
+  metric: "oos_sharpe"            # optimisation target (for logging)
+
+  # ── Parameter search space ────────────────────────────────────────────────
+  # Override default ranges by providing min/max (or values for categorical).
+  # Any key absent here uses the defaults in hyperopt_optuna._suggest_params().
   parameters:
-    agent.learning_rate:
-      distribution: "loguniform"
-      min: 1e-5
-      max: 1e-3
-    agent.gamma:
-      distribution: "uniform"
-      min: 0.9
+    learning_rate:
+      min: 1.0e-4
+      max: 1.0e-3
+    n_steps:
+      values: [1024, 2048, 4096]
+    batch_size:
+      values: [32, 64, 128, 256]
+    n_epochs:
+      min: 3
+      max: 15
+    gamma:
+      min: 0.95
       max: 0.999
-    agent.clip_epsilon:
-      distribution: "uniform"
+    gae_lambda:
+      min: 0.9
+      max: 0.99
+    ent_coef:
+      min: 1.0e-3
+      max: 0.1
+    clip_range:
       min: 0.1
       max: 0.3
-    # Add more parameters as needed 
+    vf_coef:
+      min: 0.25
+      max: 1.0
+    max_grad_norm:
+      values: [0.3, 0.5, 0.7, 1.0]
+    feature_extractor:
+      values: ["conv1d", "lstm", "mlp"]
+    reward_weights.pnl:
+      min: 0.2
+      max: 0.5
+    reward_weights.sharpe:
+      min: 0.1
+      max: 0.4
+
+  # ── Legacy Ray Tune settings (kept for backward compatibility) ────────────
+  framework: "optuna"
+  num_samples: 50
+  max_concurrent_trials: 4 
