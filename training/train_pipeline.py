@@ -1283,4 +1283,91 @@ def train_sb3_agent(
         "total_timesteps": total_timesteps,
     }
 
-    return returns 
+
+def train_ensemble_agent(
+    ensemble,
+    train_env,
+    config: Dict[str, Any],
+    eval_env=None,
+    mlflow_manager=None,
+) -> Dict[str, Any]:
+    """
+    Train an EnsembleManager (PPO + SAC + TD3) sequentially on train_env.
+
+    After training, evaluates each agent on eval_env (if provided) and
+    updates the ensemble weights based on rolling Sharpe.
+
+    Args:
+        ensemble: EnsembleManager instance.
+        train_env: Gymnasium-compatible or VecEnv training environment.
+        config: Full training config dict. Reads ``training.total_timesteps``
+                and optionally ``ensemble.rebalance_interval``.
+        eval_env: Optional evaluation environment for weight updates.
+        mlflow_manager: Optional MLflowManager for experiment tracking.
+
+    Returns:
+        {
+            "agent_results"   : {agent_id: train_result_dict},
+            "final_weights"   : {agent_id: float},
+            "ensemble_metrics": dict,
+        }
+    """
+    from agents.ensemble.ensemble_manager import EnsembleManager
+
+    training_cfg = config.get("training", {})
+    total_timesteps = training_cfg.get("total_timesteps", 100_000)
+    ensemble_cfg = config.get("ensemble", {})
+    rebalance_interval = ensemble_cfg.get(
+        "rebalance_interval", getattr(ensemble, "rebalance_interval", 1000)
+    )
+
+    paths_cfg = config.get("paths", {})
+    checkpoint_dir = paths_cfg.get("checkpoint_dir", "checkpoints")
+    ensemble_save_dir = os.path.join(checkpoint_dir, "ensemble")
+
+    logger.info(
+        "Starting ensemble training: %d agents, %s total timesteps",
+        len(ensemble),
+        f"{total_timesteps:,}",
+    )
+
+    if mlflow_manager is not None:
+        try:
+            mlflow_manager.log_params({
+                "ensemble_method": ensemble.method,
+                "ensemble_n_agents": len(ensemble),
+                "ensemble_total_timesteps": total_timesteps,
+            })
+        except Exception:
+            pass
+
+    agent_results = ensemble.train_all(train_env, total_timesteps=total_timesteps)
+
+    # Post-training evaluation and weight update
+    if eval_env is not None:
+        logger.info("Evaluating ensemble agents on eval_env …")
+        eval_metrics = ensemble.evaluate_agents(eval_env, n_eval_episodes=5)
+        ensemble.update_weights(eval_metrics)
+
+        if mlflow_manager is not None:
+            try:
+                for agent_id, m in eval_metrics.items():
+                    mlflow_manager.log_metrics({
+                        f"ensemble_{agent_id}_mean_reward": m["mean_reward"],
+                        f"ensemble_{agent_id}_std_reward": m["std_reward"],
+                    })
+                for agent_id, w in ensemble.get_weights().items():
+                    mlflow_manager.log_metrics({f"ensemble_weight_{agent_id}": w})
+            except Exception:
+                pass
+
+    # Save ensemble checkpoint
+    ensemble.save(ensemble_save_dir)
+    logger.info("Ensemble training complete. Saved to %s", ensemble_save_dir)
+
+    return {
+        "agent_results": agent_results,
+        "final_weights": ensemble.get_weights(),
+        "ensemble_metrics": ensemble.get_ensemble_metrics(),
+        "ensemble_save_dir": ensemble_save_dir,
+    }
