@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Optional, Any, Union, Set
 import logging
 from collections import deque
+from datetime import date as DateType
 from scipy.stats import norm
 
 from risk_management.risk_manager_base import RiskManagerBase, RiskConfigBase
@@ -79,6 +80,20 @@ class RLRiskConfig(RiskConfigBase):
     
     # Action on VaR exceeding threshold
     action_on_var_exceed: str = "reduce_position"  # "reduce_position" or "close_position"
+
+    # ── Week 10: Daily loss limit ─────────────────────────────────────────────
+    use_daily_loss_limit: bool = False
+    daily_loss_limit: float = 0.03          # halt trading if daily P&L < -3%
+
+    # ── Week 10: Max correlation constraint ──────────────────────────────────
+    max_correlation: float = 0.8            # reject position if |corr| > this
+
+    # ── Week 10: Regime-aware position limits ────────────────────────────────
+    regime_position_limits: Dict[str, float] = field(default_factory=lambda: {
+        "low_vol": 1.0,
+        "medium_vol": 0.75,
+        "high_vol": 0.5,
+    })
 
 
 class RLRiskManager(RiskManagerBase):
@@ -127,6 +142,11 @@ class RLRiskManager(RiskManagerBase):
         self.correlation_adjustment_events = 0
         self.portfolio_stop_loss_events = 0
         self.portfolio_var_exceed_events = 0
+
+        # Week 10: daily loss limit tracking
+        self.daily_start_value: Optional[float] = None
+        self.current_day: Optional[DateType] = None
+        self.daily_loss_limit_events: int = 0
     
     def reset(self):
         """Reset all risk manager state."""
@@ -151,7 +171,12 @@ class RLRiskManager(RiskManagerBase):
         self.correlation_adjustment_events = 0
         self.portfolio_stop_loss_events = 0
         self.portfolio_var_exceed_events = 0
-    
+
+        # Week 10: daily loss limit reset
+        self.daily_start_value = None
+        self.current_day = None
+        self.daily_loss_limit_events = 0
+
     def check_max_drawdown(self, peak_value: float, current_value: float) -> bool:
         """
         Check if maximum drawdown has been exceeded.
@@ -276,23 +301,6 @@ class RLRiskManager(RiskManagerBase):
             var = np.percentile(returns, 100 * (1 - self.config.var_confidence_level))
             # Return absolute value of VaR to ensure positivity
             return abs(var)
-    
-    def get_risk_metrics(self) -> Dict[str, Any]:
-        """
-        Get current risk metrics.
-        
-        Returns:
-            Dict[str, Any]: Dictionary of current risk metrics
-        """
-        return {
-            "stop_loss_events": self.stop_loss_events,
-            "trailing_stop_events": self.trailing_stop_events,
-            "var_exceed_events": self.var_exceed_events,
-            "forced_liquidation_events": self.forced_liquidation_events,
-            "correlation_adjustment_events": self.correlation_adjustment_events,
-            "portfolio_stop_loss_events": self.portfolio_stop_loss_events,
-            "portfolio_var_exceed_events": self.portfolio_var_exceed_events
-        }
     
     def update_portfolio_values(self, portfolio_values: Dict[str, float]):
         """
@@ -526,36 +534,74 @@ class RLRiskManager(RiskManagerBase):
     def calculate_portfolio_var(self, position_sizes: Dict[str, float], prices: Dict[str, float]) -> Optional[float]:
         """
         Calculate portfolio Value at Risk using the covariance matrix.
-        
+
+        Uses parametric VaR when a valid covariance matrix is available:
+            sigma_p^2 = w^T * Sigma * w
+            VaR_p = |mu_p + z_alpha * sigma_p|
+
+        Falls back to historical VaR for single-asset portfolios, and to a
+        conservative 2% default when insufficient data are available.
+
         Args:
-            position_sizes: Current position sizes for all assets
-            prices: Current prices for all assets
-            
+            position_sizes: Current position sizes for all assets (units held)
+            prices:         Current prices for all assets
+
         Returns:
-            float: Portfolio VaR, or None if insufficient data
+            float: Portfolio VaR as a positive fraction of portfolio value,
+                   or None if calculation is impossible.
         """
-        # Check if we have enough data for calculation
-        if not hasattr(self, "asset_returns_history") or len(self.asset_returns_history) < 2:
-            return 0.02  # Default 2% VaR
-            
-        # Filter to assets we have positions in
-        active_assets = [asset for asset, size in position_sizes.items() if abs(size) > 1e-8]
-        
-        # If we have only one asset or no assets, return default
-        if len(active_assets) <= 1:
+        # Active (non-zero) positions
+        active = [a for a, s in position_sizes.items() if abs(s) > 1e-8]
+
+        if not active:
+            return 0.0
+
+        # Single-asset fallback: use historical percentile if available
+        if len(active) == 1:
+            asset = active[0]
+            hist = self.asset_returns_history.get(asset)
+            if hist and len(hist) >= 10:
+                returns_arr = np.array(list(hist))
+                alpha = 1.0 - self.config.var_confidence_level
+                return float(abs(np.percentile(returns_arr, alpha * 100)))
             return 0.02
-            
-        # Check if we have a diversified portfolio (stocks + bonds)
-        has_stocks = any(asset.startswith(("SPY", "QQQ", "IWM")) for asset in active_assets)
-        has_bonds = any(asset.startswith(("TLT", "IEF", "AGG")) for asset in active_assets)
-        has_gold = any(asset.startswith(("GLD", "IAU")) for asset in active_assets)
-        
-        # If we have a diversified portfolio, return a lower VaR
-        if (has_stocks and has_bonds) or (has_stocks and has_gold) or (has_bonds and has_gold):
-            return 0.015  # 1.5% VaR for diversified portfolio
-            
-        # Default return
-        return 0.02  # 2% VaR for non-diversified portfolio
+
+        # Multi-asset: need covariance matrix
+        cov = self.covariance_matrix
+        if cov is None:
+            return 0.02
+
+        # Assets with both a position and a row in the covariance matrix
+        common = [a for a in active if a in cov.columns]
+        if len(common) < 2:
+            return 0.02
+
+        # Value-weighted portfolio fractions
+        values = np.array([position_sizes[a] * prices.get(a, 1.0) for a in common])
+        total_value = float(np.sum(np.abs(values)))
+        if total_value <= 0:
+            return 0.02
+        weights = values / total_value  # signed weights
+
+        # Portfolio variance via quadratic form
+        cov_sub = cov.loc[common, common].values
+        port_var = float(weights @ cov_sub @ weights)
+        port_std = float(np.sqrt(max(port_var, 0.0)))
+
+        # Weighted mean return
+        port_mean = 0.0
+        means = []
+        for a in common:
+            hist = self.asset_returns_history.get(a)
+            means.append(float(np.mean(list(hist))) if hist and len(hist) > 0 else 0.0)
+        port_mean = float(weights @ np.array(means))
+
+        # Parametric VaR: loss that is exceeded with probability (1 - confidence)
+        alpha = 1.0 - self.config.var_confidence_level
+        z = norm.ppf(alpha)           # negative (left tail)
+        # VaR = -(mu + z * sigma);  take absolute value for "loss" interpretation
+        var_value = abs(port_mean + z * port_std)
+        return float(var_value)
     
     def check_portfolio_var_exceed(self, position_sizes: Dict[str, float], prices: Dict[str, float], 
                                   current_portfolio_return: float) -> bool:
@@ -710,6 +756,150 @@ class RLRiskManager(RiskManagerBase):
             
         return False
     
+    # ──────────────────────────────────────────────────────────────────────────
+    # Week 10: Daily loss limit
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def record_daily_start(
+        self, portfolio_value: float, day: Optional[DateType] = None
+    ) -> None:
+        """
+        Record the start-of-day portfolio value.
+
+        Call once per day (or on reset) to initialise the daily-loss baseline.
+
+        Args:
+            portfolio_value: Portfolio value at the start of the trading day.
+            day:             Optional date label for the day (used for
+                             automatic day-boundary detection).
+        """
+        self.daily_start_value = portfolio_value
+        self.current_day = day
+
+    def check_daily_loss_limit(
+        self,
+        current_value: float,
+        day: Optional[DateType] = None,
+    ) -> bool:
+        """
+        Return True if the daily loss limit has been breached.
+
+        Triggers when:
+            (daily_start_value - current_value) / daily_start_value > daily_loss_limit
+
+        If ``use_daily_loss_limit`` is False, always returns False.
+        If no start-of-day value has been recorded, always returns False.
+
+        A new day (detected via the ``day`` argument) auto-resets the baseline.
+
+        Args:
+            current_value: Current total portfolio value.
+            day:           Optional current date; if different from ``self.current_day``
+                           the baseline resets automatically.
+
+        Returns:
+            bool: True if daily loss limit exceeded, False otherwise.
+        """
+        if not self.config.use_daily_loss_limit:
+            return False
+
+        # Auto-reset on new trading day
+        if day is not None and day != self.current_day:
+            self.record_daily_start(current_value, day)
+            return False
+
+        if self.daily_start_value is None or self.daily_start_value <= 0:
+            return False
+
+        daily_loss = (self.daily_start_value - current_value) / self.daily_start_value
+        if daily_loss > self.config.daily_loss_limit:
+            self.daily_loss_limit_events += 1
+            return True
+
+        return False
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Week 10: Regime-aware position limits
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def apply_regime_position_limit(
+        self,
+        position_fraction: float,
+        regime: Optional[str] = None,
+    ) -> float:
+        """
+        Scale a position fraction by the regime-specific multiplier.
+
+        Multipliers are read from ``config.regime_position_limits``:
+            low_vol    → 1.0  (no reduction)
+            medium_vol → 0.75 (25% reduction)
+            high_vol   → 0.5  (50% reduction)
+
+        Args:
+            position_fraction: Raw desired position fraction (0–1).
+            regime:            Current market regime key.
+
+        Returns:
+            float: Scaled position fraction.
+        """
+        if regime is None:
+            return position_fraction
+
+        multiplier = self.config.regime_position_limits.get(regime, 1.0)
+        return float(position_fraction * multiplier)
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Week 10: Max-correlation constraint
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def check_max_correlation_constraint(
+        self, asset: str, current_positions: Dict[str, float]
+    ) -> bool:
+        """
+        Return True if adding a position in ``asset`` would violate the max
+        correlation constraint against any existing non-zero position.
+
+        Uses ``config.max_correlation`` as the threshold.
+
+        Args:
+            asset:             Asset being considered.
+            current_positions: Existing position sizes {asset: size}.
+
+        Returns:
+            bool: True if the constraint would be violated (position should be
+                  rejected / reduced).
+        """
+        if self.correlation_matrix is None:
+            return False
+
+        if asset not in self.correlation_matrix.index:
+            return False
+
+        for other, size in current_positions.items():
+            if abs(size) < 1e-8 or other == asset:
+                continue
+            if other not in self.correlation_matrix.columns:
+                continue
+            corr = abs(float(self.correlation_matrix.loc[asset, other]))
+            if corr > self.config.max_correlation:
+                return True
+
+        return False
+
+    def get_risk_metrics(self) -> Dict[str, Any]:  # type: ignore[override]
+        """Return all risk event counters including Week 10 additions."""
+        return {
+            "stop_loss_events": self.stop_loss_events,
+            "trailing_stop_events": self.trailing_stop_events,
+            "var_exceed_events": self.var_exceed_events,
+            "forced_liquidation_events": self.forced_liquidation_events,
+            "correlation_adjustment_events": self.correlation_adjustment_events,
+            "portfolio_stop_loss_events": self.portfolio_stop_loss_events,
+            "portfolio_var_exceed_events": self.portfolio_var_exceed_events,
+            # Week 10
+            "daily_loss_limit_events": self.daily_loss_limit_events,
+        }
+
     def check_var_exceed(self, agent_id: str, current_return: float) -> Optional[str]:
         """
         Check if current return exceeds VaR threshold.

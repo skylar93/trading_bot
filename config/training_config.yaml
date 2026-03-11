@@ -167,6 +167,29 @@ risk:
   lagrangian_lr: 0.01           # learning rate for Lagrangian update
   log_interval: 1               # log every N rollout-ends (on-policy) / CVaR checks
 
+  # ── Daily loss limit (Week 10) ────────────────────────────────────────────
+  use_daily_loss_limit: false   # halt trading when daily P&L < -daily_loss_limit
+  daily_loss_limit: 0.03        # 3% daily drawdown ceiling
+
+  # ── Max-correlation constraint (Week 10) ─────────────────────────────────
+  max_correlation: 0.8          # reject new position if |corr| with existing > this
+
+  # ── Regime-aware position limits (Week 10) ───────────────────────────────
+  regime_position_limits:
+    low_vol: 1.0                # no reduction in low-volatility / trending regime
+    medium_vol: 0.75            # 25% reduction in medium-volatility regime
+    high_vol: 0.5               # 50% reduction in high-volatility / crisis regime
+
+  # ── Kelly Criterion position sizing (Week 10) ────────────────────────────
+  position_sizing: "kelly_half" # sizing method exposed to downstream components
+  kelly:
+    method: "kelly_half"        # "kelly_full" | "kelly_half" | "kelly_fractional" | "fixed"
+    kelly_fraction: 0.5         # fractional Kelly multiplier (used when method=kelly_fractional)
+    max_position_fraction: 0.25 # hard cap: max fraction of portfolio per asset
+    min_position_fraction: 0.01 # positions below this threshold are treated as 0
+    max_leverage: 1.0           # total gross-exposure cap across all positions
+    confidence_scaling: true    # multiply fraction by signal confidence
+
 validation:
   method: "walk_forward"          # "walk_forward" | "holdout" | "kfold"
   train_window: 252               # rows in training slice (≈1 trading year at daily)
