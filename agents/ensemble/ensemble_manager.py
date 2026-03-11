@@ -23,6 +23,10 @@ import gymnasium as gym
 import numpy as np
 
 from agents.sb3.sb3_agent_wrapper import SB3AgentWrapper
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from training.regime.regime_detector import RegimeDetector
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +157,10 @@ class EnsembleManager:
             self._return_history[agent_id] = deque(maxlen=validation_window)
 
         self._normalise_weights()
+
+        # ── Week 6: regime detector (optional) ────────────────────────────────
+        self._regime_detector: Optional["RegimeDetector"] = None
+
         logger.info(
             "EnsembleManager created: %d agents (%s), method=%s",
             len(self.agents),
@@ -217,6 +225,90 @@ class EnsembleManager:
     def rebalance(self) -> None:
         """Recompute weights from accumulated return history."""
         self._recompute_weights()
+
+    # ── Week 6: Regime-aware weight updates ───────────────────────────────────
+
+    def set_regime_detector(self, detector: "RegimeDetector") -> None:
+        """Attach a pre-fitted RegimeDetector to the ensemble."""
+        self._regime_detector = detector
+        logger.info("RegimeDetector attached to EnsembleManager (method=%s).", detector.method)
+
+    def update_weights_regime_aware(
+        self,
+        eval_metrics: Dict[str, Dict[str, float]],
+        prices: Optional[np.ndarray] = None,
+        regime: Optional[int] = None,
+    ) -> None:
+        """
+        Update ensemble weights using both performance and market regime.
+
+        The update proceeds in two stages:
+          1. Performance stage: standard rolling-Sharpe rebalancing from
+             eval_metrics (same as update_weights).
+          2. Regime stage: multiplicative adjustment based on each agent's
+             risk_profile and the current market regime.
+
+        Args:
+            eval_metrics: {agent_id: {"mean_reward": float, ...}}
+            prices:       Recent price array fed to the attached regime_detector
+                          to infer the current regime. Ignored if *regime* is
+                          supplied directly.
+            regime:       Regime label (0=low_vol, 1=medium_vol, 2=high_vol).
+                          If None, inferred from *prices* via the attached
+                          detector (if any).
+        """
+        # Stage 1 — performance update (populates return history)
+        self.update_weights(eval_metrics)
+
+        # Stage 2 — regime adjustment
+        if regime is None and self._regime_detector is not None and prices is not None:
+            try:
+                regime = self._regime_detector.predict_regime(prices)
+            except Exception as exc:
+                logger.warning("Regime inference failed: %s. Skipping regime adjustment.", exc)
+                return
+
+        if regime is None:
+            return  # no regime info available, skip
+
+        if self._regime_detector is not None:
+            multipliers = self._regime_detector.get_weight_multipliers(regime)
+        else:
+            # Fallback multipliers (same as RegimeDetector defaults)
+            _defaults: Dict[int, Dict[str, float]] = {
+                0: {"conservative": 1.5, "moderate": 1.0, "aggressive": 0.5},
+                1: {"conservative": 1.0, "moderate": 1.0, "aggressive": 1.0},
+                2: {"conservative": 0.8, "moderate": 1.5, "aggressive": 0.3},
+            }
+            multipliers = _defaults.get(regime, {k: 1.0 for k in ("conservative", "moderate", "aggressive")})
+
+        for agent_id in self._weights:
+            risk_profile = self.agent_metadata[agent_id].get("risk_profile", "moderate")
+            mult = multipliers.get(risk_profile, 1.0)
+            self._weights[agent_id] *= max(mult, 1e-6)
+
+        self._normalise_weights()
+        logger.debug(
+            "Regime-aware weights (regime=%d): %s",
+            regime,
+            {k: f"{v:.3f}" for k, v in self._weights.items()},
+        )
+
+    def get_current_regime(self) -> Optional[int]:
+        """Return the current regime from the attached detector (or None)."""
+        if self._regime_detector is not None:
+            return self._regime_detector.current_regime
+        return None
+
+    def get_regime_info(self) -> Dict[str, Any]:
+        """Return regime metadata dict (empty if no detector attached)."""
+        if self._regime_detector is None:
+            return {}
+        return {
+            "regime": self._regime_detector.current_regime,
+            "regime_name": self._regime_detector.current_regime_name,
+            "probs": self._regime_detector.current_probs.tolist(),
+        }
 
     # ──────────────────────────────────────────────────────────────────
     # Training
@@ -367,13 +459,16 @@ class EnsembleManager:
 
     def get_ensemble_metrics(self) -> Dict[str, Any]:
         """Return a snapshot of ensemble diagnostics."""
-        return {
+        metrics: Dict[str, Any] = {
             "weights": dict(self._weights),
             "sharpe_scores": self._compute_sharpe_scores(),
             "return_history_sizes": {k: len(v) for k, v in self._return_history.items()},
             "agent_types": {k: v["type"] for k, v in self.agent_metadata.items()},
             "method": self.method,
         }
+        if self._regime_detector is not None:
+            metrics["regime"] = self.get_regime_info()
+        return metrics
 
     # ──────────────────────────────────────────────────────────────────
     # Private helpers
