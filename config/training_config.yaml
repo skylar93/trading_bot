@@ -169,24 +169,59 @@ validation:
   #   <  0.3 → "overfitting"
 
 hyperopt:
-  framework: "ray"  # or "optuna", "hyperopt"
-  num_samples: 50  # Number of trials to run
-  max_concurrent_trials: 4  # Maximum number of trials to run in parallel
-  search_algorithm: "random"  # or "bayesian", "pbt", "bohb"
-  metric: "mean_reward"  # Metric to optimize
-  mode: "max"  # Optimization direction
-  # Parameter search space (example for PPO agent)
+  # ── Optuna settings (Week 8 rebuild) ────────────────────────────────────
+  enabled: false
+  n_trials: 50                    # total Optuna trial budget
+  n_startup_trials: 10            # random trials before TPE warms up
+  multi_objective: false          # true → Pareto (Sharpe + max_drawdown)
+  timeout: null                   # wall-clock budget in seconds (null = unlimited)
+  study_name: "trading_hyperopt"
+  eval_episodes: 3                # episodes per trial evaluation
+  trial_timesteps: 10000          # SB3 timesteps per trial (overrides training.total_timesteps)
+  train_ratio: 0.7                # fraction of data used for within-trial training
+  metric: "oos_sharpe"            # optimisation target (for logging)
+
+  # ── Parameter search space ────────────────────────────────────────────────
+  # Override default ranges by providing min/max (or values for categorical).
+  # Any key absent here uses the defaults in hyperopt_optuna._suggest_params().
   parameters:
-    agent.learning_rate:
-      distribution: "loguniform"
-      min: 1e-5
-      max: 1e-3
-    agent.gamma:
-      distribution: "uniform"
-      min: 0.9
+    learning_rate:
+      min: 1.0e-4
+      max: 1.0e-3
+    n_steps:
+      values: [1024, 2048, 4096]
+    batch_size:
+      values: [32, 64, 128, 256]
+    n_epochs:
+      min: 3
+      max: 15
+    gamma:
+      min: 0.95
       max: 0.999
-    agent.clip_epsilon:
-      distribution: "uniform"
+    gae_lambda:
+      min: 0.9
+      max: 0.99
+    ent_coef:
+      min: 1.0e-3
+      max: 0.1
+    clip_range:
       min: 0.1
       max: 0.3
-    # Add more parameters as needed 
+    vf_coef:
+      min: 0.25
+      max: 1.0
+    max_grad_norm:
+      values: [0.3, 0.5, 0.7, 1.0]
+    feature_extractor:
+      values: ["conv1d", "lstm", "mlp"]
+    reward_weights.pnl:
+      min: 0.2
+      max: 0.5
+    reward_weights.sharpe:
+      min: 0.1
+      max: 0.4
+
+  # ── Legacy Ray Tune settings (kept for backward compatibility) ────────────
+  framework: "optuna"
+  num_samples: 50
+  max_concurrent_trials: 4 

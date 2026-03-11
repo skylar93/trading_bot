@@ -1,22 +1,21 @@
 """
-Hyperparameter optimization module using Ray Tune.
+Hyperparameter optimization module.
 
-This module provides functionality for hyperparameter optimization using Ray Tune,
-integrated with our unified configuration system.
+Exports the Optuna-based implementation (Week 8 rebuild).
+The legacy Ray Tune module (hyperopt_ray.py) is kept for reference
+but is no longer imported at package level.
 """
 
-from .hyperopt_ray import (
-    train_func,
-    create_search_space,
-    create_search_algorithm,
-    create_scheduler,
-    run_hyperparameter_optimization
+from .hyperopt_optuna import (
+    OptunaHyperopt,
+    HyperoptResult,
+    TrialResult,
+    run_hyperopt,
 )
 
 __all__ = [
-    "train_func",
-    "create_search_space",
-    "create_search_algorithm",
-    "create_scheduler",
-    "run_hyperparameter_optimization"
+    "OptunaHyperopt",
+    "HyperoptResult",
+    "TrialResult",
+    "run_hyperopt",
 ]
