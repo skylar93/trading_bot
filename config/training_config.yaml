@@ -39,6 +39,16 @@ data:
   cache_dir: "data/raw"
   data_path: "data/BTC_1h.csv"  # Direct file path if pre-processed data exists
 
+sentiment:
+  enabled: false                          # set true to use FinBERT features
+  model_name: "ProsusAI/finbert"
+  max_length: 128
+  batch_size: 32
+  cache_db: "data_cache/sentiment_cache.sqlite"
+  device: "cpu"
+  extreme_threshold: 0.7                  # |pos-neg| above this = extreme headline
+  news_data_path: null                    # path to news CSV for backtesting
+
 feature_engineering:
   use_rsi: true
   use_macd: true

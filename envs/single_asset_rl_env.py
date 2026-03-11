@@ -60,6 +60,8 @@ class SingleAssetRLTradingEnv(gym.Env):
         volume_scale_factor: float = 1e6,
         min_episode_steps: int = 30,
         reward_scale: float = 1.0,
+        # Optional pre-computed sentiment features (Week 13)
+        sentiment_data: Optional[pd.DataFrame] = None,
     ):
         """Initialize environment
 
@@ -145,16 +147,29 @@ class SingleAssetRLTradingEnv(gym.Env):
         self.min_episode_steps = min_episode_steps
         self.reward_scale = reward_scale
 
+        # Sentiment data (optional, pre-computed and aligned to price data)
+        self.sentiment_data = None
+        self._n_sentiment = 0
+        if sentiment_data is not None:
+            if self.data is not None and len(sentiment_data) != len(self.data):
+                raise ValueError(
+                    f"sentiment_data length ({len(sentiment_data)}) must match "
+                    f"data length ({len(self.data)})"
+                )
+            self.sentiment_data = sentiment_data.reset_index(drop=True)
+            self._n_sentiment = 4
+        self._n_features = 5 + self._n_sentiment  # OHLCV + optional sentiment
+
         # Define action and observation spaces
         self.action_space = gym.spaces.Box(
             low=-1.0, high=1.0, shape=(1,), dtype=np.float32
         )
-        
-        # Observation space: OHLCV data for window_size steps
+
+        # Observation space: OHLCV [+ sentiment] for window_size steps
         self.observation_space = gym.spaces.Box(
             low=-np.inf,
             high=np.inf,
-            shape=(window_size, 5),  # OHLCV
+            shape=(window_size, self._n_features),
             dtype=np.float32
         )
 
@@ -910,29 +925,64 @@ class SingleAssetRLTradingEnv(gym.Env):
             observation[:, 2] /= self.price_scale_factor  # $low
             observation[:, 3] /= self.price_scale_factor  # $close
             observation[:, 4] /= self.volume_scale_factor  # $volume
-        
+
+        # Append pre-computed sentiment features (columns 5-8) if available
+        if self.sentiment_data is not None:
+            if start_idx < 0:
+                pad_size_s = abs(start_idx)
+                partial_sent = self.sentiment_data.iloc[:end_idx]
+                if len(partial_sent) == 0:
+                    sent_window = np.zeros(
+                        (self.window_size, self._n_sentiment), dtype=np.float32
+                    )
+                else:
+                    pad_row_s = partial_sent.iloc[0].values.astype(np.float32)
+                    pad_sent = np.tile(pad_row_s, (pad_size_s, 1))
+                    sent_window = np.vstack(
+                        [pad_sent, partial_sent.values.astype(np.float32)]
+                    )
+            else:
+                sent_window = self.sentiment_data.iloc[start_idx:end_idx].values.astype(
+                    np.float32
+                )
+
+            # Ensure correct length (mirror OHLCV padding logic)
+            if len(sent_window) < self.window_size:
+                pad_size_s2 = self.window_size - len(sent_window)
+                pad_row_s2 = (
+                    sent_window[0]
+                    if len(sent_window) > 0
+                    else np.zeros(self._n_sentiment, dtype=np.float32)
+                )
+                sent_window = np.vstack(
+                    [np.tile(pad_row_s2, (pad_size_s2, 1)), sent_window]
+                )
+            elif len(sent_window) > self.window_size:
+                sent_window = sent_window[-self.window_size :]
+
+            observation = np.concatenate([observation, sent_window], axis=1)
+
         # Final safety check to ensure correct shape
-        if observation.shape != (self.window_size, 5):
+        if observation.shape != (self.window_size, self._n_features):
             self.logger.error(
                 f"Observation shape wrong after all processing: {observation.shape}, "
-                f"expected ({self.window_size}, 5). Forcing correct shape."
+                f"expected ({self.window_size}, {self._n_features}). Forcing correct shape."
             )
             # Create a properly shaped array filled with first row data
-            if len(observation) > 0:
+            if len(observation) > 0 and observation.shape[1] == self._n_features:
                 first_row = observation[0]
             else:
-                # Fall back to zeros if we have no data at all
-                first_row = np.zeros(5)
-            
+                first_row = np.zeros(self._n_features, dtype=np.float32)
+
             correct_observation = np.tile(first_row, (self.window_size, 1))
-            
+
             # Copy as much data as possible from original observation
             if len(observation) > 0:
                 copy_rows = min(len(observation), self.window_size)
                 correct_observation[-copy_rows:] = observation[:copy_rows]
-            
+
             observation = correct_observation
-        
+
         return observation
 
     def _get_info(self) -> Dict[str, Any]:
