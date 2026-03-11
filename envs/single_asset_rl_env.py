@@ -6,6 +6,10 @@ import logging
 import collections
 
 from envs.rewards import MultiComponentReward, RewardConfig
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from training.regime.regime_detector import RegimeDetector
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +58,8 @@ class SingleAssetRLTradingEnv(gym.Env):
         reward_config: Optional[RewardConfig] = None,
         # Stability
         min_episode_steps: int = 30,
+        # Regime detection (Week 6)
+        regime_detector: Optional[Any] = None,
     ):
         """Initialize environment.
 
@@ -77,6 +83,11 @@ class SingleAssetRLTradingEnv(gym.Env):
             col 2: log(low[t]  / close[t-1])
             col 3: log(close[t] / close[t-1])
             col 4: log(vol[t]  / mean_vol_in_window)
+
+        If *regime_detector* is provided the observation space is extended to
+        (window_size, 8) with the last 3 columns being the current regime
+        probabilities [P(low_vol), P(medium_vol), P(high_vol)] broadcast
+        across every row in the window.
         """
         super().__init__()
         
@@ -130,16 +141,20 @@ class SingleAssetRLTradingEnv(gym.Env):
         # Reward function
         self.reward_fn = MultiComponentReward(reward_config or RewardConfig())
 
+        # Regime detector (optional — Week 6)
+        self.regime_detector = regime_detector
+        self._n_obs_features = 8 if regime_detector is not None else 5
+
         # Define action and observation spaces
         self.action_space = gym.spaces.Box(
             low=-1.0, high=1.0, shape=(1,), dtype=np.float32
         )
 
-        # Observation: log-return-based OHLCV, bounded to [-10, 10]
+        # Observation: log-return-based OHLCV (5 cols) + optional regime probs (3 cols)
         self.observation_space = gym.spaces.Box(
             low=-10.0,
             high=10.0,
-            shape=(window_size, 5),
+            shape=(window_size, self._n_obs_features),
             dtype=np.float32
         )
 
@@ -648,7 +663,10 @@ class SingleAssetRLTradingEnv(gym.Env):
         return base_fee * (1.0 - discount)
 
     def _get_observation(self) -> np.ndarray:
-        """Return log-return-based observation of shape (window_size, 5), clipped to [-10, 10].
+        """Return log-return-based observation, clipped to [-10, 10].
+
+        Shape (window_size, 5) normally, or (window_size, 8) when a
+        regime_detector is attached (+3 regime probability columns).
 
         Features per timestep (all relative to previous close):
             col 0: log(open[t]  / close[t-1])
@@ -656,6 +674,11 @@ class SingleAssetRLTradingEnv(gym.Env):
             col 2: log(low[t]   / close[t-1])
             col 3: log(close[t] / close[t-1])
             col 4: log(vol[t]   / mean_vol_in_window)
+
+        When regime_detector is set (cols 5-7, same value broadcast over all rows):
+            col 5: P(low_vol)
+            col 6: P(medium_vol)
+            col 7: P(high_vol)
 
         For t=0 in the window, close[t-1] is data[start_idx-1] if available,
         otherwise data[start_idx] itself (giving log-return = 0 for that row).
@@ -698,7 +721,22 @@ class SingleAssetRLTradingEnv(gym.Env):
         obs = np.column_stack([log_open, log_high, log_low, log_close, log_vol]).astype(np.float32)
         obs = np.clip(obs, -10.0, 10.0)
 
-        assert obs.shape == (self.window_size, 5), f"Unexpected obs shape: {obs.shape}"
+        # ── Week 6: inject regime probabilities ──────────────────────────────
+        if self.regime_detector is not None:
+            try:
+                regime_probs = self.regime_detector.get_regime_probs(close)
+                regime_probs = np.asarray(regime_probs, dtype=np.float32).reshape(1, 3)
+                # Broadcast regime probs across all rows in the window
+                regime_cols = np.repeat(regime_probs, self.window_size, axis=0)
+                obs = np.concatenate([obs, regime_cols], axis=1)
+            except Exception as exc:
+                logger.warning("Regime detection failed: %s. Using uniform probs.", exc)
+                regime_cols = np.full((self.window_size, 3), 1.0 / 3.0, dtype=np.float32)
+                obs = np.concatenate([obs, regime_cols], axis=1)
+
+        assert obs.shape == (self.window_size, self._n_obs_features), (
+            f"Unexpected obs shape: {obs.shape}, expected ({self.window_size}, {self._n_obs_features})"
+        )
         return obs
 
     def _get_info(self) -> Dict[str, Any]:

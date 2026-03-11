@@ -2,6 +2,9 @@
 stable-baselines3>=2.3.0
 sb3-contrib>=2.3.0  # RecurrentPPO, TRPO, etc.
 
+# Market Regime Detection (Week 6)
+hmmlearn>=0.3.0
+
 # Base Dependencies
 numpy>=1.26.4  # Python 3.9 호환 버전
 pandas>=1.5.3  # Python 3.9 호환 버전

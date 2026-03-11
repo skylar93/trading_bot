@@ -130,6 +130,31 @@ ensemble:
         learning_rate: 0.001
         policy_delay: 2
 
+regime:
+  enabled: false               # Set true to attach RegimeDetector to env + ensemble
+  method: "hmm"                # "hmm" (GaussianHMM) or "threshold" (volatility percentile)
+  n_states: 3                  # Number of HMM hidden states (maps to low/medium/high vol)
+  vol_window: 20               # Rolling volatility window for threshold detector
+  n_iter: 100                  # HMM EM iterations
+  covariance_type: "diag"      # HMM covariance: "diag" (faster) or "full"
+  fallback_on_error: true      # Fall back to threshold if HMM inference fails
+  random_state: 42
+  # Weight multipliers by risk_profile per regime (applied before re-normalising)
+  # regime 0 = low_vol/trending, 1 = medium_vol/ranging, 2 = high_vol/crisis
+  weight_multipliers:
+    low_vol:
+      conservative: 1.5
+      moderate: 1.0
+      aggressive: 0.5
+    medium_vol:
+      conservative: 1.0
+      moderate: 1.0
+      aggressive: 1.0
+    high_vol:
+      conservative: 0.8
+      moderate: 1.5
+      aggressive: 0.3
+
 hyperopt:
   framework: "ray"  # or "optuna", "hyperopt"
   num_samples: 50  # Number of trials to run
