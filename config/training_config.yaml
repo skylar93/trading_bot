@@ -99,6 +99,37 @@ hpc:
   ray_object_store_memory: "8G"
   ray_num_workers: 4
 
+ensemble:
+  enabled: false                  # Set true to use EnsembleManager instead of single agent
+  method: "rolling_validation"   # rolling_validation | weighted_average | best
+  rebalance_interval: 1000       # steps between weight rebalancing
+  validation_window: 200         # episode returns kept per agent for Sharpe calc
+  softmax_temperature: 1.0
+  agents:
+    - id: "ppo_conservative"
+      type: "sb3_ppo"
+      risk_profile: "conservative"
+      weight_init: 0.4
+      params:
+        ent_coef: 0.005
+        clip_range: 0.1
+        learning_rate: 0.0003
+        n_steps: 2048
+    - id: "sac_moderate"
+      type: "sb3_sac"
+      risk_profile: "moderate"
+      weight_init: 0.35
+      params:
+        ent_coef: "auto"
+        learning_rate: 0.0003
+    - id: "td3_aggressive"
+      type: "sb3_td3"
+      risk_profile: "aggressive"
+      weight_init: 0.25
+      params:
+        learning_rate: 0.001
+        policy_delay: 2
+
 hyperopt:
   framework: "ray"  # or "optuna", "hyperopt"
   num_samples: 50  # Number of trials to run

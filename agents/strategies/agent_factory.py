@@ -28,6 +28,7 @@ from agents.strategies.advanced.asset_specific_agents import AssetSpecificAgentF
 logger = logging.getLogger(__name__)
 
 SB3_TYPES = {"sb3ppo", "sb3sac", "sb3td3", "sb3a2c", "ppo", "sac", "td3", "a2c"}
+ENSEMBLE_TYPES = {"ensemble", "ensemblemanager", "ensemblesb3"}
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -128,6 +129,25 @@ def create_agent(
         )
 
     # ------------------------------------------------------------------
+    # Ensemble of SB3 agents (PPO + SAC + TD3)
+    # ------------------------------------------------------------------
+    elif agent_type_norm in ENSEMBLE_TYPES:
+        from agents.ensemble.ensemble_manager import EnsembleManager
+
+        return EnsembleManager(
+            agent_configs=config.get("agents"),
+            observation_space=observation_space,
+            action_space=action_space,
+            method=config.get("method", "rolling_validation"),
+            rebalance_interval=config.get("rebalance_interval", 1000),
+            validation_window=config.get("validation_window", 200),
+            softmax_temperature=config.get("softmax_temperature", 1.0),
+            feature_extractor=config.get("feature_extractor"),
+            feature_extractor_kwargs=config.get("feature_extractor_kwargs", {}),
+            device=device,
+        )
+
+    # ------------------------------------------------------------------
     # Asset-specific agents
     # ------------------------------------------------------------------
     elif agent_type_norm == "assetspecific":
@@ -160,6 +180,7 @@ def list_available_agents() -> Dict[str, str]:
         "momentum": "Momentum-based strategy PPO agent",
         "meanreversion": "Mean-reversion strategy PPO agent",
         "multi": "MultiAgentManager (ensemble of agents)",
+        "ensemble": "EnsembleManager — heterogeneous SB3 ensemble (PPO + SAC + TD3)",
         "assetspecific": "Asset-class-specific agent",
     }
 
