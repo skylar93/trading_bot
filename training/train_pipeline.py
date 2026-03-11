@@ -1190,6 +1190,47 @@ def evaluate_with_manager(env, manager, num_episodes: int = 5) -> Dict[str, List
 # SB3-native training pipeline
 # ---------------------------------------------------------------------------
 
+def build_cvar_callback(config: Dict[str, Any], mlflow_manager=None):
+    """
+    Build a CVaRCallback from the ``risk`` section of the training config.
+
+    Returns ``None`` when ``risk.cvar_enabled`` is False (the default).
+
+    Example config section::
+
+        risk:
+          cvar_enabled: true
+          cvar_alpha: 0.05
+          cvar_threshold: -0.02
+          penalty_scale: 2.0
+          ent_coef_scale: 2.0
+          max_ent_coef: 0.1
+          use_lagrangian: false
+          lagrangian_lr: 0.01
+          log_interval: 1
+
+    Returns:
+        CVaRCallback if enabled, else None.
+    """
+    from agents.sb3.cvar_callback import CVaRCallback
+
+    risk_cfg = config.get("risk", {})
+    if not risk_cfg.get("cvar_enabled", False):
+        return None
+
+    return CVaRCallback(
+        alpha=risk_cfg.get("cvar_alpha", 0.05),
+        cvar_threshold=risk_cfg.get("cvar_threshold", -0.02),
+        penalty_scale=risk_cfg.get("penalty_scale", 2.0),
+        ent_coef_scale=risk_cfg.get("ent_coef_scale", 2.0),
+        max_ent_coef=risk_cfg.get("max_ent_coef", 0.1),
+        use_lagrangian=risk_cfg.get("use_lagrangian", False),
+        lagrangian_lr=risk_cfg.get("lagrangian_lr", 0.01),
+        log_interval=risk_cfg.get("log_interval", 1),
+        mlflow_manager=mlflow_manager,
+    )
+
+
 def train_sb3_agent(
     sb3_agent,
     train_env,
@@ -1254,6 +1295,13 @@ def train_sb3_agent(
                 verbose=1,
             )
         )
+
+    # Optionally attach CVaR constraint callback
+    cvar_cb = build_cvar_callback(config, mlflow_manager=mlflow_manager)
+    if cvar_cb is not None:
+        callbacks.append(cvar_cb)
+        logger.info("CVaR constraint callback attached (alpha=%.2f, threshold=%.4f)",
+                    cvar_cb.alpha, cvar_cb.cvar_threshold)
 
     callback = CallbackList(callbacks)
 

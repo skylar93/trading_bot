@@ -155,6 +155,18 @@ regime:
       moderate: 1.5
       aggressive: 0.3
 
+risk:
+  # ── CVaR (Conditional Value at Risk) constraint (Week 9) ─────────────────
+  cvar_enabled: false           # master switch; set true to attach CVaRCallback
+  cvar_alpha: 0.05              # tail probability (0.05 = worst 5% of rewards)
+  cvar_threshold: -0.02         # max acceptable CVaR; values below trigger penalty
+  penalty_scale: 2.0            # divisor for rollout advantages/returns on violation
+  ent_coef_scale: 2.0           # ent_coef multiplier on violation; decays when satisfied
+  max_ent_coef: 0.1             # hard ceiling on entropy coefficient
+  use_lagrangian: false         # enable Lagrangian dual variable (dual ascent)
+  lagrangian_lr: 0.01           # learning rate for Lagrangian update
+  log_interval: 1               # log every N rollout-ends (on-policy) / CVaR checks
+
 validation:
   method: "walk_forward"          # "walk_forward" | "holdout" | "kfold"
   train_window: 252               # rows in training slice (≈1 trading year at daily)
