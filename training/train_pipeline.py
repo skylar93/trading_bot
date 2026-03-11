@@ -1371,3 +1371,78 @@ def train_ensemble_agent(
         "ensemble_metrics": ensemble.get_ensemble_metrics(),
         "ensemble_save_dir": ensemble_save_dir,
     }
+
+
+def run_walk_forward_validation(
+    df: pd.DataFrame,
+    env_factory: "Callable",
+    agent_factory: "Callable",
+    config: Optional[Dict[str, Any]] = None,
+    mlflow_manager=None,
+) -> "WalkForwardResult":
+    """
+    Run walk-forward validation on a full dataset.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Complete OHLCV dataset (all rows, no pre-splitting needed).
+    env_factory : callable
+        ``env_factory(df_slice) -> gym.Env`` — creates a *fresh* env from a
+        DataFrame slice.  Must accept a single positional argument.
+    agent_factory : callable
+        ``agent_factory(env) -> agent`` — creates a *fresh*, untrained agent
+        compatible with ``SB3AgentWrapper.train()``.
+    config : dict, optional
+        Full training config.  Reads ``validation`` sub-key for window sizes.
+        Falls back to sensible defaults if not provided.
+    mlflow_manager : optional
+        If provided, fold and aggregate metrics are logged to MLflow.
+
+    Returns
+    -------
+    WalkForwardResult
+        Dataclass with per-fold results and aggregate OOS / IS metrics.
+
+    Example
+    -------
+    >>> result = run_walk_forward_validation(df, env_factory, agent_factory, config)
+    >>> print(result.stability_ratio, result.stability_rating)
+    """
+    from training.validation.walk_forward import WalkForwardValidator, WalkForwardResult
+
+    cfg = (config or {}).get("validation", {})
+
+    validator = WalkForwardValidator(
+        train_window=cfg.get("train_window", 252),
+        val_window=cfg.get("val_window", 63),
+        test_window=cfg.get("test_window", 21),
+        step_size=cfg.get("step_size", 21),
+        total_timesteps_per_fold=cfg.get(
+            "total_timesteps_per_fold",
+            (config or {}).get("training", {}).get("total_timesteps", 10_000),
+        ),
+        mlflow_manager=mlflow_manager,
+    )
+
+    logger.info(
+        "Walk-forward validation: train=%d val=%d test=%d step=%d",
+        validator.train_window,
+        validator.val_window,
+        validator.test_window,
+        validator.step_size,
+    )
+
+    result = validator.validate(df, env_factory=env_factory, agent_factory=agent_factory)
+
+    logger.info(
+        "Walk-forward complete: n_folds=%d  OOS_Sharpe=%.3f±%.3f  "
+        "stability=%.3f (%s)",
+        result.n_folds,
+        result.oos_sharpe_mean,
+        result.oos_sharpe_std,
+        result.stability_ratio,
+        result.stability_rating,
+    )
+
+    return result

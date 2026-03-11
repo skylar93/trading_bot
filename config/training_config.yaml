@@ -155,6 +155,19 @@ regime:
       moderate: 1.5
       aggressive: 0.3
 
+validation:
+  method: "walk_forward"          # "walk_forward" | "holdout" | "kfold"
+  train_window: 252               # rows in training slice (≈1 trading year at daily)
+  val_window: 63                  # rows in validation slice (≈1 quarter)
+  test_window: 21                 # rows in OOS test slice (≈1 month)
+  step_size: 21                   # rows to advance between folds (≈1 month)
+  total_timesteps_per_fold: 10000 # SB3 timesteps per fold (override training.total_timesteps)
+  # Stability rating thresholds (OOS Sharpe / IS Sharpe)
+  #   >= 0.7 → "strong"
+  #   >= 0.5 → "decent"
+  #   >= 0.3 → "marginal"
+  #   <  0.3 → "overfitting"
+
 hyperopt:
   framework: "ray"  # or "optuna", "hyperopt"
   num_samples: 50  # Number of trials to run
