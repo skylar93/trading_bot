@@ -48,7 +48,7 @@ if project_root not in sys.path:
 from deployment.web_interface.utils.state import init_session_state
 from deployment.web_interface.training_manager import TrainingManager
 
-async def model_training_page():
+def model_training_page():
     """
     Render the model training page.
     """
@@ -686,18 +686,13 @@ async def model_training_page():
                     "metrics": {}
                 }
                 
-                # Launch training in background
-                training_task = asyncio.create_task(
-                    run_training(manager, progress_bar, status_text, metrics_container, chart_container)
-                )
-                
-                # Store task in session state
-                st.session_state.training_task = training_task
-                
+                # Run training synchronously (blocks UI until complete)
+                run_training(manager, progress_bar, status_text, metrics_container, chart_container)
+
                 # Force rerun to update UI
                 st.rerun()
 
-async def run_training(manager, progress_bar, status_text, metrics_container, chart_container):
+def run_training(manager, progress_bar, status_text, metrics_container, chart_container):
     """
     Run the training process and update the UI.
     
@@ -866,7 +861,7 @@ async def run_training(manager, progress_bar, status_text, metrics_container, ch
                                         st.metric("Synergy Score", f"{metrics['synergy_score']:.2f}")
             
         # Run the training with the progress callback
-        result = await manager.run_training(update_progress)
+        result = asyncio.run(manager.run_training(update_progress))
         
         # Training completed
         # Update training status
@@ -960,4 +955,4 @@ def display_config_panel():
         st.write(f"Seed: {training_config.get('seed', 42)}")
 
 if __name__ == "__main__":
-    asyncio.run(model_training_page()) 
+    model_training_page()
