@@ -1446,3 +1446,74 @@ def run_walk_forward_validation(
     )
 
     return result
+
+
+def run_hyperopt_optuna(
+    df: "pd.DataFrame",
+    config: Optional[Dict[str, Any]],
+    env_factory: "Callable",
+    agent_factory: "Callable",
+    mlflow_manager=None,
+) -> "HyperoptResult":
+    """
+    Run Optuna-based hyperparameter optimisation.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Full dataset. Split internally at config['hyperopt']['train_ratio'].
+    config : dict
+        Full training config. Reads ``hyperopt`` sub-key for study settings.
+    env_factory : callable
+        ``env_factory(df_slice, config) -> gym.Env``
+    agent_factory : callable
+        ``agent_factory(env, config) -> agent``
+    mlflow_manager : optional
+        MLflowManager for logging best params.
+
+    Returns
+    -------
+    HyperoptResult
+        Dataclass with best params, best metrics, Pareto front, and per-trial details.
+    """
+    from training.hyperopt.hyperopt_optuna import run_hyperopt, HyperoptResult
+
+    cfg = config or {}
+    hp_cfg = cfg.get("hyperopt", {})
+
+    n_trials = hp_cfg.get("n_trials", 50)
+    train_ratio = hp_cfg.get("train_ratio", 0.7)
+    multi_objective = hp_cfg.get("multi_objective", False)
+    timeout = hp_cfg.get("timeout", None)
+    study_name = hp_cfg.get("study_name", "trading_hyperopt")
+
+    logger.info(
+        "Hyperopt (Optuna): n_trials=%d  multi_objective=%s  study=%s",
+        n_trials,
+        multi_objective,
+        study_name,
+    )
+
+    result = run_hyperopt(
+        df=df,
+        config=cfg,
+        env_factory=env_factory,
+        agent_factory=agent_factory,
+        n_trials=n_trials,
+        train_ratio=train_ratio,
+        multi_objective=multi_objective,
+        timeout=timeout,
+        mlflow_manager=mlflow_manager,
+        study_name=study_name,
+    )
+
+    logger.info(
+        "Hyperopt complete: best_sharpe=%.4f  best_max_dd=%.4f  "
+        "completed=%d/%d",
+        result.best_sharpe,
+        result.best_max_drawdown,
+        result.n_completed,
+        result.n_trials,
+    )
+
+    return result
