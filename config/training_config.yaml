@@ -204,6 +204,32 @@ meta_controller:
   min_weight: 0.05                # floor weight per agent
   emergency_window: 5             # consecutive neg-Sharpe periods → all-cash
 
+# ---------------------------------------------------------------------------
+# Week 21: GTrXL Feature Extractor + Almgren-Chriss Market Impact
+# ---------------------------------------------------------------------------
+
+feature_extractor:
+  type: "mlp"              # "mlp" | "lstm" | "cnn" | "gtrxl"
+  # GTrXL-specific settings (active when type == "gtrxl")
+  gtrxl:
+    features_dim: 128      # output feature dimension
+    n_layers: 3            # number of GTrXL layers
+    d_model: 128           # internal transformer dimension (must be divisible by n_heads)
+    n_heads: 4             # attention heads
+    memory_len: 64         # Transformer-XL memory segments (0 = disabled)
+    gate_type: "gru"       # gating mechanism; only "gru" supported
+    dropout: 0.0           # attention dropout
+
+market_impact:
+  enabled: false           # set true to use Almgren-Chriss instead of linear slippage
+  model: "sqrt"            # "linear" | "sqrt"
+  # Square-root model params
+  sigma: 0.02              # intraday volatility (fraction, e.g. 0.02 = 2%)
+  kappa: 0.5               # scaling constant (empirical; tune per asset)
+  # Linear model params (ignored when model == "sqrt")
+  eta: 0.01                # temporary impact coefficient
+  gamma: 0.001             # permanent impact coefficient
+
 prediction_market:
   enabled: false                  # set true to add prediction-market features
   providers:
