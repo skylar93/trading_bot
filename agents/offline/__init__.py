@@ -21,6 +21,10 @@ from agents.offline.decision_transformer import (
     _PEFT_AVAILABLE,
     _TRANSFORMERS_AVAILABLE,
 )
+from agents.offline.diffusion_augmentor import (
+    DiffusionConfig,
+    TradingDiffusionAugmentor,
+)
 
 __all__ = [
     "Trajectory",
@@ -30,4 +34,6 @@ __all__ = [
     "DecisionTransformerTrainer",
     "_PEFT_AVAILABLE",
     "_TRANSFORMERS_AVAILABLE",
+    "DiffusionConfig",
+    "TradingDiffusionAugmentor",
 ]
