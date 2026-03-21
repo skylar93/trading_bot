@@ -15,6 +15,9 @@ dt_finetuner
     DecisionTransformerFineTuner — online PPO fine-tuning from a pre-trained DT
     DTFeatureExtractor — SB3 feature extractor using DT state embedding
     FineTunerConfig — configuration dataclass
+diffusion_augmentor
+    TradingDiffusionAugmentor — DDPM-based trajectory data augmentation
+    DiffusionConfig — configuration dataclass
 """
 
 from agents.offline.trajectory_dataset import (
@@ -38,6 +41,10 @@ from agents.offline.dt_finetuner import (
     DTFeatureExtractor,
     _SB3_AVAILABLE,
 )
+from agents.offline.diffusion_augmentor import (
+    DiffusionConfig,
+    TradingDiffusionAugmentor,
+)
 
 __all__ = [
     # trajectory dataset
@@ -57,4 +64,7 @@ __all__ = [
     "DecisionTransformerFineTuner",
     "DTFeatureExtractor",
     "_SB3_AVAILABLE",
+    # diffusion augmentation
+    "DiffusionConfig",
+    "TradingDiffusionAugmentor",
 ]
