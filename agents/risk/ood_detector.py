@@ -162,11 +162,12 @@ class VAEOODDetector:
             if (epoch + 1) % 10 == 0:
                 logger.debug("VAE epoch %d/%d — loss=%.2f", epoch + 1, epochs, total_loss / len(obs))
 
-        # Compute reconstruction error threshold from training set
+        # Compute reconstruction error threshold from training set (deterministic via mu)
         self._vae.eval()
         with torch.no_grad():
             all_obs = torch.tensor(obs_norm, device=self.device)
-            x_hat, _, _ = self._vae(all_obs)
+            mu, _ = self._vae.encode(all_obs)
+            x_hat = self._vae.decode(mu)
             errors = ((all_obs - x_hat) ** 2).mean(dim=1).cpu().numpy()
 
         self._threshold = float(np.percentile(errors, self.threshold_percentile))
@@ -179,7 +180,10 @@ class VAEOODDetector:
         return self
 
     def reconstruction_error(self, observation: np.ndarray) -> float:
-        """Mean squared reconstruction error for a single observation."""
+        """Mean squared reconstruction error for a single observation.
+
+        Uses the posterior mean (mu) for decoding to ensure determinism.
+        """
         if not self._fitted:
             return 0.0
 
@@ -191,7 +195,8 @@ class VAEOODDetector:
         self._vae.eval()
         with torch.no_grad():
             x = torch.tensor(obs_norm, device=self.device).unsqueeze(0)
-            x_hat, _, _ = self._vae(x)
+            mu, _ = self._vae.encode(x)
+            x_hat = self._vae.decode(mu)  # deterministic: bypass reparameterization
             error = ((x - x_hat) ** 2).mean().item()
         return error
 

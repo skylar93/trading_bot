@@ -20,6 +20,22 @@ import torch
 
 from agents.base.base_agent import BaseAgent
 
+
+class _SpaceEnv(gym.Env):
+    """Minimal Gymnasium env that exposes the target spaces for SB3 init."""
+    metadata: dict = {}
+
+    def __init__(self, obs_space: gym.spaces.Space, act_space: gym.spaces.Space):
+        super().__init__()
+        self.observation_space = obs_space
+        self.action_space = act_space
+
+    def reset(self, *, seed=None, options=None):
+        return self.observation_space.sample(), {}
+
+    def step(self, action):
+        return self.observation_space.sample(), 0.0, False, False, {}
+
 logger = logging.getLogger(__name__)
 
 
@@ -88,7 +104,7 @@ class SACAgent(BaseAgent):
 
         self._model = SB3_SAC(
             policy="MlpPolicy",
-            env=None,  # we won't call model.learn with env
+            env=_SpaceEnv(self._flat_obs_space, self.action_space),
             learning_rate=self.learning_rate,
             gamma=self.gamma,
             buffer_size=self.buffer_size,
@@ -97,8 +113,6 @@ class SACAgent(BaseAgent):
             ent_coef=self.ent_coef,
             learning_starts=self.learning_starts,
             device=self._device_str,
-            observation_space=self._flat_obs_space,
-            action_space=self.action_space,
         )
         logger.info(
             "SACAgent initialized — obs=%s, act=%s, device=%s",
