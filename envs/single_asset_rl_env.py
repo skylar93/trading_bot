@@ -1,11 +1,14 @@
 import gymnasium as gym
 import numpy as np
 import pandas as pd
-from typing import Dict, Any, Tuple, Optional
+from typing import TYPE_CHECKING, Dict, Any, Tuple, Optional
 import logging
 import collections
 
 from envs.market_impact import AlmgrenChrissImpact
+
+if TYPE_CHECKING:
+    from agents.offline.dt_forecaster import DTForecaster
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +74,8 @@ class SingleAssetRLTradingEnv(gym.Env):
         market_impact_kappa: float = 0.5,
         market_impact_eta: float = 0.01,
         market_impact_gamma: float = 0.001,
+        # Week 22: DTForecaster — inject return predictions into observation
+        dt_forecaster: Optional["DTForecaster"] = None,
     ):
         """Initialize environment
 
@@ -170,6 +175,15 @@ class SingleAssetRLTradingEnv(gym.Env):
         self.min_episode_steps = min_episode_steps
         self.reward_scale = reward_scale
 
+        # Week 22: DTForecaster (optional) — adds 3 extra features per timestep
+        # Features added: [return_1step, return_5step, confidence]
+        self.dt_forecaster = dt_forecaster
+        self._n_dt_forecast = 3 if dt_forecaster is not None else 0
+        if dt_forecaster is not None:
+            self.logger.info(
+                "DTForecaster attached — observation will include 3 forecast features"
+            )
+
         # Sentiment data (optional, pre-computed and aligned to price data)
         self.sentiment_data = None
         self._n_sentiment = 0
@@ -181,7 +195,7 @@ class SingleAssetRLTradingEnv(gym.Env):
                 )
             self.sentiment_data = sentiment_data.reset_index(drop=True)
             self._n_sentiment = 4
-        self._n_features = 5 + self._n_sentiment  # OHLCV + optional sentiment
+        self._n_features = 5 + self._n_sentiment + self._n_dt_forecast  # OHLCV + optional sentiment + optional DT forecast
 
         # Define action and observation spaces
         self.action_space = gym.spaces.Box(
@@ -992,6 +1006,31 @@ class SingleAssetRLTradingEnv(gym.Env):
                 sent_window = sent_window[-self.window_size :]
 
             observation = np.concatenate([observation, sent_window], axis=1)
+
+        # Week 22: Append DTForecaster predictions as 3 extra constant columns
+        # Columns: [return_1step, return_5step, confidence] — same value in every row
+        # so that downstream 2-D feature extractors (CNN/LSTM/GTrXL) see them at each step.
+        if self.dt_forecaster is not None and self._n_dt_forecast > 0:
+            try:
+                # Use only the base OHLCV window as input to the forecaster
+                # (not the augmented observation, to keep inputs stable)
+                base_obs = observation[:, :5]  # (window_size, 5)
+                pred = self.dt_forecaster.predict(base_obs)
+                forecast_row = np.array(
+                    [pred["return_1step"], pred["return_5step"], pred["confidence"]],
+                    dtype=np.float32,
+                )
+                # Broadcast to (window_size, 3)
+                forecast_cols = np.tile(forecast_row, (self.window_size, 1))
+                observation = np.concatenate([observation, forecast_cols], axis=1)
+            except Exception as e:
+                self.logger.warning(
+                    "DTForecaster prediction failed (%s) — filling with zeros", e
+                )
+                observation = np.concatenate(
+                    [observation, np.zeros((self.window_size, 3), dtype=np.float32)],
+                    axis=1,
+                )
 
         # Final safety check to ensure correct shape
         if observation.shape != (self.window_size, self._n_features):

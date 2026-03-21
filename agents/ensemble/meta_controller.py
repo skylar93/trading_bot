@@ -4,10 +4,12 @@ Meta-Controller: learned agent weighting via a small MLP trained with PPO.
 Architecture
 ------------
 Input:
-    - regime_probs   : (n_regimes,)   — softmax probabilities from regime detector
-    - sharpe_history : (n_agents,)    — rolling Sharpe ratio of each sub-agent
-    - market_features: (n_market_features,)  — optional extra market signals
+    - regime_probs   : (n_regimes,)         — softmax probabilities from regime detector
+    - sharpe_history : (n_agents,)          — rolling Sharpe ratio of each sub-agent
+    - market_features: (n_market_features,) — optional extra market signals
       (e.g. volatility, momentum, prediction-market probability)
+    - intention_vector: (n_agents * 4,)     — optional agent communication features
+      (Week 22: direction, confidence, horizon, risk per agent)
 
 Output:
     - agent_weights  : (n_agents,)    — softmax weights in [min_weight, 1]
@@ -59,6 +61,8 @@ class MetaControllerConfig:
     n_regimes: int = 3          # number of market regime classes
     n_market_features: int = 4  # extra market/prediction-market features
     hidden_dim: int = 64        # MLP hidden layer width
+    # Week 22: agent communication / intention sharing
+    use_intention: bool = False  # set True to include CommunicationBus features
 
     # PPO
     lr: float = 3e-4
@@ -202,10 +206,14 @@ class MetaController:
         self.cfg = config or MetaControllerConfig()
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
+        # Intention features: n_agents * 4 (direction, confidence, horizon, risk)
+        self._intention_dim = (n_agents * 4) if self.cfg.use_intention else 0
+
         self.obs_dim = (
             self.cfg.n_regimes
             + n_agents              # sharpe history
             + self.cfg.n_market_features
+            + self._intention_dim   # Week 22: agent communication features
         )
 
         self.policy = _MetaPolicy(
@@ -247,6 +255,7 @@ class MetaController:
         regime_probs: np.ndarray,
         sharpe_history: np.ndarray,
         market_features: Optional[np.ndarray] = None,
+        intention_vector: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """
         Return normalised agent weights.
@@ -260,6 +269,9 @@ class MetaController:
         market_features : (n_market_features,) float array, optional
             Extra signals (e.g. prediction-market probabilities).
             Defaults to zeros if not provided.
+        intention_vector : (n_agents * 4,) float array, optional
+            Aggregated agent intentions from ``CommunicationBus.get_aggregated()``.
+            Only used when ``cfg.use_intention=True``.
 
         Returns
         -------
@@ -270,7 +282,7 @@ class MetaController:
             logger.warning("MetaController in emergency mode — all-cash weights")
             return np.zeros(self.n_agents, dtype=np.float32)
 
-        obs = self._build_obs(regime_probs, sharpe_history, market_features)
+        obs = self._build_obs(regime_probs, sharpe_history, market_features, intention_vector)
         obs_t = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
 
         with torch.no_grad():
@@ -288,6 +300,7 @@ class MetaController:
         portfolio_return: float,
         done: bool = False,
         market_features: Optional[np.ndarray] = None,
+        intention_vector: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """
         Get weights AND record transition for PPO update.
@@ -296,11 +309,16 @@ class MetaController:
         to learn online.  After ``rebalance_interval`` calls the internal
         PPO update is triggered automatically.
 
+        Parameters
+        ----------
+        intention_vector : (n_agents * 4,) float array, optional
+            Aggregated agent intentions from ``CommunicationBus.get_aggregated()``.
+
         Returns
         -------
         weights : (n_agents,) float array
         """
-        obs = self._build_obs(regime_probs, sharpe_history, market_features)
+        obs = self._build_obs(regime_probs, sharpe_history, market_features, intention_vector)
         obs_t = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
 
         with torch.no_grad():
@@ -403,6 +421,7 @@ class MetaController:
         regime_probs: np.ndarray,
         sharpe_history: np.ndarray,
         market_features: Optional[np.ndarray],
+        intention_vector: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         rp = np.asarray(regime_probs, dtype=np.float32)
         sh = np.asarray(sharpe_history, dtype=np.float32)
@@ -423,7 +442,20 @@ class MetaController:
         # Clip Sharpe to reasonable range
         sh = np.clip(sh, -5.0, 5.0)
 
-        return np.concatenate([rp, sh, mf])
+        parts = [rp, sh, mf]
+
+        # Week 22: intention features from CommunicationBus
+        if self.cfg.use_intention and self._intention_dim > 0:
+            if intention_vector is None:
+                iv = np.zeros(self._intention_dim, dtype=np.float32)
+            else:
+                iv = np.asarray(intention_vector, dtype=np.float32)
+                if iv.shape[0] != self._intention_dim:
+                    iv = np.resize(iv, self._intention_dim)
+                iv = np.clip(iv, -1.0, 1.0)
+            parts.append(iv)
+
+        return np.concatenate(parts)
 
     def _apply_min_weight(self, raw: np.ndarray) -> np.ndarray:
         """Project softmax weights so each >= min_weight, then re-normalise."""
