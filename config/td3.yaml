@@ -1,0 +1,17 @@
+# TD3 Agent Configuration
+# Role in ensemble: aggressive, higher learning rate, larger buffer
+agent:
+  type: td3
+  learning_rate: 1.0e-3
+  gamma: 0.99
+  buffer_size: 200000
+  batch_size: 256
+  tau: 0.005
+  policy_delay: 2
+  target_policy_noise: 0.2
+  target_noise_clip: 0.5
+  learning_starts: 1000
+
+ensemble:
+  weight_init: 0.20
+  role: aggressive

@@ -253,6 +253,31 @@ def create_agent(
                     **{k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space"]}
                 )
         
+        # TD3 agent creation
+        elif agent_type == "td3":
+            if strategy == "momentum":
+                logger.warning("MomentumTD3Agent not yet implemented, using generic TD3")
+            elif strategy == "meanreversion":
+                logger.warning("MeanReversionTD3Agent not yet implemented, using generic TD3")
+
+            logger.info("Creating generic TD3 agent")
+            try:
+                from agents.strategies.single.td3_agent import TD3Agent
+                return TD3Agent(
+                    observation_space=observation_space,
+                    action_space=action_space,
+                    device=device,
+                    **{k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space", "device"]}
+                )
+            except ImportError:
+                logger.warning("TD3 agent not available, using dummy agent")
+                from agents.strategies.single.dummy_agent import DummyAgent
+                return DummyAgent(
+                    observation_space=observation_space,
+                    action_space=action_space,
+                    **{k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space"]}
+                )
+
         # Backward compatibility for existing calls that pass strategy as agent_type
         elif agent_type == "momentum" or agent_type == "momentumppo":
             logger.warning("Deprecated: Using 'momentum' as agent_type. Please use agent_type='ppo', strategy='momentum' instead.")

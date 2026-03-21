@@ -1,0 +1,189 @@
+"""SAC Agent: Soft Actor-Critic via Stable-Baselines3 wrapped in BaseAgent.
+
+Wraps SB3's SAC implementation to provide the same interface as the
+custom PPOAgent so it can participate in the ensemble seamlessly.
+
+Key differences from PPO:
+- Off-policy: uses a replay buffer → more sample-efficient
+- Maximum entropy: auto-tuned temperature → better exploration
+- Twin Q-networks: reduces overestimation bias
+"""
+
+import logging
+import os
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+import gymnasium as gym
+import numpy as np
+import torch
+
+from agents.base.base_agent import BaseAgent
+
+
+class _SpaceEnv(gym.Env):
+    """Minimal Gymnasium env that exposes the target spaces for SB3 init."""
+    metadata: dict = {}
+
+    def __init__(self, obs_space: gym.spaces.Space, act_space: gym.spaces.Space):
+        super().__init__()
+        self.observation_space = obs_space
+        self.action_space = act_space
+
+    def reset(self, *, seed=None, options=None):
+        return self.observation_space.sample(), {}
+
+    def step(self, action):
+        return self.observation_space.sample(), 0.0, False, False, {}
+
+logger = logging.getLogger(__name__)
+
+
+class SACAgent(BaseAgent):
+    """Soft Actor-Critic agent backed by stable_baselines3.SAC."""
+
+    def __init__(
+        self,
+        observation_space: gym.spaces.Box,
+        action_space: gym.spaces.Box,
+        learning_rate: float = 3e-4,
+        gamma: float = 0.99,
+        buffer_size: int = 100_000,
+        batch_size: int = 256,
+        tau: float = 0.005,
+        ent_coef: str = "auto",
+        learning_starts: int = 1000,
+        device: Optional[str] = None,
+        **kwargs,
+    ):
+        super().__init__(observation_space, action_space)
+
+        self.learning_rate = learning_rate
+        self.gamma = gamma
+        self.buffer_size = buffer_size
+        self.batch_size = batch_size
+        self.tau = tau
+        self.ent_coef = ent_coef
+        self.learning_starts = learning_starts
+        self._device_str = device or ("cuda" if torch.cuda.is_available() else "cpu")
+
+        # SB3 expects flat obs for MlpPolicy — flatten (window, features) → (window*features,)
+        self._obs_is_2d = len(observation_space.shape) == 2
+        if self._obs_is_2d:
+            flat_dim = int(np.prod(observation_space.shape))
+            self._flat_obs_space = gym.spaces.Box(
+                low=-np.inf, high=np.inf, shape=(flat_dim,), dtype=np.float32
+            )
+        else:
+            self._flat_obs_space = observation_space
+
+        self._model = None  # lazy init to avoid import at module level
+        self._step_count = 0
+
+        # Replay buffer for online train_step calls
+        self._pending_transitions: list = []
+
+        unused = [k for k in kwargs if k not in ("type", "strategy")]
+        if unused:
+            logger.warning("SACAgent ignoring unused config keys: %s", unused)
+
+    # ------------------------------------------------------------------
+    # Lazy model creation
+    # ------------------------------------------------------------------
+
+    def _ensure_model(self) -> None:
+        if self._model is not None:
+            return
+        try:
+            from stable_baselines3 import SAC as SB3_SAC
+        except ImportError as e:
+            raise ImportError(
+                "stable_baselines3 is required for SACAgent. "
+                "Install with: pip install stable-baselines3"
+            ) from e
+
+        self._model = SB3_SAC(
+            policy="MlpPolicy",
+            env=_SpaceEnv(self._flat_obs_space, self.action_space),
+            learning_rate=self.learning_rate,
+            gamma=self.gamma,
+            buffer_size=self.buffer_size,
+            batch_size=self.batch_size,
+            tau=self.tau,
+            ent_coef=self.ent_coef,
+            learning_starts=self.learning_starts,
+            device=self._device_str,
+        )
+        logger.info(
+            "SACAgent initialized — obs=%s, act=%s, device=%s",
+            self._flat_obs_space.shape,
+            self.action_space.shape,
+            self._device_str,
+        )
+
+    # ------------------------------------------------------------------
+    # BaseAgent interface
+    # ------------------------------------------------------------------
+
+    def _flatten_obs(self, obs: np.ndarray) -> np.ndarray:
+        if self._obs_is_2d and obs.ndim == 2:
+            return obs.flatten().astype(np.float32)
+        return np.asarray(obs, dtype=np.float32)
+
+    def get_action(self, state: np.ndarray, deterministic: bool = False) -> np.ndarray:
+        self._ensure_model()
+        flat = self._flatten_obs(state)
+        action, _ = self._model.predict(flat, deterministic=deterministic)
+        return np.asarray(action, dtype=np.float32)
+
+    def _update(self, state, action, reward, next_state, done, info=None) -> Dict[str, float]:
+        self._ensure_model()
+        flat_s = self._flatten_obs(state)
+        flat_ns = self._flatten_obs(next_state)
+
+        # Add to SB3 replay buffer
+        self._model.replay_buffer.add(
+            obs=flat_s.reshape(1, -1),
+            next_obs=flat_ns.reshape(1, -1),
+            action=np.asarray(action).reshape(1, -1),
+            reward=np.array([float(reward)]),
+            done=np.array([bool(done)]),
+            infos=[info or {}],
+        )
+        self._step_count += 1
+
+        # Train if enough samples collected
+        metrics: Dict[str, float] = {}
+        if self._step_count >= self.learning_starts and self._step_count % self.batch_size == 0:
+            self._model.train(gradient_steps=1, batch_size=self.batch_size)
+            metrics["sac_step"] = float(self._step_count)
+
+        return metrics
+
+    def train(self, env, total_timesteps: int = 10000, batch_size: int = 64) -> Dict[str, Any]:
+        self._ensure_model()
+        self._model.set_env(env)
+        self._model.learn(total_timesteps=total_timesteps)
+        return {"total_timesteps": total_timesteps}
+
+    def update_if_buffer_ready(self) -> Optional[Dict[str, float]]:
+        """Called by train_pipeline at update_interval boundaries."""
+        self._ensure_model()
+        if self._step_count >= self.learning_starts:
+            self._model.train(gradient_steps=1, batch_size=self.batch_size)
+            return {"sac_update": 1.0}
+        return None
+
+    def save(self, path: str) -> None:
+        self._ensure_model()
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        self._model.save(path)
+        logger.info("SACAgent saved to %s", path)
+
+    def load(self, path: str) -> None:
+        try:
+            from stable_baselines3 import SAC as SB3_SAC
+        except ImportError as e:
+            raise ImportError("stable_baselines3 required") from e
+        self._model = SB3_SAC.load(path, device=self._device_str)
+        logger.info("SACAgent loaded from %s", path)
