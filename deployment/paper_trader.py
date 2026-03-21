@@ -1,0 +1,590 @@
+"""
+Paper Trader: Production paper trading with real-time data and risk management.
+
+PaperTrader connects to a CCXT exchange (or uses simulation mode) to run a
+trained RL agent against live/historical market data. All decisions and P&L
+are logged to MLflow. Risk management (position limits, drawdown shutdown) is
+enforced at every step.
+
+Usage (CLI):
+    python -m deployment.paper_trader --config config/paper_trading.yaml --duration 3600
+
+Usage (API):
+    trader = PaperTrader(agent, config)
+    trader.run(price_stream=prices)
+    report = trader.generate_report()
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any, Dict, Iterator, List, Optional, Tuple
+
+import numpy as np
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Data structures
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Trade:
+    timestamp: datetime
+    side: str          # "buy" | "sell"
+    price: float
+    quantity: float
+    fee: float
+    pnl: float = 0.0   # realised PnL for closing trades
+
+
+@dataclass
+class TradingState:
+    balance: float
+    position: float = 0.0          # units held (positive = long)
+    entry_price: float = 0.0
+    peak_portfolio_value: float = 0.0
+    trades: List[Trade] = field(default_factory=list)
+    portfolio_history: List[float] = field(default_factory=list)
+    step: int = 0
+    shutdown_triggered: bool = False
+    shutdown_reason: str = ""
+
+    @property
+    def portfolio_value(self) -> float:
+        return self.balance + self.position * self._current_price
+
+    # injected at runtime
+    _current_price: float = field(default=0.0, repr=False)
+
+
+# ---------------------------------------------------------------------------
+# PaperTrader
+# ---------------------------------------------------------------------------
+
+class PaperTrader:
+    """
+    Paper trading runner.
+
+    Parameters
+    ----------
+    agent :
+        Any object with a ``predict(obs, deterministic=True)`` method that
+        returns ``(action, state)``.  Compatible with all SB3 agents.
+    config : dict
+        Paper trading configuration (see ``config/paper_trading.yaml``).
+    mlflow_manager : optional
+        ``MLflowManager`` instance; if provided, all trades and metrics are
+        logged per step and a final report artifact is uploaded.
+    simulation_mode : bool
+        When True, no CCXT connection is made.  Market data must be supplied
+        via ``run(price_stream=...)``.
+    """
+
+    def __init__(
+        self,
+        agent,
+        config: Dict[str, Any],
+        mlflow_manager=None,
+        simulation_mode: bool = False,
+    ) -> None:
+        self.agent = agent
+        self.config = config
+        self.mlflow_manager = mlflow_manager
+        self.simulation_mode = simulation_mode
+
+        pt = config.get("paper_trading", config)
+        self.symbol: str = pt.get("symbol", "BTC/USDT")
+        self.initial_balance: float = float(pt.get("initial_balance", 10_000.0))
+        self.trading_fee: float = float(pt.get("trading_fee", 0.001))
+        self.max_position_size: float = float(pt.get("max_position_size", 1.0))
+        self.max_drawdown_threshold: float = float(
+            pt.get("max_drawdown_threshold", 0.20)
+        )
+        self.window_size: int = int(pt.get("window_size", 20))
+        self.daily_report_interval: int = int(
+            pt.get("daily_report_interval", 86400)
+        )  # seconds
+
+        self._price_history: List[float] = []
+        self._last_report_time: float = time.time()
+
+        self.state = TradingState(
+            balance=self.initial_balance,
+            peak_portfolio_value=self.initial_balance,
+        )
+
+        if not simulation_mode:
+            self._exchange = self._init_exchange(pt)
+        else:
+            self._exchange = None
+
+        logger.info(
+            "PaperTrader initialised | symbol=%s balance=%.2f simulation=%s",
+            self.symbol,
+            self.initial_balance,
+            simulation_mode,
+        )
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def run(
+        self,
+        duration_seconds: Optional[float] = None,
+        price_stream: Optional[Iterator[float]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Main trading loop.
+
+        Parameters
+        ----------
+        duration_seconds :
+            Stop after this many wall-clock seconds (None = run until stream
+            exhausted or shutdown triggered).
+        price_stream :
+            Iterator of prices.  Required in simulation mode; in live mode
+            prices are fetched from the exchange if omitted.
+
+        Returns
+        -------
+        Final performance report dict.
+        """
+        start_time = time.time()
+        step = 0
+
+        for price in self._price_iterator(price_stream):
+            if self.state.shutdown_triggered:
+                break
+            if duration_seconds and (time.time() - start_time) >= duration_seconds:
+                break
+
+            self._update_price(price)
+
+            obs = self._build_observation()
+            if obs is None:
+                step += 1
+                continue
+
+            action, _ = self.agent.predict(obs, deterministic=True)
+            self._execute_action(action, price)
+            self._check_risk(price)
+            self._maybe_daily_report()
+
+            step += 1
+            self.state.step = step
+
+            if self.mlflow_manager:
+                self._log_step_metrics(price)
+
+        return self.generate_report()
+
+    def generate_report(self) -> Dict[str, Any]:
+        """Return a dictionary with all performance metrics."""
+        history = self.state.portfolio_history
+        if not history:
+            return {
+                "total_return": 0.0,
+                "sharpe_ratio": 0.0,
+                "max_drawdown": 0.0,
+                "num_trades": 0,
+                "final_balance": self.state.balance,
+                "final_portfolio_value": self.state.balance,
+                "shutdown_triggered": self.state.shutdown_triggered,
+                "shutdown_reason": self.state.shutdown_reason,
+                "win_rate": 0.0,
+                "avg_trade_pnl": 0.0,
+                "total_fees": 0.0,
+            }
+
+        values = np.array(history, dtype=float)
+        returns = np.diff(values) / np.where(values[:-1] != 0, values[:-1], 1e-8)
+
+        total_return = (values[-1] - self.initial_balance) / self.initial_balance
+        sharpe = self._compute_sharpe(returns)
+        max_dd = self._compute_max_drawdown(values)
+
+        closing_trades = [t for t in self.state.trades if t.side == "sell"]
+        winning = [t for t in closing_trades if t.pnl > 0]
+        win_rate = len(winning) / len(closing_trades) if closing_trades else 0.0
+        avg_pnl = (
+            np.mean([t.pnl for t in closing_trades]) if closing_trades else 0.0
+        )
+        total_fees = sum(t.fee for t in self.state.trades)
+
+        report = {
+            "total_return": float(total_return),
+            "sharpe_ratio": float(sharpe),
+            "max_drawdown": float(max_dd),
+            "num_trades": len(self.state.trades),
+            "final_balance": float(self.state.balance),
+            "final_portfolio_value": float(values[-1]),
+            "shutdown_triggered": self.state.shutdown_triggered,
+            "shutdown_reason": self.state.shutdown_reason,
+            "win_rate": float(win_rate),
+            "avg_trade_pnl": float(avg_pnl),
+            "total_fees": float(total_fees),
+            "steps": self.state.step,
+            "generated_at": datetime.utcnow().isoformat(),
+        }
+
+        if self.mlflow_manager:
+            self._log_final_report(report)
+
+        return report
+
+    def save_checkpoint(self, path: str) -> None:
+        """Save current trading state to disk."""
+        import json
+
+        state_dict = {
+            "balance": self.state.balance,
+            "position": self.state.position,
+            "entry_price": self.state.entry_price,
+            "peak_portfolio_value": self.state.peak_portfolio_value,
+            "step": self.state.step,
+            "shutdown_triggered": self.state.shutdown_triggered,
+            "shutdown_reason": self.state.shutdown_reason,
+            "portfolio_history": self.state.portfolio_history,
+            "trades": [
+                {
+                    "timestamp": t.timestamp.isoformat(),
+                    "side": t.side,
+                    "price": t.price,
+                    "quantity": t.quantity,
+                    "fee": t.fee,
+                    "pnl": t.pnl,
+                }
+                for t in self.state.trades
+            ],
+        }
+        Path(path).write_text(json.dumps(state_dict, indent=2))
+        logger.info("Checkpoint saved to %s", path)
+
+    def load_checkpoint(self, path: str) -> None:
+        """Restore trading state from a checkpoint file."""
+        import json
+
+        data = json.loads(Path(path).read_text())
+        self.state.balance = data["balance"]
+        self.state.position = data["position"]
+        self.state.entry_price = data["entry_price"]
+        self.state.peak_portfolio_value = data["peak_portfolio_value"]
+        self.state.step = data["step"]
+        self.state.shutdown_triggered = data["shutdown_triggered"]
+        self.state.shutdown_reason = data["shutdown_reason"]
+        self.state.portfolio_history = data["portfolio_history"]
+        self.state.trades = [
+            Trade(
+                timestamp=datetime.fromisoformat(t["timestamp"]),
+                side=t["side"],
+                price=t["price"],
+                quantity=t["quantity"],
+                fee=t["fee"],
+                pnl=t["pnl"],
+            )
+            for t in data["trades"]
+        ]
+        logger.info("Checkpoint loaded from %s", path)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _update_price(self, price: float) -> None:
+        self._price_history.append(price)
+        self.state._current_price = price
+        pv = self.state.balance + self.state.position * price
+        self.state.portfolio_history.append(pv)
+        if pv > self.state.peak_portfolio_value:
+            self.state.peak_portfolio_value = pv
+
+    def _build_observation(self) -> Optional[np.ndarray]:
+        """Build observation vector from price history window."""
+        if len(self._price_history) < self.window_size:
+            return None
+        window = np.array(self._price_history[-self.window_size :], dtype=np.float32)
+        # log-returns
+        log_returns = np.diff(np.log(np.maximum(window, 1e-8)))
+        position_ratio = np.array(
+            [self.state.position * self.state._current_price / self.initial_balance],
+            dtype=np.float32,
+        )
+        cash_ratio = np.array(
+            [self.state.balance / self.initial_balance], dtype=np.float32
+        )
+        obs = np.concatenate([log_returns, position_ratio, cash_ratio])
+        return obs
+
+    def _execute_action(self, action, price: float) -> None:
+        """
+        Translate continuous action in [-1, 1] to a trade.
+
+        action > 0  → buy (size proportional to action)
+        action < 0  → sell / reduce position
+        action ≈ 0  → hold
+        """
+        if isinstance(action, np.ndarray):
+            action = float(action.flat[0])
+
+        DEADBAND = 0.05
+        if abs(action) < DEADBAND:
+            return
+
+        if action > 0:
+            self._execute_buy(action, price)
+        else:
+            self._execute_sell(abs(action), price)
+
+    def _execute_buy(self, strength: float, price: float) -> None:
+        max_spend = self.state.balance * min(strength, self.max_position_size)
+        if max_spend < price * 1e-6:
+            return
+        quantity = max_spend / price
+        fee = max_spend * self.trading_fee
+        cost = max_spend + fee
+        if cost > self.state.balance:
+            return
+        self.state.balance -= cost
+        self.state.position += quantity
+        if self.state.entry_price == 0.0:
+            self.state.entry_price = price
+        self.state.trades.append(
+            Trade(
+                timestamp=datetime.utcnow(),
+                side="buy",
+                price=price,
+                quantity=quantity,
+                fee=fee,
+            )
+        )
+        logger.debug("BUY qty=%.6f price=%.2f fee=%.4f", quantity, price, fee)
+
+    def _execute_sell(self, strength: float, price: float) -> None:
+        sell_qty = self.state.position * min(strength, 1.0)
+        if sell_qty < 1e-8:
+            return
+        proceeds = sell_qty * price
+        fee = proceeds * self.trading_fee
+        net_proceeds = proceeds - fee
+        pnl = (price - self.state.entry_price) * sell_qty if self.state.entry_price else 0.0
+        self.state.balance += net_proceeds
+        self.state.position -= sell_qty
+        if self.state.position < 1e-8:
+            self.state.position = 0.0
+            self.state.entry_price = 0.0
+        self.state.trades.append(
+            Trade(
+                timestamp=datetime.utcnow(),
+                side="sell",
+                price=price,
+                quantity=sell_qty,
+                fee=fee,
+                pnl=pnl,
+            )
+        )
+        logger.debug("SELL qty=%.6f price=%.2f pnl=%.4f", sell_qty, price, pnl)
+
+    def _check_risk(self, price: float) -> None:
+        """Enforce max drawdown shutdown."""
+        if not self.state.portfolio_history:
+            return
+        current_pv = self.state.portfolio_history[-1]
+        if self.state.peak_portfolio_value > 0:
+            drawdown = (
+                self.state.peak_portfolio_value - current_pv
+            ) / self.state.peak_portfolio_value
+            if drawdown >= self.max_drawdown_threshold:
+                self._trigger_shutdown(
+                    f"Max drawdown {drawdown:.1%} >= threshold "
+                    f"{self.max_drawdown_threshold:.1%}"
+                )
+
+    def _trigger_shutdown(self, reason: str) -> None:
+        logger.warning("SHUTDOWN triggered: %s", reason)
+        # Liquidate position at current price
+        if self.state.position > 0 and self.state._current_price > 0:
+            self._execute_sell(1.0, self.state._current_price)
+        self.state.shutdown_triggered = True
+        self.state.shutdown_reason = reason
+
+    def _maybe_daily_report(self) -> None:
+        now = time.time()
+        if now - self._last_report_time >= self.daily_report_interval:
+            report = self.generate_report()
+            logger.info(
+                "Daily report | return=%.2f%% sharpe=%.3f drawdown=%.2f%%",
+                report["total_return"] * 100,
+                report["sharpe_ratio"],
+                report["max_drawdown"] * 100,
+            )
+            self._last_report_time = now
+
+    def _log_step_metrics(self, price: float) -> None:
+        try:
+            pv = self.state.portfolio_history[-1] if self.state.portfolio_history else self.state.balance
+            self.mlflow_manager.log_metric("portfolio_value", pv, step=self.state.step)
+            self.mlflow_manager.log_metric("price", price, step=self.state.step)
+            self.mlflow_manager.log_metric("position", self.state.position, step=self.state.step)
+            self.mlflow_manager.log_metric("balance", self.state.balance, step=self.state.step)
+        except Exception as e:
+            logger.debug("MLflow step logging failed: %s", e)
+
+    def _log_final_report(self, report: Dict[str, Any]) -> None:
+        try:
+            import json, tempfile
+
+            self.mlflow_manager.log_metric("total_return", report["total_return"])
+            self.mlflow_manager.log_metric("sharpe_ratio", report["sharpe_ratio"])
+            self.mlflow_manager.log_metric("max_drawdown", report["max_drawdown"])
+            self.mlflow_manager.log_metric("num_trades", report["num_trades"])
+            self.mlflow_manager.log_metric("win_rate", report["win_rate"])
+
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".json", delete=False
+            ) as f:
+                json.dump(report, f, indent=2)
+                tmp_path = f.name
+            self.mlflow_manager.log_artifact(tmp_path, "paper_trading_report.json")
+        except Exception as e:
+            logger.debug("MLflow report logging failed: %s", e)
+
+    # ------------------------------------------------------------------
+    # Exchange helpers
+    # ------------------------------------------------------------------
+
+    def _init_exchange(self, config: Dict[str, Any]):
+        try:
+            import ccxt
+
+            exchange_id = config.get("exchange_id", "binance")
+            exchange_class = getattr(ccxt, exchange_id)
+            exchange = exchange_class(
+                {
+                    "apiKey": config.get("api_key", ""),
+                    "secret": config.get("api_secret", ""),
+                    "enableRateLimit": True,
+                }
+            )
+            logger.info("CCXT exchange initialised: %s", exchange_id)
+            return exchange
+        except ImportError:
+            logger.warning("ccxt not installed; falling back to simulation mode")
+            self.simulation_mode = True
+            return None
+        except Exception as e:
+            logger.warning("Exchange init failed (%s); using simulation mode", e)
+            self.simulation_mode = True
+            return None
+
+    def _fetch_live_price(self) -> Optional[float]:
+        if self._exchange is None:
+            return None
+        try:
+            ticker = self._exchange.fetch_ticker(self.symbol)
+            return float(ticker["last"])
+        except Exception as e:
+            logger.warning("Failed to fetch price: %s", e)
+            return None
+
+    def _price_iterator(
+        self, price_stream: Optional[Iterator[float]]
+    ) -> Iterator[float]:
+        if price_stream is not None:
+            yield from price_stream
+        elif self.simulation_mode:
+            # No stream + simulation mode: empty (caller should pass stream)
+            return
+        else:
+            # Live mode: poll exchange
+            poll_interval = self.config.get("paper_trading", {}).get(
+                "poll_interval_seconds", 5.0
+            )
+            while True:
+                price = self._fetch_live_price()
+                if price is not None:
+                    yield price
+                time.sleep(poll_interval)
+
+    # ------------------------------------------------------------------
+    # Statistics helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _compute_sharpe(returns: np.ndarray, annualize: int = 252) -> float:
+        if len(returns) < 2:
+            return 0.0
+        std = np.std(returns)
+        if std < 1e-10:
+            return 0.0
+        return float(np.mean(returns) / std * np.sqrt(annualize))
+
+    @staticmethod
+    def _compute_max_drawdown(values: np.ndarray) -> float:
+        if len(values) < 2:
+            return 0.0
+        peak = np.maximum.accumulate(values)
+        drawdowns = np.where(peak > 0, (peak - values) / peak, 0.0)
+        return float(np.max(drawdowns))
+
+    # ------------------------------------------------------------------
+    # Context manager
+    # ------------------------------------------------------------------
+
+    def __enter__(self) -> "PaperTrader":
+        return self
+
+    def __exit__(self, *_) -> None:
+        if self._exchange is not None:
+            try:
+                self._exchange.close()
+            except Exception:
+                pass
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
+
+def _main() -> None:
+    import argparse
+    import yaml
+
+    parser = argparse.ArgumentParser(description="Paper Trader CLI")
+    parser.add_argument("--config", required=True, help="Path to paper_trading.yaml")
+    parser.add_argument("--duration", type=float, default=None, help="Run duration (seconds)")
+    args = parser.parse_args()
+
+    with open(args.config) as f:
+        config = yaml.safe_load(f)
+
+    # Load agent from checkpoint
+    agent_cfg = config.get("agent", {})
+    checkpoint = agent_cfg.get("checkpoint")
+    algo = agent_cfg.get("algo", "PPO").upper()
+
+    if checkpoint:
+        try:
+            from stable_baselines3 import PPO, SAC, TD3
+            algo_map = {"PPO": PPO, "SAC": SAC, "TD3": TD3}
+            agent = algo_map[algo].load(checkpoint)
+        except Exception as e:
+            logger.error("Failed to load agent from %s: %s", checkpoint, e)
+            raise
+    else:
+        raise ValueError("agent.checkpoint must be set in config")
+
+    trader = PaperTrader(agent, config, simulation_mode=False)
+    report = trader.run(duration_seconds=args.duration)
+    import json
+    print(json.dumps(report, indent=2))
+
+
+if __name__ == "__main__":
+    _main()
