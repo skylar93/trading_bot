@@ -230,6 +230,38 @@ market_impact:
   eta: 0.01                # temporary impact coefficient
   gamma: 0.001             # permanent impact coefficient
 
+# ---------------------------------------------------------------------------
+# Week 22: DTForecaster + Agent Communication Protocol
+# ---------------------------------------------------------------------------
+
+dt_forecaster:
+  enabled: false           # set true to attach DTForecaster to env observation
+  # Architecture
+  state_dim: 5             # input features per timestep (5 = raw OHLCV)
+  seq_len: 20              # must match env.window_size
+  hidden_size: 64          # transformer embedding dimension
+  n_layer: 2               # number of causal transformer blocks
+  n_head: 4                # attention heads (hidden_size must be divisible)
+  dropout: 0.1             # dropout rate (also used for MC-dropout confidence)
+  # Training
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  batch_size: 64
+  n_epochs: 20
+  w_5step: 0.5             # weight of 5-step head in combined MSE loss
+  val_frac: 0.1            # fraction of data for walk-forward validation
+  # Inference
+  mc_samples: 10           # MC-dropout passes for confidence estimation
+  checkpoint_dir: "checkpoints/dt_forecaster"
+
+agent_communication:
+  enabled: false           # set true to enable CommunicationBus intention sharing
+  # Each sub-agent publishes: direction (-1..1), confidence (0..1),
+  #   horizon (steps, int), risk_assessment (0..1)
+  # Aggregated features (n_agents * 4) are fed to the MetaController input
+  feed_to_meta_controller: true   # extend meta-controller obs with intention features
+  # MetaController must also have use_intention: true (see meta_controller section above)
+
 prediction_market:
   enabled: false                  # set true to add prediction-market features
   providers:
