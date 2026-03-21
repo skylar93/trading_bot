@@ -1,0 +1,74 @@
+# FLAG-Trader Configuration
+# Based on FLAG-Trader (ACL 2025, Harvard/Columbia/NVIDIA)
+# Small LLM (SmolLM2-135M) + LoRA + PPO for trading
+
+flag_trader:
+  # --- Base model -------------------------------------------------------
+  base_model: "HuggingFaceTB/SmolLM2-135M"
+  dry_run: false                  # true → tiny in-memory model, no downloads
+
+  # --- LoRA (efficient fine-tuning ~900K trainable params) --------------
+  lora_rank: 16
+  lora_alpha: 32.0
+  lora_dropout: 0.1
+  lora_target_modules: ["q_proj", "v_proj"]
+
+  # --- Market state formatting ------------------------------------------
+  window_size: 20                 # log-return timesteps in observation
+  obs_dim: 22                     # window_size + position_ratio + cash_ratio
+  price_decimals: 4               # decimal places in text-formatted returns
+
+  # --- SmolLM2-135M architecture ----------------------------------------
+  hidden_size: 576                # SmolLM2-135M hidden dimension
+
+  # --- Supervised pre-training (Phase 1) --------------------------------
+  pretrain_lr: 1.0e-4
+  pretrain_weight_decay: 1.0e-4
+  pretrain_batch_size: 32
+  pretrain_max_grad_norm: 1.0
+
+  # --- PPO fine-tuning (Phase 2, via TRL) ------------------------------
+  ppo_lr: 1.0e-5
+  ppo_epochs: 4
+  ppo_mini_batch_size: 16
+  ppo_batch_size: 256             # environment steps per PPO update
+  gamma: 0.99
+  lam: 0.95
+  clip_range: 0.2
+  vf_coef: 0.5
+  ent_coef: 0.01
+  max_grad_norm: 0.5
+
+  # --- Text generation --------------------------------------------------
+  max_new_tokens: 5
+
+
+# --- 4-agent ensemble (PPO + SAC + TD3 + FLAG) -------------------------
+ensemble:
+  agents:
+    - type: "sb3_ppo"
+      risk_profile: "conservative"
+      weight_init: 0.30
+    - type: "sb3_sac"
+      risk_profile: "moderate"
+      weight_init: 0.25
+    - type: "sb3_td3"
+      risk_profile: "aggressive"
+      weight_init: 0.20
+    - type: "flag_trader"
+      risk_profile: "adaptive"
+      weight_init: 0.25
+
+  # Meta-controller (regime-aware weighting)
+  meta_controller:
+    update_freq: 1000             # steps between weight updates
+    lr: 1.0e-3
+    min_weight: 0.05
+    max_weight: 0.60
+
+
+# --- MLflow logging -------------------------------------------------------
+mlflow:
+  experiment_name: "flag_trader_training"
+  tracking_uri: "mlruns"
+  log_interval: 1000
