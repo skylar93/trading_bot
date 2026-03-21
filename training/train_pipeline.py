@@ -48,8 +48,75 @@ from training.utils.config_manager import ConfigManager
 from training.env_factory import create_env, create_eval_env
 from agents.strategies.agent_factory import create_agent
 from training.utils.unified_mlflow_manager import MLflowManager
+from training.validation.walk_forward import WalkForwardValidator, WalkForwardResult
+from training.signals.regime_detector import RegimeDetector
 
 logger = logging.getLogger(__name__)
+
+def run_walk_forward(
+    config: Dict[str, Any],
+    data: pd.DataFrame,
+    agent_type: Optional[str] = None,
+    mlflow_manager: Optional[MLflowManager] = None,
+) -> WalkForwardResult:
+    """Run walk-forward validation for a single agent.
+
+    Reads ``walk_forward`` sub-config (keys: n_splits, train_ratio, gap_days, mode)
+    and wraps the standard single-agent training inside each fold.
+
+    Args:
+        config: Full training config dict.
+        data: Full DataFrame to split temporally.
+        agent_type: Override the agent type from config (optional).
+        mlflow_manager: Optional MLflow manager for fold-level logging.
+
+    Returns:
+        WalkForwardResult with per-fold IS/OOS Sharpe and drawdown stats.
+    """
+    wf_cfg = config.get("walk_forward", {})
+    validator = WalkForwardValidator(
+        n_splits=wf_cfg.get("n_splits", 12),
+        train_ratio=wf_cfg.get("train_ratio", 0.5),
+        gap_days=wf_cfg.get("gap_days", 5),
+        mode=wf_cfg.get("mode", "expanding"),
+    )
+
+    _agent_type = agent_type or config.get("agent", {}).get("type", "ppo")
+    agent_cfg = config.get("agent", {})
+
+    def agent_factory():
+        env = create_env(config, data.iloc[:10])  # dummy to get spaces
+        return create_agent(
+            agent_type=_agent_type,
+            config=agent_cfg,
+            observation_space=env.observation_space,
+            action_space=env.action_space,
+        )
+
+    def env_factory(df: pd.DataFrame):
+        return create_env(config, df)
+
+    total_timesteps = config.get("training", {}).get("total_timesteps", 10000)
+    result = validator.validate(
+        agent_factory=agent_factory,
+        env_factory=env_factory,
+        data=data,
+        total_timesteps=total_timesteps,
+    )
+
+    summary = result.summary()
+    logger.info(
+        "Walk-forward complete — OOS Sharpe=%.3f, Stability=%.3f, MaxDD=%.3f",
+        summary["oos_sharpe_mean"],
+        summary["stability_ratio"],
+        summary["mean_max_drawdown"],
+    )
+
+    if mlflow_manager is not None:
+        mlflow_manager.log_metrics(summary)
+
+    return result
+
 
 def train_single_agent(
     agent,
@@ -717,12 +784,42 @@ def train_pipeline(config: Dict[str, Any], data: Optional[pd.DataFrame] = None) 
     
     # Create environment based on config
     env = create_env(config, data)
-    
+
     # Determine agent type
     env_type = config["env"]["type"]
     agent_config = config.get("agent", {})
     agent_type = agent_config.get("type", "ppo")
-    
+
+    # ---------------------------------------------------------------
+    # Task B: Regime Detection — fit before training, attach to config
+    # ---------------------------------------------------------------
+    regime_detector: Optional[RegimeDetector] = None
+    if data is not None and config.get("use_regime_detector", False):
+        regime_cfg = config.get("regime_detector", {})
+        regime_detector = RegimeDetector(
+            n_regimes=regime_cfg.get("n_regimes", 3),
+            lookback=regime_cfg.get("lookback", 60),
+            vol_window=regime_cfg.get("vol_window", 20),
+        )
+        try:
+            regime_detector.fit(data)
+            logger.info("RegimeDetector fitted on training data")
+            # Expose detector via config so callbacks/agents can access it
+            config["_regime_detector"] = regime_detector
+        except Exception as exc:
+            logger.warning("RegimeDetector fit failed (%s) — continuing without it", exc)
+            regime_detector = None
+
+    # ---------------------------------------------------------------
+    # Task A: Walk-forward — if requested, run and return early
+    # ---------------------------------------------------------------
+    if config.get("walk_forward", {}).get("enabled", False) or config.get("--walk-forward", False):
+        if data is None:
+            raise ValueError("walk-forward validation requires data to be provided")
+        logger.info("Running walk-forward validation instead of standard training")
+        wf_result = run_walk_forward(config, data, agent_type=agent_type, mlflow_manager=mlflow_manager)
+        return {"walk_forward": wf_result.summary(), "folds": wf_result.folds}
+
     # Create or use provided agent
     if "pre_created_agent" in config:
         logger.info(f"Using pre-created agent: {config['pre_created_agent'].__class__.__name__}")
@@ -736,7 +833,7 @@ def train_pipeline(config: Dict[str, Any], data: Optional[pd.DataFrame] = None) 
             observation_space=env.observation_space,
             action_space=env.action_space
         )
-    
+
     # Select training method based on environment type
     if env_type == "single_asset_rl" or env_type == "multi_asset_rl":
         # Single agent training for both single and multi-asset environments
@@ -750,6 +847,8 @@ def train_pipeline(config: Dict[str, Any], data: Optional[pd.DataFrame] = None) 
         raise ValueError(f"Unsupported environment type: {env_type}")
     
     logger.info("Training pipeline completed")
+    if regime_detector is not None:
+        results["regime_detector"] = regime_detector
     return results
 
 class nullcontext:

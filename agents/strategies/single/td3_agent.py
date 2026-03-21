@@ -19,6 +19,22 @@ import torch
 
 from agents.base.base_agent import BaseAgent
 
+
+class _SpaceEnv(gym.Env):
+    """Minimal Gymnasium env that exposes the target spaces for SB3 init."""
+    metadata: dict = {}
+
+    def __init__(self, obs_space: gym.spaces.Space, act_space: gym.spaces.Space):
+        super().__init__()
+        self.observation_space = obs_space
+        self.action_space = act_space
+
+    def reset(self, *, seed=None, options=None):
+        return self.observation_space.sample(), {}
+
+    def step(self, action):
+        return self.observation_space.sample(), 0.0, False, False, {}
+
 logger = logging.getLogger(__name__)
 
 
@@ -88,7 +104,7 @@ class TD3Agent(BaseAgent):
 
         self._model = SB3_TD3(
             policy="MlpPolicy",
-            env=None,
+            env=_SpaceEnv(self._flat_obs_space, self.action_space),
             learning_rate=self.learning_rate,
             gamma=self.gamma,
             buffer_size=self.buffer_size,
@@ -99,8 +115,6 @@ class TD3Agent(BaseAgent):
             target_noise_clip=self.target_noise_clip,
             learning_starts=self.learning_starts,
             device=self._device_str,
-            observation_space=self._flat_obs_space,
-            action_space=self.action_space,
         )
         logger.info(
             "TD3Agent initialized — obs=%s, act=%s, device=%s",
