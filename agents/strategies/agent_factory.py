@@ -461,6 +461,49 @@ def create_agent(
                     **{k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space"]}
                 )
         
+        # CVaRPPO — SB3 PPO with Lagrangian CVaR constraint (Week 20)
+        elif agent_type in ("sb3cvarppo", "cvarppo", "sb3_cvar_ppo"):
+            logger.info("Creating CVaRPPO agent (Lagrangian CVaR constraint)")
+            try:
+                from agents.sb3.cvar_ppo import CVaRPPO
+                from stable_baselines3.common.env_util import make_vec_env
+
+                env_id = config.get("env_id", "CartPole-v1")
+                # Build a minimal VecEnv from the provided spaces when no env_id override
+                if "env" in config:
+                    vec_env = config["env"]
+                else:
+                    # Wrap spaces in a simple passthrough env
+                    import gymnasium as gym
+
+                    class _SpaceEnv(gym.Env):
+                        def __init__(self):
+                            self.observation_space = observation_space
+                            self.action_space = action_space
+
+                        def reset(self, **kwargs):
+                            return observation_space.sample(), {}
+
+                        def step(self, action):
+                            return observation_space.sample(), 0.0, False, False, {}
+
+                    from stable_baselines3.common.env_util import make_vec_env as _mve
+                    vec_env = _mve(_SpaceEnv, n_envs=1)
+
+                cvar_kwargs = {
+                    k: v for k, v in config.items()
+                    if k in ("cvar_alpha", "cvar_threshold", "lr_nu", "nu_max",
+                             "learning_rate", "n_steps", "batch_size", "n_epochs",
+                             "gamma", "gae_lambda", "ent_coef", "vf_coef",
+                             "max_grad_norm", "verbose")
+                }
+                cvar_kwargs.setdefault("verbose", 0)
+                return CVaRPPO("MlpPolicy", vec_env, **cvar_kwargs)
+            except Exception as e:
+                logger.error(f"CVaRPPO creation failed: {e}")
+                from agents.strategies.single.dummy_agent import DummyAgent
+                return DummyAgent(observation_space=observation_space, action_space=action_space)
+
         # Default fallback
         else:
             logger.warning(f"Unknown agent type '{agent_type}', using dummy agent")
@@ -496,8 +539,9 @@ def list_available_agents() -> Dict[str, str]:
         "marketmaking": "Market making PPO agent",
         "meta": "Meta-agent for ensemble decision making",
         "hierarchical": "Hierarchical agent with manager and worker agents",
-        "multi": "Multi-agent manager for coordinating multiple agents"
-    } 
+        "multi": "Multi-agent manager for coordinating multiple agents",
+        "sb3_cvar_ppo": "SB3 PPO with Lagrangian CVaR constraint in the loss function",
+    }
 
 def create_test_momentum_agent(observation_space, action_space, config):
     """

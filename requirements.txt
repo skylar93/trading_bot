@@ -12,11 +12,11 @@ optuna>=4.1.0
 hyperopt>=0.2.7
 wandb>=0.19.1
 
-# SB3 (SAC, TD3 ensemble agents)
+# SB3 (SAC, TD3 ensemble agents + Week 20 CVaRPPO subclass)
 stable-baselines3>=2.1.0
 
-# Regime Detection
-hmmlearn>=0.3.0
+# Regime Detection + Drift Detection (Weeks 19-20)
+river>=0.21.0                # Week 20: ADWIN drift detection (optional — fallback to pure-Python impl)
 
 # LLM / Offline RL (Phase 4)
 transformers>=4.30.0
