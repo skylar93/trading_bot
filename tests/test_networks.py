@@ -3,6 +3,11 @@ import torch
 import numpy as np
 import gymnasium as gym
 from gymnasium.spaces import Box
+# Legacy MLP / ValueMLP removed in Week 19 (replaced by SB3 policy networks).
+pytest.importorskip(
+    "agents.models.architectures.mlp",
+    reason="Legacy MLP architectures removed in Week 19 (replaced by SB3 policy).",
+)
 from agents.models.architectures.mlp import PolicyNetwork
 from agents.models.architectures.value_mlp import ValueNetwork
 from agents.models.architectures.base import BaseNetwork

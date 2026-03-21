@@ -11,7 +11,10 @@ from plotly.subplots import make_subplots
 import asyncio
 from typing import Dict, List, Optional, Tuple
 from envs.live_trading_env import LiveTradingEnvironment
-from agents.strategies.single.ppo_agent import PPOAgent
+try:
+    from agents.strategies.single.ppo_agent import PPOAgent
+except ImportError:
+    PPOAgent = None  # Legacy PPOAgent removed in Week 19; use SB3 agents directly
 import logging
 
 

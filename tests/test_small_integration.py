@@ -42,9 +42,22 @@ from envs.multi_agent_multi_asset_env import MultiAgentMultiAssetEnv
 from envs.multi_agent_env import MultiAgentTradingEnv
 from envs.single_asset_rl_env import SingleAssetRLTradingEnv
 from agents.strategies.agent_factory import create_agent
-from agents.strategies.advanced.meta_agent import MetaAgent
+# MetaAgent / PolicyNetwork removed in Week 19; tests using them will be skipped
+try:
+    from agents.strategies.advanced.meta_agent import MetaAgent
+    _HAS_META_AGENT = True
+except ImportError:
+    MetaAgent = None  # type: ignore[assignment,misc]
+    _HAS_META_AGENT = False
+
 from training.train_pipeline import train_pipeline
-from agents.models.architectures.mlp import PolicyNetwork
+
+try:
+    from agents.models.architectures.mlp import PolicyNetwork
+    _HAS_POLICY_NETWORK = True
+except ImportError:
+    PolicyNetwork = None  # type: ignore[assignment,misc]
+    _HAS_POLICY_NETWORK = False
 
 # Configure logging with detailed format for debugging
 logging.basicConfig(
@@ -484,6 +497,7 @@ def test_multi_agent_shapes(tiny_test_data):
 
 
 @pytest.mark.shape_verification
+@pytest.mark.skipif(not _HAS_META_AGENT, reason="MetaAgent removed in Week 19")
 def test_meta_agent_ensemble(tiny_test_data):
     """Test the shapes of observations, actions, and rewards for a meta agent ensemble"""
     logger.info("Starting meta agent ensemble test")

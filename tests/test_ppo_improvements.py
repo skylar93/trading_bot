@@ -1,6 +1,11 @@
-"""Tests for PPO improvements."""
+"""Tests for PPO improvements — legacy PPOAgent (removed in Week 19)."""
 
 import pytest
+# PPOAgent was replaced by SB3 in Week 19; skip this entire module.
+pytest.importorskip(
+    "agents.strategies.single.ppo_agent",
+    reason="Legacy PPOAgent removed in Week 19 (replaced by SB3).",
+)
 import torch
 import numpy as np
 import gymnasium as gym

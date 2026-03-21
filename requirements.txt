@@ -1,5 +1,6 @@
 # Base Dependencies
 numpy>=1.26.4  # Python 3.9 호환 버전
+hmmlearn>=0.3.0          # Week 19: HMM regime detection
 pandas>=1.5.3  # Python 3.9 호환 버전
 torch>=2.0.0
 gymnasium>=0.26.0

@@ -16,31 +16,31 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 # Configure logging to capture test outputs
 logging.basicConfig(level=logging.INFO)
 
-# Try to import actual implementations first
+# DummyAgent now lives in agent_factory (Week 19: legacy dummy_agent.py removed)
+from agents.strategies.agent_factory import create_agent, list_available_agents, DummyAgent
+
 try:
-    from agents.strategies.agent_factory import create_agent, list_available_agents
-    from agents.strategies.single.dummy_agent import DummyAgent
-    from agents.strategies.single.ppo_agent import PPOAgent
     from agents.strategies.multi.mean_reversion_ppo_agent import MeanReversionPPOAgent
-    from agents.strategies.multi.momentum_ppo_agent import MomentumPPOAgent
-    from agents.strategies.multi.multi_agent_manager import MultiAgentManager
-    USE_REAL_AGENTS = True
-    
-except ImportError as e:
-    logging.warning(f"Using mock agents for testing. Import error: {e}")
-    
-    # Create mock classes for testing
-    from agents.strategies.base_agent import BaseAgent
-    from agents.strategies.single.dummy_agent import DummyAgent
-    
-    # Use dummy as a base for all other agents
-    PPOAgent = DummyAgent
+except ImportError:
     MeanReversionPPOAgent = DummyAgent
+
+try:
+    from agents.strategies.multi.momentum_ppo_agent import MomentumPPOAgent
+except ImportError:
     MomentumPPOAgent = DummyAgent
+
+try:
+    from agents.strategies.multi.multi_agent_manager import MultiAgentManager
+except ImportError:
     MultiAgentManager = dict  # Mock as dict
-    
-    from agents.strategies.agent_factory import create_agent, list_available_agents
-    USE_REAL_AGENTS = False
+
+# PPOAgent replaced by SB3 in Week 19
+try:
+    from agents.strategies.single.ppo_agent import PPOAgent
+except ImportError:
+    PPOAgent = DummyAgent
+
+USE_REAL_AGENTS = (MeanReversionPPOAgent is not DummyAgent)
 
 # Constants for observation space
 WINDOW_SIZE = 20

@@ -19,6 +19,11 @@ import pandas as pd
 from gymnasium import spaces
 
 from envs.single_asset_rl_env import SingleAssetRLTradingEnv
+# Legacy MLP/ValueMLP/PPOBuffer/PPOAgent removed in Week 19 (replaced by SB3).
+pytest.importorskip(
+    "agents.models.architectures.mlp",
+    reason="Legacy components removed in Week 19 (replaced by SB3).",
+)
 from agents.models.architectures.mlp import PolicyNetwork
 from agents.models.architectures.value_mlp import ValueNetwork
 from buffers.ppo_buffer import PPOBuffer

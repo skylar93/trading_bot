@@ -31,6 +31,8 @@ from agents.strategies.agent_factory import create_agent
 logging.basicConfig(level=logging.INFO)
 
 # Import dependencies with fallback for testing
+# DummyAgent now lives in agent_factory (Week 19: legacy dummy_agent.py removed)
+from agents.strategies.agent_factory import DummyAgent
 try:
     from agents.strategies.advanced.meta_agent import MetaAgent
     from agents.strategies.base_agent import BaseAgent
@@ -38,8 +40,10 @@ try:
 except ImportError:
     logging.warning("Using mock agents for testing")
     from agents.strategies.base_agent import BaseAgent
-    from agents.strategies.single.dummy_agent import DummyAgent
-    from agents.strategies.test_agent_factory import create_test_multi_agent_manager
+    try:
+        from agents.strategies.test_agent_factory import create_test_multi_agent_manager
+    except ImportError:
+        create_test_multi_agent_manager = None
     
     # Create mock classes for testing
     class MockMetaAgent(BaseAgent):
