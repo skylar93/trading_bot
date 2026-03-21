@@ -39,6 +39,38 @@ data:
   cache_dir: "data/raw"
   data_path: "data/BTC_1h.csv"  # Direct file path if pre-processed data exists
 
+decision_transformer:
+  # --- Model architecture ---
+  state_dim: 100          # window_size(20) × n_features(5); update if obs changes
+  act_dim: 1              # scalar continuous position action
+  hidden_size: 128        # transformer embedding dimension
+  context_len: 20         # K timesteps per context window
+  n_layer: 3              # transformer depth
+  n_head: 1               # attention heads (hidden_size must be divisible)
+  n_inner: null           # FFN dim; null → 4×hidden_size
+  dropout: 0.1
+
+  # --- Backbone ---
+  use_gpt2_backbone: false  # true → download GPT-2 weights; false → lightweight custom transformer
+  use_lora: true            # LoRA adapters (only relevant when use_gpt2_backbone=true)
+  lora_rank: 16
+  lora_alpha: 32.0
+  lora_dropout: 0.1
+
+  # --- Training ---
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  warmup_steps: 1000
+  max_grad_norm: 0.25
+  batch_size: 64
+  n_epochs: 10
+  device: "cpu"
+
+  # --- Inference ---
+  target_return: 1.0        # RTG target used when rolling out with DT (normalised)
+  checkpoint_dir: "checkpoints/decision_transformer"
+  trajectory_save_path: "data/expert_trajectories.pkl"
+
 sentiment:
   enabled: false                          # set true to use FinBERT features
   model_name: "ProsusAI/finbert"
