@@ -5,6 +5,8 @@ from typing import Dict, Any, Tuple, Optional
 import logging
 import collections
 
+from envs.market_impact import AlmgrenChrissImpact
+
 logger = logging.getLogger(__name__)
 
 
@@ -62,6 +64,13 @@ class SingleAssetRLTradingEnv(gym.Env):
         reward_scale: float = 1.0,
         # Optional pre-computed sentiment features (Week 13)
         sentiment_data: Optional[pd.DataFrame] = None,
+        # Market impact model (Week 21 — Almgren-Chriss)
+        use_market_impact: bool = False,
+        market_impact_model: str = "sqrt",
+        market_impact_sigma: float = 0.02,
+        market_impact_kappa: float = 0.5,
+        market_impact_eta: float = 0.01,
+        market_impact_gamma: float = 0.001,
     ):
         """Initialize environment
 
@@ -139,6 +148,20 @@ class SingleAssetRLTradingEnv(gym.Env):
         self.partial_fills = partial_fills
         self.min_fill_rate = min_fill_rate
         self.volume_slippage_factor = volume_slippage_factor
+
+        # Market impact model (Week 21)
+        self.market_impact: Optional[AlmgrenChrissImpact] = None
+        if use_market_impact:
+            self.market_impact = AlmgrenChrissImpact(
+                model=market_impact_model,
+                sigma=market_impact_sigma,
+                kappa=market_impact_kappa,
+                eta=market_impact_eta,
+                gamma=market_impact_gamma,
+            )
+            self.logger.info(
+                f"Market impact model enabled: AlmgrenChriss model='{market_impact_model}'"
+            )
         
         # Stability parameters
         self.scale_ohlcv = scale_ohlcv
@@ -801,12 +824,20 @@ class SingleAssetRLTradingEnv(gym.Env):
         """
         if not self.apply_slippage:
             return 0.0
-            
+
         # Safety checks for inputs
         if price <= 0 or np.isnan(price) or np.isinf(price):
             self.logger.warning(f"❌ Invalid price for slippage calculation: {price}")
             return 0.0
-            
+
+        # Delegate to Almgren-Chriss model when enabled (Week 21)
+        if self.market_impact is not None:
+            return self.market_impact.compute(
+                shares=abs(trade_size),
+                price=price,
+                daily_volume=max(volume, 1e-8),
+            )
+
         # Base slippage
         base_slippage = self.slippage_factor
         
