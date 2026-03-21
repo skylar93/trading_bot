@@ -11,6 +11,12 @@ optuna>=4.1.0
 hyperopt>=0.2.7
 wandb>=0.19.1
 
+# SB3 (SAC, TD3 ensemble agents)
+stable-baselines3>=2.1.0
+
+# Regime Detection
+hmmlearn>=0.3.0
+
 # LLM / Offline RL (Phase 4)
 transformers>=4.30.0
 peft>=0.5.0
