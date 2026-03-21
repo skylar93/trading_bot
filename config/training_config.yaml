@@ -224,3 +224,29 @@ prediction_market:
     SPY:  ["fed", "rate", "recession"]
     GLD:  ["gold", "inflation", "fed"]
     DEFAULT: ["recession", "fed rate"]
+
+# ---------------------------------------------------------------------------
+# Week 20: Lagrangian CVaR-PPO + Concept Drift Detection
+# ---------------------------------------------------------------------------
+
+cvar:
+  mode: "lagrangian"          # "lagrangian" | "callback"
+                              # lagrangian: CVaR in loss function (CVaRPPO)
+                              # callback:   soft constraint via CvarCallback (fallback)
+  alpha: 0.05                 # tail probability — worst 5% of returns
+  threshold: -0.02            # min acceptable CVaR (tail mean ≥ -2%)
+  lr_nu: 0.01                 # dual-variable step size
+  nu_max: 10.0                # hard upper bound on dual variable ν
+
+drift_detection:
+  enabled: true
+  method: "adwin"             # "adwin" | "page_hinkley"
+  # ADWIN settings
+  adwin_confidence: 0.002     # δ — smaller → fewer false positives, slower detection
+  # Page-Hinkley settings (used when method="page_hinkley")
+  ph_delta: 0.005             # allowed mean fluctuation
+  ph_threshold: 50.0          # detection threshold λ
+  # Reaction settings
+  cooldown_steps: 1000        # min steps between two drift reactions
+  checkpoint_on_drift: true   # save model checkpoint when drift detected
+  conservative_scale: null    # action scale after drift (null = no scaling)
