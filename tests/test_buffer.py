@@ -1,6 +1,11 @@
 import pytest
 import numpy as np
 import torch
+# PPOBuffer was replaced by SB3's internal buffer in Week 19; skip this module.
+pytest.importorskip(
+    "buffers.ppo_buffer",
+    reason="Legacy PPOBuffer removed in Week 19 (replaced by SB3 internal buffer).",
+)
 from buffers.ppo_buffer import PPOBuffer
 
 @pytest.fixture

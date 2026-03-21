@@ -10,7 +10,8 @@ from .hyperopt_ray import (
     create_search_space,
     create_search_algorithm,
     create_scheduler,
-    run_hyperparameter_optimization
+    run_hyperparameter_optimization,
+    run_hyperopt,
 )
 
 __all__ = [
@@ -18,5 +19,6 @@ __all__ = [
     "create_search_space",
     "create_search_algorithm",
     "create_scheduler",
-    "run_hyperparameter_optimization"
+    "run_hyperparameter_optimization",
+    "run_hyperopt",
 ]

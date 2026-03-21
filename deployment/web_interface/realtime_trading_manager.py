@@ -13,7 +13,10 @@ import asyncio
 from typing import Dict, List, Optional, Tuple
 
 from envs.live_trading_env import LiveTradingEnvironment
-from agents.strategies.single.ppo_agent import PPOAgent
+try:
+    from agents.strategies.single.ppo_agent import PPOAgent
+except ImportError:
+    PPOAgent = None  # Legacy PPOAgent removed in Week 19; use SB3 agents directly
 from deployment.web_interface.utils.data_stream import DataStream
 from deployment.web_interface.utils.state import update_portfolio_history
 

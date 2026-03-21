@@ -9,8 +9,17 @@ single or multi-agent architectures, including:
 3. Meta-agents for ensemble decision making
 """
 
-from agents.strategies.advanced.meta_agent import MetaAgent
-from agents.strategies.advanced.hierarchical_agent import HierarchicalAgent
+# MetaAgent / HierarchicalAgent removed in Week 19 (replaced by meta_controller.py)
+try:
+    from agents.strategies.advanced.meta_agent import MetaAgent
+except ImportError:
+    MetaAgent = None  # type: ignore[assignment]
+
+try:
+    from agents.strategies.advanced.hierarchical_agent import HierarchicalAgent
+except ImportError:
+    HierarchicalAgent = None  # type: ignore[assignment]
+
 from agents.strategies.advanced.asset_specific_agents import (
     AssetSpecificAgent,
     CryptoAgent,
