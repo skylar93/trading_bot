@@ -183,3 +183,44 @@ hyperopt:
       min: 0.1
       max: 0.3
     # Add more parameters as needed 
+# ---------------------------------------------------------------------------
+# Week 15: Meta-Controller + Prediction Market Signals
+# ---------------------------------------------------------------------------
+
+meta_controller:
+  enabled: false                  # set true to use learned weighting
+  n_regimes: 3                    # must match regime detector output
+  n_market_features: 4            # extra features (e.g. prediction-market)
+  hidden_dim: 64                  # MLP width
+  lr: 3.0e-4
+  gamma: 0.99
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.01
+  max_grad_norm: 0.5
+  ppo_epochs: 4
+  mini_batch_size: 32
+  rebalance_interval: 20          # env steps between PPO updates
+  min_weight: 0.05                # floor weight per agent
+  emergency_window: 5             # consecutive neg-Sharpe periods → all-cash
+
+prediction_market:
+  enabled: false                  # set true to add prediction-market features
+  providers:
+    - "polymarket"
+    - "kalshi"
+  cache_db: "data_cache/prediction_market_cache.sqlite"
+  cache_ttl: 300                  # seconds
+  momentum_window: 5              # steps for prob_momentum feature
+  timeout: 5.0                    # HTTP timeout (seconds)
+  features:
+    - "primary_event_prob"
+    - "event_prob_momentum"
+    - "event_uncertainty"
+    - "cross_market_divergence"
+  asset_keywords:
+    BTC:  ["bitcoin", "btc", "crypto"]
+    ETH:  ["ethereum", "eth", "crypto"]
+    SPY:  ["fed", "rate", "recession"]
+    GLD:  ["gold", "inflation", "fed"]
+    DEFAULT: ["recession", "fed rate"]

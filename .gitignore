@@ -66,3 +66,4 @@ backtest_results/
 # HTML reports
 htmlcov/
 result.html
+data_cache/
