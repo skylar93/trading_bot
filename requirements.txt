@@ -58,6 +58,9 @@ coverage>=7.6.9
 statsmodels>=0.14.0          # Granger causality tests (optional — graceful fallback)
 requests>=2.31.0             # CoinGecko API calls for on-chain features
 
+# Week 27: Data fetcher (cross-asset + traditional markets)
+yfinance>=0.2.40             # SPY, DXY, VIX, Gold, US10Y data
+
 # Utilities
 python-dotenv>=1.0.1
 pydantic>=2.10.4

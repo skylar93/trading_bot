@@ -1,0 +1,118 @@
+# RTX 3060 Ti (8GB VRAM) 최적화 프로파일
+# 모든 컴포넌트가 8GB 내에서 동작하도록 조정
+# 사용법: python -m training.train_pipeline --config config/local_3060ti.yaml
+
+env:
+  type: "single_asset_rl"
+  window_size: 20
+  initial_balance: 100000
+  trading_fee: 0.001
+  normalize: true
+  max_position_size: 1.0
+
+agent:
+  algo_type: "sb3_cvar_ppo"
+  feature_extractor: "conv1d"       # GTrXL은 VRAM 많이 먹으니 기본은 conv1d
+  sb3_params:
+    ppo:
+      n_steps: 1024                  # 2048 → 1024 (VRAM 절약)
+      batch_size: 64
+      n_epochs: 10
+      learning_rate: 3.0e-4
+      gamma: 0.99
+      ent_coef: 0.01
+      clip_range: 0.2
+  feature_extractor_kwargs:
+    features_dim: 128
+
+ensemble:
+  enabled: true
+  agents:
+    - type: "sb3_cvar_ppo"           # conservative
+      params:
+        ent_coef: 0.005
+        clip_range: 0.1
+    - type: "sb3_sac"                # moderate
+      params:
+        buffer_size: 500000          # 1M → 500K (RAM 절약)
+    - type: "sb3_td3"                # aggressive
+      params:
+        buffer_size: 500000
+    - type: "flag_trader"            # adaptive
+      params:
+        base_model: "HuggingFaceTB/SmolLM2-135M"
+        lora_rank: 8                 # 16 → 8 (VRAM 절약)
+        max_length: 256              # 512 → 256
+
+training:
+  total_timesteps: 500000            # 1M → 500K (로컬 적정)
+  eval_interval: 5000
+  checkpoint_interval: 25000
+  device: "cuda"                     # RTX 3060 Ti CUDA
+  ensemble_training: "sequential"    # parallel → sequential (메모리 절약)
+  # 한 agent 학습 → GPU 메모리 해제 → 다음 agent
+
+data:
+  exchange: "binance"
+  symbols: ["BTC/USDT"]
+  timeframe: "1h"
+  cache_dir: "data/raw"
+
+validation:
+  method: "walk_forward"
+  train_window: 252
+  val_window: 63
+  test_window: 21
+  n_folds: 5                         # 12 → 5 (시간 절약)
+
+hyperopt:
+  n_trials: 20                       # 100 → 20 (로컬 적정)
+  search_alg: "optuna_tpe"
+  scheduler: "asha"
+  max_concurrent: 1                  # 3060 Ti에서는 1개씩
+
+cvar:
+  mode: "lagrangian"
+  alpha: 0.05
+  threshold: -0.02
+  lr_nu: 0.01
+
+flag_trader:
+  dry_run: false
+  device: "cuda"
+  batch_size: 4                      # 16 → 4 (VRAM 절약)
+  gradient_accumulation: 4           # effective batch = 16
+
+dt_forecaster:
+  enabled: false
+  device: "cuda"
+  hidden_size: 64                    # 128 → 64
+  n_layer: 2
+
+cross_asset:
+  enabled: true
+  assets: ["SPY", "DXY", "GC=F"]    # SPY, Dollar Index, Gold
+  vix_asset: "^VIX"
+  correlation_window: 20
+
+drift_detection:
+  enabled: true
+  method: "adwin"
+  confidence: 0.01
+
+regime:
+  method: "hmm"
+  n_regimes: 3
+
+mlflow:
+  enabled: true
+  experiment_name: "local_3060ti"
+  tracking_uri: "mlruns"
+
+# 예상 학습 시간 (RTX 3060 Ti 기준):
+# - 단일 PPO agent 500K steps: ~20분
+# - 4-agent ensemble (순차):   ~1.5시간
+# - Walk-forward 5 folds:      ~8시간
+# - Hyperopt 20 trials:        ~7시간
+# - FLAG-Trader fine-tune:     ~2시간
+# 전체 파이프라인:              ~20시간 (하룻밤)
