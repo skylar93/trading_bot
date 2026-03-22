@@ -262,6 +262,43 @@ agent_communication:
   feed_to_meta_controller: true   # extend meta-controller obs with intention features
   # MetaController must also have use_intention: true (see meta_controller section above)
 
+# ---------------------------------------------------------------------------
+# Week 23: Continual Learning Pipeline (EWC + AdaptiveTrainer)
+# ---------------------------------------------------------------------------
+
+continual_learning:
+  enabled: true
+
+  # Retraining control
+  min_retrain_interval_s: 86400   # minimum 1 day between auto-retrains
+  fine_tune_timesteps: 10000      # SB3 .learn() timesteps per retrain cycle
+  validation_folds: 3             # walk-forward folds for acceptance check
+  rollback_threshold: 0.90        # new Sharpe >= baseline * threshold to accept
+
+  # EWC regularisation
+  ewc_lambda: 0.4                 # regularisation strength (0 = disabled)
+  n_fisher_samples: 512           # transitions for diagonal Fisher estimation
+
+  # Experience store
+  obs_dim: 100                    # flattened obs dim (window_size × n_features)
+  act_dim: 1
+  max_size_per_regime: 50000      # max transitions stored per regime
+  n_regimes: 3                    # must match regime_detection.n_regimes
+  current_regime_ratio: 0.70      # fraction of batch from current regime
+
+  # Checkpointing
+  checkpoint_dir: "checkpoints/adaptive"
+  mlflow_experiment: "adaptive_retraining"
+
+# ---------------------------------------------------------------------------
+# Week 23: TorchRL FLAG Adapter (async batch inference)
+# ---------------------------------------------------------------------------
+
+torchrl:
+  enabled: false                  # set true when torchrl>=0.11.0 is installed
+  max_batch_size: 16              # max obs per async batch forward pass
+  flush_interval_s: 0.01         # max wait before flushing partial batch
+
 prediction_market:
   enabled: false                  # set true to add prediction-market features
   providers:
