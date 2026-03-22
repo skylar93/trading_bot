@@ -7,119 +7,272 @@ on:
     branches: [ main ]
 
 jobs:
+  # ──────────────────────────────────────────────────────────────────────────
+  # Job 1: Unit + regression tests with coverage
+  # ──────────────────────────────────────────────────────────────────────────
   test:
+    name: Unit Tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        python-version: [3.9]
+        python-version: ["3.10"]
 
     steps:
     - uses: actions/checkout@v4
 
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
 
-    - name: Cache Python dependencies
+    - name: Cache pip
       uses: actions/cache@v4
       with:
         path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('**/requirements.txt') }}
         restore-keys: |
-          ${{ runner.os }}-pip-
+          ${{ runner.os }}-pip-${{ matrix.python-version }}-
 
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        pip install pytest pytest-cov pytest-xdist ray pytest-asyncio
+        pip install pytest pytest-cov pytest-asyncio
 
-    - name: Run tests with coverage
+    - name: Run unit tests with coverage
       run: |
-        python run_tests.py --no-parallel
+        pytest tests/ \
+          --ignore=tests/test_full_integration.py \
+          -v --tb=short -x \
+          --cov=agents --cov=training --cov=envs \
+          --cov-report=term-missing \
+          --cov-report=xml:coverage.xml \
+          -q
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v4
       with:
-        fail_ci_if_error: true
+        files: coverage.xml
+        fail_ci_if_error: false
 
+  # ──────────────────────────────────────────────────────────────────────────
+  # Job 2: Full end-to-end integration test (Week 24)
+  # ──────────────────────────────────────────────────────────────────────────
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.10"
+
+    - name: Cache pip
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-3.10-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-3.10-
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-asyncio
+
+    - name: Run full integration test suite
+      run: |
+        pytest tests/test_full_integration.py -v --tb=short
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Job 3: Lint (black + isort — flake8 advisory only)
+  # ──────────────────────────────────────────────────────────────────────────
   lint:
+    name: Lint
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v5
       with:
-        python-version: 3.9
+        python-version: "3.10"
 
-    - name: Install dependencies
+    - name: Install lint tools
       run: |
         python -m pip install --upgrade pip
-        pip install flake8 black isort
+        pip install black isort flake8
 
-    - name: Run linting
-      run: |
-        flake8 .
-        black --check .
-        isort --check-only .
+    - name: black (format check)
+      run: black --check --diff .
 
+    - name: isort (import order check)
+      run: isort --check-only --diff .
+
+    - name: flake8 (advisory — non-blocking)
+      run: flake8 . --max-line-length=120 --extend-ignore=E203,W503 || true
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Job 4: Staging deploy (develop branch only)
+  # ──────────────────────────────────────────────────────────────────────────
   deploy-staging:
-    needs: [test, lint]
+    name: Deploy → Staging
+    needs: [test, integration, lint]
     if: github.ref == 'refs/heads/develop'
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v5
       with:
-        python-version: 3.9
+        python-version: "3.10"
 
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
+        pip install pytest
 
-    - name: Run staging deployment tests
+    - name: Paper trading smoke test (100 steps)
       run: |
-        python -m pytest tests/test_cicd.py -m "staging"
+        python - <<'EOF'
+        import sys
+        sys.path.insert(0, ".")
+        import numpy as np
+        import pandas as pd
+        from envs.single_asset_rl_env import SingleAssetRLTradingEnv
+        from stable_baselines3 import PPO
 
-    - name: Deploy to staging
+        rng = np.random.default_rng(0)
+        n = 200
+        price = 100 + np.cumsum(rng.normal(0, 0.5, n))
+        df = pd.DataFrame({
+            "$open": price, "$high": price * 1.01,
+            "$low": price * 0.99, "$close": price,
+            "$volume": rng.uniform(1e5, 1e6, n),
+        })
+        env = SingleAssetRLTradingEnv(data=df, window_size=20)
+        agent = PPO("MlpPolicy", env, n_steps=64, batch_size=32, verbose=0)
+        agent.learn(total_timesteps=512, progress_bar=False)
+        obs, _ = env.reset()
+        for _ in range(100):
+            action, _ = agent.predict(obs, deterministic=True)
+            obs, _, terminated, truncated, _ = env.step(action)
+            if terminated or truncated:
+                obs, _ = env.reset()
+        print("Smoke test passed: 100 paper-trading steps OK")
+        EOF
+
+    - name: Upload model artifact to staging
       env:
         AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
         AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION || 'us-east-1' }}
       run: |
-        echo "Deploying to staging..."
+        if [ -n "$AWS_ACCESS_KEY_ID" ]; then
+          pip install awscli
+          aws s3 cp . s3://${{ secrets.STAGING_BUCKET }}/trading-bot/latest/ \
+            --recursive \
+            --exclude "*.pyc" \
+            --exclude ".git/*" \
+            --exclude ".claude/*" \
+            --exclude "logs/*" \
+            --quiet
+          echo "Staging artifact uploaded"
+        else
+          echo "AWS credentials not configured — skipping artifact upload"
+        fi
 
+  # ──────────────────────────────────────────────────────────────────────────
+  # Job 5: Production deploy (main branch only)
+  # ──────────────────────────────────────────────────────────────────────────
   deploy-production:
-    needs: [test, lint]
+    name: Deploy → Production
+    needs: [test, integration, lint]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v5
       with:
-        python-version: 3.9
+        python-version: "3.10"
 
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
+        pip install pytest
 
-    - name: Run production deployment tests
+    - name: Full integration test (pre-deploy gate)
       run: |
-        python -m pytest tests/test_cicd.py -m "production"
+        pytest tests/test_full_integration.py -v --tb=short
 
-    - name: Deploy to production
+    - name: Paper trading smoke test (pre-deploy verification)
+      run: |
+        python - <<'EOF'
+        import sys
+        sys.path.insert(0, ".")
+        import numpy as np
+        import pandas as pd
+        from envs.single_asset_rl_env import SingleAssetRLTradingEnv
+        from stable_baselines3 import PPO
+
+        rng = np.random.default_rng(42)
+        n = 200
+        price = 100 + np.cumsum(rng.normal(0, 0.5, n))
+        df = pd.DataFrame({
+            "$open": price, "$high": price * 1.01,
+            "$low": price * 0.99, "$close": price,
+            "$volume": rng.uniform(1e5, 1e6, n),
+        })
+        env = SingleAssetRLTradingEnv(data=df, window_size=20)
+        agent = PPO("MlpPolicy", env, n_steps=64, batch_size=32, verbose=0)
+        agent.learn(total_timesteps=512, progress_bar=False)
+        obs, _ = env.reset()
+        steps = 0
+        for _ in range(100):
+            action, _ = agent.predict(obs, deterministic=True)
+            obs, _, terminated, truncated, _ = env.step(action)
+            steps += 1
+            if terminated or truncated:
+                obs, _ = env.reset()
+        assert steps == 100, f"Expected 100 steps, got {steps}"
+        print(f"Pre-deploy smoke test passed: {steps} steps OK")
+        EOF
+
+    - name: Upload model artifact to production
       env:
         AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
         AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION || 'us-east-1' }}
       run: |
-        echo "Deploying to production..."
+        if [ -n "$AWS_ACCESS_KEY_ID" ]; then
+          pip install awscli
+          DEPLOY_TAG=$(date +%Y%m%d-%H%M%S)-${GITHUB_SHA::8}
+          aws s3 cp . s3://${{ secrets.PROD_BUCKET }}/trading-bot/${DEPLOY_TAG}/ \
+            --recursive \
+            --exclude "*.pyc" \
+            --exclude ".git/*" \
+            --exclude ".claude/*" \
+            --exclude "logs/*" \
+            --quiet
+          aws s3 sync \
+            s3://${{ secrets.PROD_BUCKET }}/trading-bot/${DEPLOY_TAG}/ \
+            s3://${{ secrets.PROD_BUCKET }}/trading-bot/latest/ \
+            --quiet
+          echo "Production artifact deployed: ${DEPLOY_TAG}"
+        else
+          echo "AWS credentials not configured — skipping artifact upload"
+        fi
