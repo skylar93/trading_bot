@@ -48,7 +48,8 @@ training:
   total_timesteps: 500000            # 1M → 500K (로컬 적정)
   eval_interval: 5000
   checkpoint_interval: 25000
-  device: "cuda"                     # RTX 3060 Ti CUDA
+  use_gpu: true                      # Week 28: explicit GPU flag
+  device: "cuda:0"                   # RTX 3060 Ti CUDA
   ensemble_training: "sequential"    # parallel → sequential (메모리 절약)
   # 한 agent 학습 → GPU 메모리 해제 → 다음 agent
 
@@ -64,6 +65,13 @@ validation:
   val_window: 63
   test_window: 21
   n_folds: 5                         # 12 → 5 (시간 절약)
+
+# Week 28: walk_forward alias (run_full_pipeline.py 호환)
+walk_forward:
+  n_folds: 5
+  train_window: 8000
+  val_window: 2000
+  min_train_size: 2000
 
 hyperopt:
   n_trials: 20                       # 100 → 20 (로컬 적정)
@@ -109,6 +117,25 @@ mlflow:
   experiment_name: "local_3060ti"
   tracking_uri: "mlruns"
 
+# ─────────────────────────────────────────────
+# Week 28: Report + Pipeline 설정
+# ─────────────────────────────────────────────
+
+report:
+  output_dir: "results"
+  include_equity_curve: true
+  include_feature_importance: true
+  include_regime_timeline: true
+  include_correlation_heatmap: true
+
+paper_trading:
+  enabled: false
+  exchange: "binance"
+  symbol: "BTC/USDT"
+  initial_capital: 100000.0
+  risk_per_trade: 0.02
+
+# ─────────────────────────────────────────────
 # 예상 학습 시간 (RTX 3060 Ti 기준):
 # - 단일 PPO agent 500K steps: ~20분
 # - 4-agent ensemble (순차):   ~1.5시간

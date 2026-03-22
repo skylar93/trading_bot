@@ -101,6 +101,133 @@ CCXT_TIMEFRAME_MAP = {
 }
 
 # ─────────────────────────────────────────────
+# Week 27/28: Public Python API helpers
+# run_full_pipeline.py 및 테스트에서 직접 import해 사용
+# ─────────────────────────────────────────────
+
+def _period_to_start_date(period: str) -> datetime:
+    """
+    'Xy' / 'Xm' / 'Xd' 형식의 문자열을 datetime (UTC-naive)으로 변환합니다.
+
+    PERIOD_MAP 단축 키도 지원:
+        '1y', '2y', '3m', '6m' 등
+
+    Examples:
+        _period_to_start_date('2y')  → 2년 전
+        _period_to_start_date('6m')  → 6개월 전
+        _period_to_start_date('30d') → 30일 전
+    """
+    now = datetime.now(tz=timezone.utc).replace(tzinfo=None)
+    if period in PERIOD_MAP:
+        return now - PERIOD_MAP[period]
+    unit = period[-1].lower()
+    try:
+        value = int(period[:-1])
+    except ValueError:
+        raise ValueError(f"Unknown period format: {period!r}. Use e.g. '2y', '6m', '30d'")
+    if unit == "y":
+        return now - timedelta(days=365 * value)
+    if unit == "m":
+        return now - timedelta(days=30 * value)
+    if unit == "d":
+        return now - timedelta(days=value)
+    raise ValueError(f"Unknown period unit {unit!r} in {period!r}. Use y/m/d.")
+
+
+def fetch_data(
+    asset: str = "BTCUSDT",
+    period: str = "2y",
+    interval: str = "1h",
+    output: Optional[str] = None,
+    source: str = "auto",
+    exchange: str = "binance",
+    dry_run: bool = False,
+) -> pd.DataFrame:
+    """
+    Python API wrapper — fetch_data.py 스크립트의 핵심 기능을 함수로 노출합니다.
+    run_full_pipeline.py 및 테스트에서 직접 import해 사용합니다.
+
+    Args:
+        asset:    심볼 (e.g. 'BTCUSDT', 'BTC/USDT', 'SPY')
+        period:   기간 (e.g. '2y', '6m', '30d')
+        interval: 타임프레임 (e.g. '1h', '1d')
+        output:   저장 경로 (.csv). None이면 저장 안 함.
+        source:   'ccxt' | 'yfinance' | 'auto'
+        exchange: CCXT 거래소 ID
+        dry_run:  True → 실제 다운로드 없이 synthetic 데이터 반환
+
+    Returns:
+        pd.DataFrame with columns [$open, $high, $low, $close, $volume]
+    """
+    if dry_run:
+        start_dt = _period_to_start_date(period)
+        dates = pd.date_range(start_dt, datetime.utcnow(), freq="h", tz="UTC")
+        n = min(len(dates), 200)
+        rng = np.random.default_rng(42)
+        df = pd.DataFrame({
+            "$open":   rng.uniform(30000, 50000, n),
+            "$high":   rng.uniform(30000, 50000, n),
+            "$low":    rng.uniform(30000, 50000, n),
+            "$close":  rng.uniform(30000, 50000, n),
+            "$volume": rng.uniform(100, 10000, n),
+        }, index=dates[:n])
+        logger.info("[DRY RUN] Returning %d synthetic rows for %s", n, asset)
+        if output:
+            Path(output).parent.mkdir(parents=True, exist_ok=True)
+            df.to_csv(output)
+        return df
+
+    # Map period to PERIOD_MAP key
+    if period in PERIOD_MAP:
+        _period_key = period
+    else:
+        start = _period_to_start_date(period)
+        days = (datetime.utcnow() - start).days
+        _period_key = min(PERIOD_MAP.keys(), key=lambda k: abs(PERIOD_MAP[k].days - days))
+
+    now = datetime.now(tz=timezone.utc)
+    since = now - PERIOD_MAP[_period_key]
+    since_ms = int(since.timestamp() * 1000)
+
+    # Auto-detect source
+    if source == "auto":
+        source = "ccxt" if any(asset.upper().endswith(s) for s in ("USDT", "BTC", "ETH", "BNB")) else "yfinance"
+
+    out_dir = Path(output).parent if output else Path("data/raw")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if source == "ccxt" and _CCXT_AVAILABLE:
+        df = fetch_ccxt(
+            symbol=asset,
+            exchange_id=exchange,
+            timeframe=CCXT_TIMEFRAME_MAP.get(interval, "1h"),
+            since_ms=since_ms,
+            output_dir=out_dir,
+            no_parquet=True,
+        )
+    elif _YF_AVAILABLE:
+        df = fetch_yfinance(
+            tickers=[asset],
+            since=since,
+            interval=YF_INTERVAL_MAP.get(interval, "1h"),
+            output_dir=out_dir,
+            no_parquet=True,
+        )
+        if df is not None and not df.empty:
+            df = df.rename(columns={c: f"${c.lower()}" for c in df.columns if not c.startswith("$")})
+    else:
+        raise RuntimeError("Neither ccxt nor yfinance is installed.")
+
+    if df is None or df.empty:
+        raise RuntimeError(f"No data fetched for {asset}")
+
+    if output:
+        df.to_csv(output)
+
+    return df
+
+
+# ─────────────────────────────────────────────
 # Fetch Log (incremental update tracking)
 # ─────────────────────────────────────────────
 
@@ -456,7 +583,14 @@ def main() -> None:
     parser.add_argument("--schedule",    choices=["daily"],  help="스케줄 설정 가이드 출력")
     parser.add_argument("--output",      default="data/raw", help="저장 디렉토리")
     parser.add_argument("--no-parquet",  action="store_true", help="Parquet 저장 건너뜀")
+    parser.add_argument("--dry-run",     action="store_true", help="실제 다운로드 없이 synthetic 데이터 반환 (테스트용)")
     args = parser.parse_args()
+
+    # ── Dry-run shortcut ──
+    if args.dry_run:
+        df = fetch_data(asset=args.asset, period=args.period, interval=args.interval, dry_run=True)
+        logger.info("[DRY RUN] %d rows — columns: %s", len(df), list(df.columns))
+        return
 
     # ── Paths ──
     script_dir = Path(__file__).resolve().parent

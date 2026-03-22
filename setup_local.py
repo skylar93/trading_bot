@@ -390,6 +390,11 @@ def main() -> None:
         action="store_true",
         help="데이터 디렉토리만 생성, 학습 테스트 건너뜀",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="실제 설치 없이 구조만 확인 (테스트/CI용)",
+    )
     args = parser.parse_args()
 
     project_root = Path(__file__).resolve().parent
@@ -399,6 +404,8 @@ def main() -> None:
     print(_c("╚══════════════════════════════════════════════╝", "1"))
     info(f"프로젝트 루트: {project_root}")
     info(f"GPU 프로파일: {args.gpu}")
+    if args.dry_run:
+        info("[DRY RUN] 실제 설치 없이 구조 확인만 수행합니다.")
 
     # 1. Python check
     if not check_python():
@@ -406,6 +413,13 @@ def main() -> None:
 
     # 2. Device detection
     device_info = detect_device(args.gpu)
+
+    # ── Dry-run: skip install, just report structure ──
+    if args.dry_run:
+        create_data_dirs(project_root)
+        ok("디렉토리 구조 확인 완료 (dry-run)")
+        info("실제 설치를 하려면 --dry-run 없이 실행하세요.")
+        sys.exit(0)
 
     # 3. Env setup
     python_exe, is_new = setup_env(project_root)
