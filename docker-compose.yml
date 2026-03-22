@@ -1,0 +1,167 @@
+# ============================================================
+# Trading Bot — Docker Compose
+#
+# 서비스:
+#   training      : RL 에이전트 학습 (GPU)
+#   web_ui        : Streamlit 대시보드 (port 8501)
+#   data_fetcher  : 자동 데이터 수집 (daily)
+#   mlflow        : 실험 추적 UI (port 5000)
+#
+# 사용법:
+#   전체 시작:          docker-compose up -d
+#   학습만:             docker-compose up training
+#   대시보드만:         docker-compose up web_ui mlflow
+#   데이터 수집 1회:    docker-compose run --rm data_fetcher
+#   로그 확인:          docker-compose logs -f training
+#   전체 중지:          docker-compose down
+#
+# 전제 조건:
+#   - NVIDIA Container Toolkit 설치 (GPU 사용 시)
+#     https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
+#   - docker-compose v2.x 이상
+# ============================================================
+
+version: "3.9"
+
+x-common: &common
+  build:
+    context: .
+    dockerfile: Dockerfile
+    target: app
+  restart: unless-stopped
+  environment:
+    - PYTHONPATH=/app
+    - MLFLOW_TRACKING_URI=http://mlflow:5000
+  volumes:
+    - ./data:/app/data
+    - ./checkpoints:/app/checkpoints
+    - ./logs:/app/logs
+    - ./results:/app/results
+  depends_on:
+    - mlflow
+
+services:
+  # ──────────────────────────────────────────────────────────
+  # MLflow Tracking Server (시작 순서상 가장 먼저)
+  # ──────────────────────────────────────────────────────────
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.19.0
+    container_name: trading_mlflow
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mlruns:/mlflow/mlruns
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri /mlflow/mlruns
+      --default-artifact-root /mlflow/mlruns
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ──────────────────────────────────────────────────────────
+  # Training Service (GPU)
+  # ──────────────────────────────────────────────────────────
+  training:
+    <<: *common
+    container_name: trading_train
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - PYTHONPATH=/app
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - CUDA_VISIBLE_DEVICES=0
+    command: >
+      python -m training.train_pipeline
+      --config config/local_3060ti.yaml
+    profiles:
+      - training
+
+  # ──────────────────────────────────────────────────────────
+  # Full Pipeline Runner (학습 + 검증 + 리포트 자동화)
+  # ──────────────────────────────────────────────────────────
+  pipeline:
+    <<: *common
+    container_name: trading_pipeline
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - PYTHONPATH=/app
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - CUDA_VISIBLE_DEVICES=0
+    command: >
+      python scripts/run_full_pipeline.py
+      --config config/local_3060ti.yaml
+    profiles:
+      - pipeline
+
+  # ──────────────────────────────────────────────────────────
+  # Streamlit Web UI
+  # ──────────────────────────────────────────────────────────
+  web_ui:
+    <<: *common
+    container_name: trading_webui
+    ports:
+      - "8501:8501"
+    command: >
+      streamlit run deployment/web_interface/app.py
+      --server.port 8501
+      --server.address 0.0.0.0
+      --server.headless true
+      --browser.gatherUsageStats false
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    profiles:
+      - ui
+      - default
+
+  # ──────────────────────────────────────────────────────────
+  # Data Fetcher (cron-style daily update)
+  # ──────────────────────────────────────────────────────────
+  data_fetcher:
+    <<: *common
+    container_name: trading_data
+    # No GPU needed for data collection
+    deploy: {}
+    environment:
+      - PYTHONPATH=/app
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    command: >
+      python scripts/fetch_data.py
+      --asset BTCUSDT
+      --period 2y
+      --interval 1h
+      --output data/BTC_1h.csv
+    profiles:
+      - data
+
+# ──────────────────────────────────────────────────────────
+# Named volumes (데이터 영속성)
+# ──────────────────────────────────────────────────────────
+volumes:
+  mlruns:
+    driver: local
+
+networks:
+  default:
+    name: trading_net

@@ -28,6 +28,7 @@ PAGES = [
     "Ensemble Monitor",
     "Paper Trading",
     "Config Editor",
+    "Results Report",
 ]
 
 
@@ -48,7 +49,7 @@ def main() -> None:
     page = st.sidebar.radio("Navigation", PAGES)
 
     st.sidebar.markdown("---")
-    st.sidebar.caption("v0.11.0")
+    st.sidebar.caption("v0.12.0")
 
     logger.info("Rendering page: %s", page)
 
@@ -77,6 +78,10 @@ def main() -> None:
     elif page == "Config Editor":
         from deployment.web_interface.pages.config_editor import render_config_editor
         render_config_editor()
+
+    elif page == "Results Report":
+        from deployment.web_interface.pages.results_report import render_results_report
+        render_results_report()
 
 
 if __name__ == "__main__":
