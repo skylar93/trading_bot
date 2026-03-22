@@ -1,0 +1,81 @@
+# M2 MacBook — 가벼운 작업 전용 (backtesting / monitoring / quick test)
+# 학습은 RTX 3060 Ti PC에서 수행. 이 config는 smoke test & 검증용.
+# 사용법: python -m training.train_pipeline --config config/local_m2.yaml
+
+env:
+  type: "single_asset_rl"
+  window_size: 20
+  initial_balance: 100000
+  trading_fee: 0.001
+  normalize: true
+  max_position_size: 1.0
+
+agent:
+  algo_type: "sb3_ppo"               # CVaRPPO 대신 기본 PPO (MPS 호환성)
+  feature_extractor: "mlp"           # Conv1D/GTrXL 대신 MLP (가벼움)
+  sb3_params:
+    ppo:
+      n_steps: 512
+      batch_size: 32
+      n_epochs: 5
+      learning_rate: 3.0e-4
+  feature_extractor_kwargs:
+    features_dim: 64
+
+ensemble:
+  enabled: false                     # 단일 agent만 (M2에서 ensemble은 느림)
+
+training:
+  total_timesteps: 100000            # quick test용
+  eval_interval: 2000
+  checkpoint_interval: 10000
+  device: "mps"                      # Apple Silicon MPS
+  ensemble_training: "sequential"
+
+data:
+  exchange: "binance"
+  symbols: ["BTC/USDT"]
+  timeframe: "1h"
+  cache_dir: "data/raw"
+
+validation:
+  method: "walk_forward"
+  train_window: 126
+  val_window: 30
+  test_window: 10
+  n_folds: 3
+
+hyperopt:
+  n_trials: 5                        # smoke test용
+  search_alg: "optuna_tpe"
+  max_concurrent: 1
+
+cvar:
+  mode: "callback"                   # Lagrangian 대신 callback (MPS 안정성)
+  alpha: 0.05
+  threshold: -0.02
+
+flag_trader:
+  dry_run: true                      # 모델 다운로드 없이 테스트
+  device: "mps"
+  batch_size: 2
+  gradient_accumulation: 8
+
+dt_forecaster:
+  enabled: false
+
+cross_asset:
+  enabled: false                     # 빠른 테스트 시 비활성화
+
+drift_detection:
+  enabled: true
+  method: "page_hinkley"             # ADWIN보다 가벼운 방법
+
+regime:
+  method: "threshold"                # HMM 대신 rule-based (빠름)
+  n_regimes: 3
+
+mlflow:
+  enabled: true
+  experiment_name: "local_m2_test"
+  tracking_uri: "mlruns"
