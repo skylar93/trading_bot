@@ -345,3 +345,39 @@ drift_detection:
   cooldown_steps: 1000        # min steps between two drift reactions
   checkpoint_on_drift: true   # save model checkpoint when drift detected
   conservative_scale: null    # action scale after drift (null = no scaling)
+
+
+# ---------------------------------------------------------------------------
+# Week 26: On-Chain Metrics + Calendar Features + Correlation Discovery
+# ---------------------------------------------------------------------------
+
+onchain:
+  enabled: false              # set true to include on-chain features (+10 obs dims)
+  symbol: "BTC"
+  coingecko_id: "bitcoin"
+  ccxt_exchange: "binance"
+  ccxt_symbol: "BTC/USDT:USDT"
+  cache_db: "data/cache/onchain_cache.db"
+  cache_ttl_seconds: 3600
+  use_coingecko: true
+  use_ccxt_derivatives: true
+  rolling_window: 30
+
+calendar:
+  enabled: true               # lightweight — no external API, always safe to enable
+  event_lookahead_days: 3     # days ahead to flag FOMC/CME expiry
+  month_end_decay: 0.3        # proximity decay rate for month-end
+  quarter_end_decay: 0.2
+  include_halving_cycle: true
+
+correlation_discovery:
+  enabled: false              # set true to run analysis as a post-training step
+  max_lag: 20
+  granger_max_lag: 10
+  significance_level: 0.05
+  top_k_pairs: 20
+  min_correlation: 0.1
+  output_dir: "reports/correlation"
+  log_to_mlflow: false
+  use_mutual_info: true
+  stability_window: 60
