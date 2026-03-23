@@ -235,6 +235,15 @@ class WalkForwardValidator:
                 i + 1, is_sharpe, oos_sharpe, oos_dd,
             )
 
+            if is_sharpe > 0 and oos_sharpe > 0:
+                ratio = is_sharpe / oos_sharpe
+                if ratio > 2.0:
+                    logger.warning(
+                        "Overfitting suspected: IS/OOS Sharpe ratio = %.2f "
+                        "(fold %d, IS=%.3f, OOS=%.3f)",
+                        ratio, i + 1, is_sharpe, oos_sharpe,
+                    )
+
         result = WalkForwardResult(folds=folds)
         logger.info(
             "Walk-forward complete — OOS Sharpe=%.3f (std=%.3f), Stability=%.3f",

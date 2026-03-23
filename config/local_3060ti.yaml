@@ -136,17 +136,39 @@ paper_trading:
   risk_per_trade: 0.02
 
 # ─────────────────────────────────────────────
-# Week 33: Monitoring + Alerting
+# Week 30: Risk Management Config
 # ─────────────────────────────────────────────
+
+risk_management:
+  stop_loss_threshold: 0.05       # 5% 손실 시 stop loss
+  trailing_stop_buffer: 0.03      # 최고점에서 3% 하락 시 trailing stop
+  max_drawdown_pct: 0.20          # 20% max drawdown 허용
+  portfolio_stop_loss_threshold: 0.15  # 포트폴리오 15% 손실 시 stop
+
+# ─────────────────────────────────────────────
+# Week 33: Execution + Monitoring 설정
+# ─────────────────────────────────────────────
+
+execution:
+  paper_mode: true
+  exchange_id: "binance"
+  symbol: "BTC/USDT"
+  max_order_size: 0.1
+  daily_loss_limit: -500.0
+  initial_cash: 100000.0
+  rate_limit_calls: 10
+  rate_limit_period: 1.0
 
 monitoring:
   enabled: true
-  alert_channels: ["console"]   # telegram, webhook 추가 가능
+  alert_channels: ["console"]   # 추가 가능: "telegram", "webhook"
   drawdown_alert_threshold: 0.10
   daily_loss_alert: -500
+  connection_timeout_seconds: 60
+  verbose: false
   telegram_token: ${TELEGRAM_BOT_TOKEN}
   telegram_chat_id: ${TELEGRAM_CHAT_ID}
-  webhook_url: null
+  webhook_url: ""
 
 # ─────────────────────────────────────────────
 # 예상 학습 시간 (RTX 3060 Ti 기준):

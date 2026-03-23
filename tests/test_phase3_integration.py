@@ -414,21 +414,22 @@ class TestPaperTradingOrderManager:
     def test_submit_and_check_order(self):
         from deployment.execution.order_manager import OrderManager
 
-        mgr = OrderManager({"daily_loss_limit": -1000.0}, paper_mode=True)
-        mgr._last_price = 100.0
-        order_id = mgr.submit_order("buy", amount=0.01)
+        mgr = OrderManager({"daily_loss_limit": -1000.0, "initial_cash": 10_000.0}, paper_mode=True)
+        mgr.update_paper_price(100.0)
+        order_id = mgr.submit_order("buy", amount=0.01, current_price=100.0)
         status = mgr.check_order(order_id)
         assert status == "filled", f"Paper order should be filled, got '{status}'"
 
     def test_ten_step_paper_trading_loop(self):
         from deployment.execution.order_manager import OrderManager
 
-        mgr = OrderManager({"daily_loss_limit": -10_000.0, "max_order_size": 1.0})
-        mgr._last_price = 100.0
+        mgr = OrderManager({"daily_loss_limit": -10_000.0, "max_order_size": 1.0,
+                            "initial_cash": 1_000_000.0})
+        mgr.update_paper_price(100.0)
 
         for i in range(10):
             side = "buy" if i % 2 == 0 else "sell"
-            oid = mgr.submit_order(side, amount=0.01, price=100.0 + i)
+            oid = mgr.submit_order(side, amount=0.01, current_price=100.0 + i)
             status = mgr.check_order(oid)
             assert status in {"filled", "pending", "failed"}
 
@@ -441,9 +442,9 @@ class TestPaperTradingOrderManager:
         from deployment.execution.order_manager import OrderManager
 
         mgr = OrderManager(paper_mode=True)
-        mgr._last_price = 100.0
-        oid = mgr.submit_order("buy", 0.01)
-        # In paper mode orders are immediately filled — test cancel on pending manually
+        mgr.update_paper_price(100.0)
+        oid = mgr.submit_order("buy", 0.01, current_price=100.0)
+        # Force back to pending to test cancellation
         mgr._orders[oid].status = "pending"
         success = mgr.cancel_order(oid)
         assert success is True
@@ -453,8 +454,8 @@ class TestPaperTradingOrderManager:
         from deployment.execution.order_manager import OrderManager
 
         mgr = OrderManager({"daily_loss_limit": -1.0}, paper_mode=True)
-        mgr.daily_pnl = -500.0   # force breach
-        with pytest.raises(RuntimeError, match="Daily loss limit"):
+        mgr._halted = True   # simulate halted state
+        with pytest.raises(RuntimeError, match="halted"):
             mgr.submit_order("buy", 0.1)
 
 

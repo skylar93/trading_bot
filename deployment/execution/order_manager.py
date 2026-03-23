@@ -1,78 +1,81 @@
 """
-Order Execution Manager: Paper trading과 live 모두 지원하는 Exchange API 래퍼.
+Order Execution Manager: paper and live trading order lifecycle management.
 
-Paper mode (기본값)에서는 in-memory 시뮬레이션만 실행하며 실제 API 호출 없음.
-Live mode에서는 ccxt 라이브러리가 필요 (선택적 의존성).
+Provides a unified interface for submitting, tracking, and cancelling orders
+against a CCXT-compatible exchange (live mode) or an internal simulation
+(paper mode).  Safety guards prevent runaway losses and API abuse.
 
-Usage
------
-    from deployment.execution.order_manager import OrderManager
+Usage (paper mode, default):
+    manager = OrderManager(exchange_config={}, paper_mode=True)
+    order_id = manager.submit_order("buy", amount=0.01)
+    status   = manager.check_order(order_id)
+    manager.reconcile()
 
-    # Paper mode
-    mgr = OrderManager({"daily_loss_limit": -500.0}, paper_mode=True)
-    order_id = mgr.submit_order("buy", amount=0.01)
-    status = mgr.check_order(order_id)    # "filled" in paper mode
-
-    # Reconcile
-    info = mgr.reconcile()
-    print(info["position"])
+Usage (live mode):
+    cfg = {"exchange_id": "binance", "api_key": "...", "api_secret": "...",
+           "daily_loss_limit": -500.0, "max_order_size": 0.1}
+    manager = OrderManager(exchange_config=cfg, paper_mode=False)
 """
 
 from __future__ import annotations
 
 import logging
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from threading import Lock
-from typing import Dict, List, Optional
-
-import numpy as np
+from datetime import datetime, date
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Data structures
+# ---------------------------------------------------------------------------
+
+_ORDER_STATUSES = frozenset({"pending", "filled", "partial", "cancelled", "failed"})
+
+
+@dataclass
+class Order:
+    order_id: str
+    side: str               # "buy" | "sell"
+    amount: float
+    order_type: str         # "market" | "limit"
+    limit_price: Optional[float]
+    status: str             # see _ORDER_STATUSES
+    filled_amount: float = 0.0
+    avg_fill_price: float = 0.0
+    fee: float = 0.0
+    pnl: float = 0.0
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: datetime = field(default_factory=datetime.utcnow)
+    exchange_order_id: Optional[str] = None
+
 
 # ---------------------------------------------------------------------------
-# Simple token-bucket rate limiter
+# Rate limiter
 # ---------------------------------------------------------------------------
 
 class RateLimiter:
     """Token-bucket rate limiter (thread-safe)."""
 
     def __init__(self, max_calls: int = 10, period: float = 1.0) -> None:
-        self.max_calls = max_calls
-        self.period = period
-        self._timestamps: List[float] = []
-        self._lock = Lock()
+        self._max_calls = max_calls
+        self._period = period
+        self._calls: List[float] = []
+        self._lock = threading.Lock()
 
     def acquire(self) -> None:
-        with self._lock:
-            now = time.monotonic()
-            # Remove timestamps outside the window
-            self._timestamps = [t for t in self._timestamps if now - t < self.period]
-            if len(self._timestamps) >= self.max_calls:
-                sleep_for = self.period - (now - self._timestamps[0])
-                if sleep_for > 0:
-                    time.sleep(sleep_for)
-                self._timestamps = self._timestamps[1:]
-            self._timestamps.append(time.monotonic())
-
-
-# ---------------------------------------------------------------------------
-# Order record
-# ---------------------------------------------------------------------------
-
-@dataclass
-class Order:
-    order_id: str
-    side: str                   # "buy" | "sell"
-    amount: float
-    order_type: str = "market"
-    status: str = "pending"     # pending | filled | partial | failed | cancelled
-    filled_amount: float = 0.0
-    fill_price: float = 0.0
-    timestamp: float = field(default_factory=time.time)
-    error: str = ""
+        """Block until a call token is available."""
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                self._calls = [t for t in self._calls if now - t < self._period]
+                if len(self._calls) < self._max_calls:
+                    self._calls.append(now)
+                    return
+            time.sleep(0.05)
 
 
 # ---------------------------------------------------------------------------
@@ -80,48 +83,57 @@ class Order:
 # ---------------------------------------------------------------------------
 
 class OrderManager:
-    """Exchange order management with paper and live mode.
+    """
+    Exchange API wrapper supporting paper trading and live trading.
 
     Parameters
     ----------
     exchange_config : dict
-        Configuration dict.  Key ``daily_loss_limit`` (float, default -500.0)
-        sets the daily loss threshold.  In live mode ``api_key`` and
-        ``api_secret`` are also required.
+        Exchange credentials and operational limits.
+        Keys:
+            exchange_id        – CCXT exchange id (default: "binance")
+            api_key            – live mode only
+            api_secret         – live mode only
+            symbol             – trading pair (default: "BTC/USDT")
+            max_order_size     – maximum single order size in base currency
+            daily_loss_limit   – halt trading when daily P&L drops below this
+            rate_limit_calls   – API calls per rate_limit_period (default: 10)
+            rate_limit_period  – seconds for rate limit window (default: 1.0)
     paper_mode : bool
-        If ``True`` (default) all orders are simulated in-memory.
+        When True (default), all orders are simulated locally; no exchange
+        connection is established.
     """
 
-    def __init__(
-        self,
-        exchange_config: Optional[Dict] = None,
-        paper_mode: bool = True,
-    ) -> None:
+    def __init__(self, exchange_config: Optional[Dict[str, Any]] = None, paper_mode: bool = True) -> None:
         exchange_config = exchange_config or {}
         self.paper_mode = paper_mode
-        self.daily_loss_limit: float = float(
-            exchange_config.get("daily_loss_limit", -500.0)
-        )
-        self.max_order_size: float = float(
-            exchange_config.get("max_order_size", 1.0)
-        )
+        self._config = exchange_config
+        self.symbol: str = exchange_config.get("symbol", "BTC/USDT")
+        self.max_order_size: float = float(exchange_config.get("max_order_size", 1.0))
+        self.daily_loss_limit: float = float(exchange_config.get("daily_loss_limit", -500.0))
+
         self.rate_limiter = RateLimiter(
             max_calls=int(exchange_config.get("rate_limit_calls", 10)),
             period=float(exchange_config.get("rate_limit_period", 1.0)),
         )
 
-        # Internal state
-        self.daily_pnl: float = 0.0
         self._orders: Dict[str, Order] = {}
-        self._position: float = 0.0          # units held
-        self._last_price: float = 0.0        # used for paper PnL calc
-        self._lock = Lock()
+        self._daily_pnl: float = 0.0
+        self._last_reset_date: date = date.today()
+        self._halted: bool = False
+        self._paper_position: float = 0.0
+        self._paper_cash: float = float(exchange_config.get("initial_cash", 10_000.0))
+        self._paper_last_price: float = 0.0
 
         if not paper_mode:
-            self._init_live(exchange_config)
+            self._exchange = self._init_exchange(exchange_config)
         else:
             self._exchange = None
-            logger.info("OrderManager initialised in PAPER mode")
+
+        logger.info(
+            "OrderManager initialised | symbol=%s paper_mode=%s max_order_size=%s",
+            self.symbol, paper_mode, self.max_order_size,
+        )
 
     # ------------------------------------------------------------------
     # Public API
@@ -132,255 +144,283 @@ class OrderManager:
         side: str,
         amount: float,
         order_type: str = "market",
-        price: Optional[float] = None,
+        limit_price: Optional[float] = None,
+        current_price: Optional[float] = None,
+        price: Optional[float] = None,   # compat alias for current_price
     ) -> str:
-        """Submit a buy or sell order.
+        """Submit a new order.
 
-        Parameters
-        ----------
-        side : str
-            ``"buy"`` or ``"sell"``.
-        amount : float
-            Order size in base currency units.
-        order_type : str
-            ``"market"`` (default) or ``"limit"``.
-        price : float, optional
-            Required for limit orders.
-
-        Returns
-        -------
-        str
-            Unique order ID.
-
-        Raises
-        ------
-        RuntimeError
-            If daily loss limit has been breached.
+        Returns order_id string.
+        Raises RuntimeError if trading is halted.
         """
-        side = side.lower()
-        if side not in {"buy", "sell"}:
-            raise ValueError(f"side must be 'buy' or 'sell', got '{side}'")
+        self._reset_daily_pnl_if_needed()
 
-        if self.daily_pnl < self.daily_loss_limit:
-            raise RuntimeError(
-                f"Daily loss limit breached ({self.daily_pnl:.2f} < "
-                f"{self.daily_loss_limit:.2f}) — trading halted."
-            )
+        if self._halted:
+            raise RuntimeError("Daily loss limit breached — trading halted.")
 
-        amount = min(float(amount), self.max_order_size)
-        order_id = str(uuid.uuid4())[:8]
+        if side not in ("buy", "sell"):
+            raise ValueError(f"Invalid side: {side!r}. Must be 'buy' or 'sell'.")
 
-        self.rate_limiter.acquire()
+        if amount <= 0:
+            raise ValueError(f"Order amount must be positive, got {amount}.")
 
-        if self.paper_mode:
-            order = self._paper_fill(order_id, side, amount, order_type, price)
-        else:
-            order = self._live_submit(order_id, side, amount, order_type, price)
-
-        with self._lock:
-            self._orders[order_id] = order
-
-        logger.debug(
-            "Order %s submitted: %s %s @ %s → %s",
-            order_id, side, amount, order_type, order.status,
-        )
-        return order_id
-
-    def check_order(self, order_id: str) -> str:
-        """Return the current status of an order.
-
-        Returns
-        -------
-        str
-            One of ``"pending"``, ``"filled"``, ``"partial"``,
-            ``"failed"``, ``"cancelled"``.
-        """
-        order = self._orders.get(order_id)
-        if order is None:
-            logger.warning("check_order: unknown order_id %s", order_id)
-            return "unknown"
-        if not self.paper_mode and order.status == "pending":
-            self._refresh_live_order(order)
-        return order.status
-
-    def cancel_order(self, order_id: str) -> bool:
-        """Cancel a pending order.
-
-        Returns
-        -------
-        bool
-            ``True`` if successfully cancelled.
-        """
-        order = self._orders.get(order_id)
-        if order is None:
-            logger.warning("cancel_order: unknown order_id %s", order_id)
-            return False
-        if order.status != "pending":
+        if amount > self.max_order_size:
             logger.warning(
-                "cancel_order: order %s is already '%s'", order_id, order.status
+                "Order amount %.6f exceeds max_order_size %.6f; clamping.",
+                amount, self.max_order_size,
             )
-            return False
+            amount = self.max_order_size
 
-        if self.paper_mode:
-            order.status = "cancelled"
-            return True
-        else:
-            return self._live_cancel(order)
+        # Accept `price` as alias for `current_price`
+        if current_price is None and price is not None:
+            current_price = price
 
-    def reconcile(self) -> Dict:
-        """Compare internal position state vs exchange and warn on mismatch.
-
-        Returns
-        -------
-        dict
-            ``{"position": float, "daily_pnl": float, "open_orders": int,
-               "mismatch": bool}``
-        """
-        with self._lock:
-            open_orders = sum(
-                1 for o in self._orders.values() if o.status == "pending"
-            )
-            internal = {
-                "position": self._position,
-                "daily_pnl": self.daily_pnl,
-                "open_orders": open_orders,
-                "mismatch": False,
-            }
-
-        if not self.paper_mode and self._exchange is not None:
-            try:
-                exchange_pos = self._fetch_exchange_position()
-                if abs(exchange_pos - self._position) > 1e-6:
-                    logger.warning(
-                        "Position mismatch: internal=%.6f, exchange=%.6f",
-                        self._position, exchange_pos,
-                    )
-                    internal["mismatch"] = True
-            except Exception as exc:
-                logger.error("reconcile: exchange query failed: %s", exc)
-
-        return internal
-
-    # ------------------------------------------------------------------
-    # Paper mode helpers
-    # ------------------------------------------------------------------
-
-    def _paper_fill(
-        self,
-        order_id: str,
-        side: str,
-        amount: float,
-        order_type: str,
-        price: Optional[float],
-    ) -> Order:
-        fill_price = price if price is not None else self._last_price
-        if fill_price <= 0:
-            fill_price = 100.0   # fallback for tests with no live price
-
+        order_id = str(uuid.uuid4())[:8]
         order = Order(
             order_id=order_id,
             side=side,
             amount=amount,
             order_type=order_type,
-            status="filled",
-            filled_amount=amount,
-            fill_price=fill_price,
+            limit_price=limit_price,
+            status="pending",
         )
+        self._orders[order_id] = order
 
-        # Update internal position
-        with self._lock:
-            if side == "buy":
-                self._position += amount
-                self.daily_pnl -= amount * fill_price   # cash out
+        try:
+            if self.paper_mode:
+                self._execute_paper_order(order, current_price)
             else:
-                pnl = (fill_price - self._last_price) * min(amount, self._position)
-                self._position = max(0.0, self._position - amount)
-                self.daily_pnl += pnl
+                self._execute_live_order(order)
+        except Exception as e:
+            order.status = "failed"
+            order.updated_at = datetime.utcnow()
+            logger.error("Order %s failed: %s", order_id, e)
 
-        return order
+        return order_id
+
+    def check_order(self, order_id: str) -> str:
+        """Return current status of an order."""
+        if order_id not in self._orders:
+            logger.warning("check_order: unknown order_id %s", order_id)
+            return "unknown"
+        order = self._orders[order_id]
+        if not self.paper_mode and order.status in ("pending", "partial"):
+            self._refresh_live_order_status(order)
+        return order.status
+
+    def cancel_order(self, order_id: str) -> bool:
+        """Cancel a pending order. Returns True if successful."""
+        if order_id not in self._orders:
+            logger.warning("cancel_order: unknown order_id %s", order_id)
+            return False
+        order = self._orders[order_id]
+        if order.status in ("filled", "cancelled", "failed"):
+            return False
+        if self.paper_mode:
+            order.status = "cancelled"
+            order.updated_at = datetime.utcnow()
+            return True
+        try:
+            self.rate_limiter.acquire()
+            self._exchange.cancel_order(order.exchange_order_id, self.symbol)
+            order.status = "cancelled"
+            order.updated_at = datetime.utcnow()
+            return True
+        except Exception as e:
+            logger.error("Failed to cancel order %s: %s", order_id, e)
+            return False
+
+    def reconcile(self, current_price: Optional[float] = None) -> Dict[str, Any]:
+        """Compare internal state with exchange and return summary dict."""
+        open_orders = sum(1 for o in self._orders.values() if o.status == "pending")
+        if self.paper_mode:
+            return {
+                "position": self._paper_position,
+                "daily_pnl": self._daily_pnl,
+                "open_orders": open_orders,
+                "internal_position": self._paper_position,
+                "actual_position": self._paper_position,
+                "discrepancy": 0.0,
+                "ok": True,
+                "mode": "paper",
+            }
+        try:
+            self.rate_limiter.acquire()
+            balance = self._exchange.fetch_balance()
+            base, _ = self.symbol.split("/")
+            actual_position = float(balance.get("free", {}).get(base, 0.0))
+            discrepancy = abs(actual_position - self._paper_position)
+            ok = discrepancy < 0.001
+            if not ok:
+                logger.warning(
+                    "Reconcile mismatch | internal=%.6f actual=%.6f",
+                    self._paper_position, actual_position,
+                )
+            return {
+                "position": self._paper_position,
+                "daily_pnl": self._daily_pnl,
+                "open_orders": open_orders,
+                "internal_position": self._paper_position,
+                "actual_position": actual_position,
+                "discrepancy": discrepancy,
+                "ok": ok,
+                "mode": "live",
+            }
+        except Exception as e:
+            logger.error("Reconcile failed: %s", e)
+            return {"ok": False, "error": str(e), "mode": "live",
+                    "position": self._paper_position, "daily_pnl": self._daily_pnl,
+                    "open_orders": open_orders}
+
+    def update_paper_price(self, price: float) -> None:
+        """Notify manager of latest market price (paper mode)."""
+        self._paper_last_price = price
+
+    def get_order(self, order_id: str) -> Order:
+        if order_id not in self._orders:
+            raise KeyError(f"Unknown order_id: {order_id}")
+        return self._orders[order_id]
+
+    @property
+    def daily_pnl(self) -> float:
+        self._reset_daily_pnl_if_needed()
+        return self._daily_pnl
+
+    @property
+    def is_halted(self) -> bool:
+        return self._halted
 
     # ------------------------------------------------------------------
-    # Live mode helpers (ccxt)
+    # Paper order execution
     # ------------------------------------------------------------------
 
-    def _init_live(self, config: Dict) -> None:
+    def _execute_paper_order(self, order: Order, current_price: Optional[float]) -> None:
+        price = current_price or self._paper_last_price
+        if price <= 0:
+            price = 1.0
+
+        if order.side == "buy":
+            cost = order.amount * price
+            fee = cost * 0.001
+            self._paper_cash -= (cost + fee)
+            self._paper_position += order.amount
+            order.filled_amount = order.amount
+            order.avg_fill_price = price
+            order.fee = fee
+        else:
+            sell_qty = min(order.amount, self._paper_position)
+            if sell_qty < 1e-9:
+                order.status = "failed"
+                order.updated_at = datetime.utcnow()
+                return
+            proceeds = sell_qty * price
+            fee = proceeds * 0.001
+            self._paper_cash += (proceeds - fee)
+            self._paper_position -= sell_qty
+            order.filled_amount = sell_qty
+            order.avg_fill_price = price
+            order.fee = fee
+            self._daily_pnl += (proceeds - fee - sell_qty * price)
+            self._check_daily_loss_limit()
+
+        order.status = "filled"
+        order.updated_at = datetime.utcnow()
+
+    # ------------------------------------------------------------------
+    # Live order execution
+    # ------------------------------------------------------------------
+
+    def _execute_live_order(self, order: Order) -> None:
+        max_retries = 3
+        backoff = 1.0
+        for attempt in range(1, max_retries + 1):
+            try:
+                self.rate_limiter.acquire()
+                if order.order_type == "market":
+                    result = self._exchange.create_market_order(
+                        self.symbol, order.side, order.amount
+                    )
+                else:
+                    result = self._exchange.create_limit_order(
+                        self.symbol, order.side, order.amount, order.limit_price
+                    )
+                order.exchange_order_id = result.get("id")
+                order.status = "filled" if result.get("status") == "closed" else "pending"
+                order.filled_amount = float(result.get("filled", 0.0))
+                order.avg_fill_price = float(result.get("average") or result.get("price") or 0.0)
+                fee_info = result.get("fee") or {}
+                order.fee = float(fee_info.get("cost", 0.0))
+                order.updated_at = datetime.utcnow()
+                return
+            except Exception as e:
+                logger.warning("Live order attempt %d/%d failed: %s", attempt, max_retries, e)
+                if attempt < max_retries:
+                    time.sleep(backoff)
+                    backoff *= 2.0
+                else:
+                    raise
+
+    def _refresh_live_order_status(self, order: Order) -> None:
+        if order.exchange_order_id is None:
+            return
+        try:
+            self.rate_limiter.acquire()
+            result = self._exchange.fetch_order(order.exchange_order_id, self.symbol)
+            status_map = {"open": "pending", "closed": "filled", "canceled": "cancelled"}
+            order.status = status_map.get(result.get("status", ""), order.status)
+            order.filled_amount = float(result.get("filled", order.filled_amount))
+            order.updated_at = datetime.utcnow()
+        except Exception as e:
+            logger.warning("Failed to refresh order %s: %s", order.order_id, e)
+
+    # ------------------------------------------------------------------
+    # Safety checks
+    # ------------------------------------------------------------------
+
+    def _check_daily_loss_limit(self) -> None:
+        if self._daily_pnl <= self.daily_loss_limit:
+            self._halted = True
+            logger.warning(
+                "Daily loss limit reached: pnl=%.2f limit=%.2f. Trading halted.",
+                self._daily_pnl, self.daily_loss_limit,
+            )
+
+    def _reset_daily_pnl_if_needed(self) -> None:
+        today = date.today()
+        if today != self._last_reset_date:
+            self._daily_pnl = 0.0
+            self._halted = False
+            self._last_reset_date = today
+
+    # ------------------------------------------------------------------
+    # Exchange init
+    # ------------------------------------------------------------------
+
+    def _init_exchange(self, config: Dict[str, Any]):
         try:
             import ccxt
-        except ImportError:
-            raise ImportError(
-                "ccxt is required for live trading: pip install ccxt"
-            )
-        symbol_map = {
-            "binance": ccxt.binance,
-        }
-        exchange_name = config.get("exchange", "binance").lower()
-        cls = symbol_map.get(exchange_name)
-        if cls is None:
-            raise ValueError(f"Unsupported exchange: {exchange_name}")
-        self._exchange = cls(
-            {
+            exchange_id = config.get("exchange_id", "binance")
+            exchange_class = getattr(ccxt, exchange_id)
+            return exchange_class({
                 "apiKey": config.get("api_key", ""),
                 "secret": config.get("api_secret", ""),
                 "enableRateLimit": True,
-            }
-        )
-        logger.info("OrderManager initialised in LIVE mode (%s)", exchange_name)
+            })
+        except ImportError:
+            logger.warning("ccxt not installed; falling back to paper mode")
+            self.paper_mode = True
+            return None
+        except Exception as e:
+            logger.warning("Exchange init failed (%s); falling back to paper mode", e)
+            self.paper_mode = True
+            return None
 
-    def _live_submit(
-        self,
-        order_id: str,
-        side: str,
-        amount: float,
-        order_type: str,
-        price: Optional[float],
-    ) -> Order:
-        symbol = "BTC/USDT"   # TODO: make configurable
-        for attempt in range(3):
+    def __enter__(self) -> "OrderManager":
+        return self
+
+    def __exit__(self, *_) -> None:
+        if self._exchange is not None:
             try:
-                if order_type == "market":
-                    resp = self._exchange.create_market_order(symbol, side, amount)
-                else:
-                    resp = self._exchange.create_limit_order(symbol, side, amount, price)
-                return Order(
-                    order_id=resp.get("id", order_id),
-                    side=side,
-                    amount=amount,
-                    order_type=order_type,
-                    status="pending",
-                )
-            except Exception as exc:
-                wait = 2 ** attempt
-                logger.warning(
-                    "Live order attempt %d failed: %s — retrying in %ds",
-                    attempt + 1, exc, wait,
-                )
-                time.sleep(wait)
-        return Order(
-            order_id=order_id, side=side, amount=amount,
-            order_type=order_type, status="failed", error="max retries exceeded"
-        )
-
-    def _refresh_live_order(self, order: Order) -> None:
-        try:
-            resp = self._exchange.fetch_order(order.order_id)
-            order.status = resp.get("status", order.status)
-            order.filled_amount = float(resp.get("filled", order.filled_amount))
-        except Exception as exc:
-            logger.error("refresh_live_order failed: %s", exc)
-
-    def _live_cancel(self, order: Order) -> bool:
-        try:
-            self._exchange.cancel_order(order.order_id)
-            order.status = "cancelled"
-            return True
-        except Exception as exc:
-            logger.error("live_cancel failed: %s", exc)
-            return False
-
-    def _fetch_exchange_position(self) -> float:
-        try:
-            balance = self._exchange.fetch_balance()
-            btc = balance.get("BTC", {}).get("total", 0.0)
-            return float(btc)
-        except Exception:
-            return self._position
+                self._exchange.close()
+            except Exception:
+                pass

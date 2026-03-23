@@ -57,15 +57,18 @@ except ImportError:
             return {"loss": 0.0}
     
     class MockMultiAgentManager:
-        def __init__(self, agent_configs, **kwargs):
+        def __init__(self, agent_configs, ensemble_method="weighted",
+                     performance_window=50, **kwargs):
             self.agents = {}
             self.meta_agent_id = None
+            self.ensemble_method = ensemble_method
+            self.performance_window = performance_window
             for cfg in agent_configs:
                 agent_id = cfg.get("id", f"agent_{len(self.agents)}")
                 self.agents[agent_id] = DummyAgent(dummy_obs_space, dummy_act_space)
                 if cfg.get("type") == "meta":
                     self.meta_agent_id = agent_id
-            
+
             self.agent_performance = {agent_id: {"weight": 1.0, "returns": []} for agent_id in self.agents}
             self.action_correlation = {agent_id: {} for agent_id in self.agents}
             self.recent_actions = {agent_id: [] for agent_id in self.agents}

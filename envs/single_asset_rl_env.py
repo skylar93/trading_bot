@@ -76,6 +76,8 @@ class SingleAssetRLTradingEnv(gym.Env):
         market_impact_gamma: float = 0.001,
         # Week 22: DTForecaster — inject return predictions into observation
         dt_forecaster: Optional["DTForecaster"] = None,
+        # Week 30: optional risk manager for regime-based position sizing
+        risk_manager=None,
     ):
         """Initialize environment
 
@@ -226,6 +228,10 @@ class SingleAssetRLTradingEnv(gym.Env):
         self.last_fill_rate = 1.0
         self.last_slippage = 0.0
 
+        # Week 30: regime-based position sizing
+        self._risk_manager = risk_manager
+        self._regime_probs = None  # 외부에서 set_regime_probs()로 업데이트
+
         logger.info(
             f"Initialized TradingEnvironment with window_size={window_size}, "
             f"initial_capital={initial_capital}, trading_fee={trading_fee}, "
@@ -239,6 +245,10 @@ class SingleAssetRLTradingEnv(gym.Env):
                     f"Data too short ({len(self.data)}) for window_size={self.window_size}. "
                     f"Need at least window_size+1 rows."
                 )
+
+    def set_regime_probs(self, regime_probs) -> None:
+        """Week 30: 외부에서 HMM regime 확률을 주입한다. step()에서 position sizing에 반영."""
+        self._regime_probs = regime_probs
 
     def reset(
         self, seed: Optional[int] = None, options: Optional[dict] = None
@@ -296,7 +306,11 @@ class SingleAssetRLTradingEnv(gym.Env):
             current_volume = 1.0
         
         # Calculate target position change
-        position_change = float(action[0]) * self.max_position_size
+        raw_action = float(action[0])
+        # Week 30: apply regime-based position sizing if available
+        if self._risk_manager is not None and self._regime_probs is not None:
+            raw_action = self._risk_manager.adjust_for_regime(raw_action, self._regime_probs)
+        position_change = raw_action * self.max_position_size
         target_position = self.current_position + position_change
         
         # Apply position limits

@@ -1,225 +1,284 @@
 """
-Trading Alerter: 조건 충족 시 알림 발송.
+Trading Alerter: condition-based notification dispatcher.
 
-지원 채널: console (기본), Telegram, generic webhook.
-환경 변수로 토큰을 주입하는 것을 권장 (hardcode 금지).
+Supported channels:
+    - console  : logger.warning (always available, used as fallback)
+    - telegram : sends message via python-telegram-bot (requires token + chat_id)
+    - webhook  : HTTP POST to a generic endpoint
 
-Usage
------
-    from deployment.monitoring.alerter import TradingAlerter
+Triggers:
+    - drawdown exceeds threshold (default 10 %)
+    - daily P&L below loss limit
+    - feature/reward drift detected
+    - connection lost for more than N seconds
+    - trade executed (optional, verbose mode only)
 
+Usage:
     alerter = TradingAlerter({
-        "alert_channels": ["console"],
+        "alert_channels": ["console", "telegram"],
         "drawdown_alert_threshold": 0.10,
-        "daily_loss_alert": -500.0,
+        "daily_loss_alert": -500,
+        "telegram_token": "...",
+        "telegram_chat_id": "...",
     })
-    alerter.check_drawdown(current=8_800, peak=10_000)   # 12% → fires alert
-    alerter.check_daily_pnl(-600)                         # below limit → fires alert
+    alerter.check_drawdown(current=9000, peak=10000)
+    alerter.check_daily_pnl(pnl=-600)
+    alerter.notify_drift(detector="adwin", signal_name="reward")
+    alerter.notify_trade(side="buy", amount=0.05, price=30000.0)
 """
 
 from __future__ import annotations
 
 import logging
-import os
+import time
+import urllib.request
+import urllib.parse
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Internal alert record
-# ---------------------------------------------------------------------------
-
 @dataclass
-class Alert:
-    level: str          # "WARNING" | "CRITICAL"
-    channel: str
+class AlertRecord:
+    """Record of a dispatched alert (used for testing and audit)."""
+    level: str
+    event: str
     message: str
     timestamp: datetime = field(default_factory=datetime.utcnow)
 
     def __str__(self) -> str:
         ts = self.timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
-        return f"[{ts}] [{self.level}] {self.message}"
+        return f"[{ts}] [{self.level}] {self.event}: {self.message}"
 
-
-# ---------------------------------------------------------------------------
-# TradingAlerter
-# ---------------------------------------------------------------------------
 
 class TradingAlerter:
-    """Monitors trading metrics and dispatches alerts to configured channels.
+    """
+    Dispatches alerts to one or more notification channels.
 
     Parameters
     ----------
     config : dict
-        Configuration dict.  Expected keys (all optional):
-
-        alert_channels : list of str
-            ``["console"]`` (default).  Also accepts ``"telegram"`` and
-            ``"webhook"``.
-        drawdown_alert_threshold : float
-            Drawdown fraction that triggers an alert (default 0.10 = 10 %).
-        daily_loss_alert : float
-            Absolute daily P&L below which an alert fires (default -500).
-        telegram_token : str
-            Telegram bot token.  Reads ``TELEGRAM_BOT_TOKEN`` env var if
-            not provided.
-        telegram_chat_id : str
-            Telegram chat/channel ID.  Reads ``TELEGRAM_CHAT_ID`` env var.
-        webhook_url : str
-            HTTP URL for generic POST alerts.
+        Alert configuration.
+        Keys:
+            alert_channels              – list of channels: ["console"], ["telegram"], ["webhook"]
+            drawdown_alert_threshold    – drawdown fraction to trigger alert (default 0.10)
+            daily_loss_alert            – daily P&L threshold to trigger alert (default -500)
+            connection_timeout_seconds  – seconds of lost connection before alert (default 60)
+            telegram_token              – Telegram bot token (or set TELEGRAM_BOT_TOKEN env var)
+            telegram_chat_id            – Telegram chat id (or set TELEGRAM_CHAT_ID env var)
+            webhook_url                 – HTTP endpoint for webhook alerts
+            verbose                     – if True, also alert on every trade (default False)
     """
 
-    def __init__(self, config: dict) -> None:
-        self.channels: List[str] = config.get("alert_channels", ["console"])
-        self.drawdown_threshold: float = float(
-            config.get("drawdown_alert_threshold", 0.10)
-        )
-        self.daily_loss_limit: float = float(
-            config.get("daily_loss_alert", -500.0)
-        )
+    def __init__(self, config: Dict[str, Any]) -> None:
+        self._channels: List[str] = config.get("alert_channels", ["console"])
+        self.drawdown_threshold: float = float(config.get("drawdown_alert_threshold", 0.10))
+        self.daily_loss_limit: float = float(config.get("daily_loss_alert", -500.0))
+        self.connection_timeout: float = float(config.get("connection_timeout_seconds", 60.0))
+        self.verbose: bool = bool(config.get("verbose", False))
 
         # Telegram
-        self._telegram_token: Optional[str] = config.get(
-            "telegram_token", os.environ.get("TELEGRAM_BOT_TOKEN")
+        import os
+        self._telegram_token: Optional[str] = (
+            config.get("telegram_token") or os.environ.get("TELEGRAM_BOT_TOKEN")
         )
-        self._telegram_chat_id: Optional[str] = config.get(
-            "telegram_chat_id", os.environ.get("TELEGRAM_CHAT_ID")
+        self._telegram_chat_id: Optional[str] = (
+            str(config.get("telegram_chat_id", "")) or os.environ.get("TELEGRAM_CHAT_ID")
         )
 
         # Webhook
-        self._webhook_url: Optional[str] = config.get("webhook_url")
+        self._webhook_url: Optional[str] = config.get("webhook_url") or None
 
-        # History of fired alerts (useful for testing)
-        self.alert_history: List[Alert] = []
+        # Connection tracking
+        self._last_connection_time: float = time.monotonic()
+        self._connection_alert_sent: bool = False
+
+        # Audit log (useful for testing and post-hoc analysis)
+        self.alert_history: List[AlertRecord] = []
+
+        logger.info(
+            "TradingAlerter initialised | channels=%s drawdown_thresh=%.1f%% daily_loss=%.0f",
+            self._channels,
+            self.drawdown_threshold * 100,
+            self.daily_loss_limit,
+        )
 
     # ------------------------------------------------------------------
-    # Trigger checks
+    # Trigger methods
     # ------------------------------------------------------------------
 
     def check_drawdown(self, current: float, peak: float) -> bool:
-        """Fire an alert if drawdown from ``peak`` exceeds the threshold.
+        """
+        Check if drawdown from peak exceeds the alert threshold.
 
-        Parameters
-        ----------
-        current : float
-            Current portfolio value.
-        peak : float
-            Historical peak portfolio value.
-
-        Returns
-        -------
-        bool
-            ``True`` if an alert was fired.
+        Returns True if alert was triggered.
         """
         if peak <= 0:
             return False
+
         drawdown = (peak - current) / peak
         if drawdown >= self.drawdown_threshold:
-            msg = (
-                f"Drawdown alert: current={current:.2f}, peak={peak:.2f}, "
-                f"drawdown={drawdown:.1%} >= threshold={self.drawdown_threshold:.1%}"
+            self._dispatch(
+                level="WARNING",
+                event="drawdown_alert",
+                message=(
+                    f"Drawdown alert: {drawdown:.1%} drawdown "
+                    f"(current={current:.2f}, peak={peak:.2f}, "
+                    f"threshold={self.drawdown_threshold:.1%})"
+                ),
             )
-            self._fire("WARNING", msg)
             return True
         return False
 
     def check_daily_pnl(self, pnl: float) -> bool:
-        """Fire an alert if today's realised P&L is below the limit.
-
-        Parameters
-        ----------
-        pnl : float
-            Today's P&L in account currency.
-
-        Returns
-        -------
-        bool
-            ``True`` if an alert was fired.
         """
-        if pnl < self.daily_loss_limit:
-            msg = (
-                f"Daily loss alert: pnl={pnl:.2f} < limit={self.daily_loss_limit:.2f}"
+        Check if daily P&L has dropped below the alert threshold.
+
+        Returns True if alert was triggered.
+        """
+        if pnl <= self.daily_loss_limit:
+            self._dispatch(
+                level="CRITICAL",
+                event="daily_loss_alert",
+                message=(
+                    f"Daily loss alert: P&L={pnl:.2f} "
+                    f"(limit={self.daily_loss_limit:.2f})"
+                ),
             )
-            self._fire("CRITICAL", msg)
             return True
         return False
 
     def check_connection_lost(self, seconds_since_last_tick: float) -> bool:
-        """Fire an alert if the data feed has been silent for > 60 s."""
-        if seconds_since_last_tick > 60.0:
-            msg = f"Connection alert: no data for {seconds_since_last_tick:.0f} s"
-            self._fire("CRITICAL", msg)
+        """
+        Fire an alert if the data feed has been silent for > connection_timeout seconds.
+
+        Parameters
+        ----------
+        seconds_since_last_tick : float
+            Elapsed seconds since the last received data tick.
+
+        Returns True if alert was triggered.
+        """
+        if seconds_since_last_tick > self.connection_timeout:
+            self._dispatch(
+                level="CRITICAL",
+                event="connection_lost",
+                message=(
+                    f"Connection lost for {seconds_since_last_tick:.0f}s "
+                    f"(timeout={self.connection_timeout:.0f}s)"
+                ),
+            )
             return True
         return False
 
+    def notify_drift(self, detector: str, signal_name: str, details: Optional[str] = None) -> None:
+        """Alert that concept drift was detected."""
+        msg = f"Drift detected by {detector} on signal '{signal_name}'"
+        if details:
+            msg += f" — {details}"
+        self._dispatch(level="WARNING", event="drift_detected", message=msg)
+
+    def notify_connection_restored(self) -> None:
+        """Reset connection tracking after reconnect."""
+        self._last_connection_time = time.monotonic()
+        self._connection_alert_sent = False
+        logger.info("Connection restored; alert state reset.")
+
+    def notify_trade(self, side: str, amount: float, price: float, order_id: str = "") -> None:
+        """Optionally alert on trade execution (only in verbose mode)."""
+        if not self.verbose:
+            return
+        self._dispatch(
+            level="INFO",
+            event="trade_executed",
+            message=(
+                f"Trade executed: {side.upper()} {amount:.6f} @ {price:.2f}"
+                + (f" (id={order_id})" if order_id else "")
+            ),
+        )
+
     def send_alert(self, message: str, level: str = "WARNING") -> None:
         """Manually dispatch an alert message."""
-        self._fire(level, message)
+        self._dispatch(level=level, event="manual_alert", message=message)
 
     # ------------------------------------------------------------------
-    # Dispatch
+    # Dispatch core
     # ------------------------------------------------------------------
 
-    def _fire(self, level: str, message: str) -> None:
-        alert = Alert(level=level, channel="", message=message)
-        for channel in self.channels:
-            alert.channel = channel
-            self.alert_history.append(alert)
-            try:
-                if channel == "console":
-                    self._send_console(alert)
-                elif channel == "telegram":
-                    self._send_telegram(alert)
-                elif channel == "webhook":
-                    self._send_webhook(alert)
-                else:
-                    logger.warning("Unknown alert channel: %s", channel)
-            except Exception as exc:
-                logger.error("Alert dispatch failed on channel '%s': %s", channel, exc)
+    def _dispatch(self, level: str, event: str, message: str) -> None:
+        """Route an alert to all configured channels and record it."""
+        timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+        full_message = f"[{timestamp}] [{level}] {event}: {message}"
 
-    def _send_console(self, alert: Alert) -> None:
-        log_fn = logger.critical if alert.level == "CRITICAL" else logger.warning
-        log_fn("[ALERT] %s", alert.message)
+        record = AlertRecord(level=level, event=event, message=message)
+        self.alert_history.append(record)
 
-    def _send_telegram(self, alert: Alert) -> None:
+        for channel in self._channels:
+            if channel == "console":
+                self._send_console(level, full_message)
+            elif channel == "telegram":
+                self._send_telegram(full_message)
+            elif channel == "webhook":
+                self._send_webhook(event, level, message, timestamp)
+            else:
+                logger.warning("Unknown alert channel: %s", channel)
+
+    def _send_console(self, level: str, message: str) -> None:
+        if level in ("CRITICAL", "ERROR"):
+            logger.error(message)
+        else:
+            logger.warning(message)
+
+    def _send_telegram(self, message: str) -> None:
         if not self._telegram_token or not self._telegram_chat_id:
             logger.warning(
-                "Telegram alert skipped: missing token or chat_id. "
+                "Telegram alert skipped: token or chat_id not configured. "
                 "Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID env vars."
             )
             return
-        try:
-            import urllib.request, json as _json, urllib.parse
-            text = urllib.parse.quote(str(alert))
-            url = (
-                f"https://api.telegram.org/bot{self._telegram_token}"
-                f"/sendMessage?chat_id={self._telegram_chat_id}&text={text}"
-            )
-            urllib.request.urlopen(url, timeout=5)
-        except Exception as exc:
-            logger.error("Telegram send failed: %s", exc)
 
-    def _send_webhook(self, alert: Alert) -> None:
-        if not self._webhook_url:
-            logger.warning("Webhook alert skipped: no webhook_url configured.")
-            return
         try:
-            import urllib.request, json as _json
-            payload = _json.dumps(
-                {
-                    "level": alert.level,
-                    "message": alert.message,
-                    "timestamp": alert.timestamp.isoformat(),
-                }
-            ).encode()
+            url = f"https://api.telegram.org/bot{self._telegram_token}/sendMessage"
+            payload = json.dumps({
+                "chat_id": self._telegram_chat_id,
+                "text": message,
+                "parse_mode": "HTML",
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if resp.status != 200:
+                    logger.warning("Telegram API returned status %s", resp.status)
+        except Exception as e:
+            logger.error("Telegram alert failed: %s", e)
+
+    def _send_webhook(self, event: str, level: str, message: str, timestamp: str) -> None:
+        if not self._webhook_url:
+            logger.warning("Webhook alert skipped: webhook_url not configured.")
+            return
+
+        try:
+            payload = json.dumps({
+                "event": event,
+                "level": level,
+                "message": message,
+                "timestamp": timestamp,
+            }).encode("utf-8")
             req = urllib.request.Request(
                 self._webhook_url,
                 data=payload,
                 headers={"Content-Type": "application/json"},
+                method="POST",
             )
-            urllib.request.urlopen(req, timeout=5)
-        except Exception as exc:
-            logger.error("Webhook send failed: %s", exc)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if resp.status not in (200, 201, 204):
+                    logger.warning("Webhook returned status %s", resp.status)
+        except Exception as e:
+            logger.error("Webhook alert failed: %s", e)

@@ -710,6 +710,31 @@ class RLRiskManager(RiskManagerBase):
             
         return False
     
+    def adjust_for_regime(self, action: float, regime_probs: np.ndarray) -> float:
+        """
+        Regime 확률에 따라 position sizing을 조정한다.
+
+        Args:
+            action: 원래 action 값 ([-1, 1] 범위)
+            regime_probs: HMM regime 확률 배열 [low_vol, medium_vol, high_vol]
+
+        Returns:
+            float: 조정된 action 값 (0 이상, max_position_size 이하로 clip)
+
+        Notes:
+            - high-vol regime(index 2) 확률이 높을수록 position 최대 50% 축소
+            - low-vol regime(index 0) 확률이 높으면 축소 없음
+        """
+        if len(regime_probs) < 3:
+            return action
+
+        high_vol_prob = float(regime_probs[2])
+        vol_factor = 1.0 - 0.5 * high_vol_prob  # high-vol이면 최대 50% 축소
+        adjusted = action * vol_factor
+
+        max_pos = getattr(self.config, "max_position_size", 1.0)
+        return float(np.clip(adjusted, -max_pos, max_pos))
+
     def check_var_exceed(self, agent_id: str, current_return: float) -> Optional[str]:
         """
         Check if current return exceeds VaR threshold.
