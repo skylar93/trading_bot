@@ -146,6 +146,31 @@ risk_management:
   portfolio_stop_loss_threshold: 0.15  # 포트폴리오 15% 손실 시 stop
 
 # ─────────────────────────────────────────────
+# Week 33: Execution + Monitoring 설정
+# ─────────────────────────────────────────────
+
+execution:
+  paper_mode: true
+  exchange_id: "binance"
+  symbol: "BTC/USDT"
+  max_order_size: 0.1
+  daily_loss_limit: -500.0
+  initial_cash: 100000.0
+  rate_limit_calls: 10
+  rate_limit_period: 1.0
+
+monitoring:
+  enabled: true
+  alert_channels: ["console"]   # 추가 가능: "telegram", "webhook"
+  drawdown_alert_threshold: 0.10
+  daily_loss_alert: -500
+  connection_timeout_seconds: 60
+  verbose: false
+  telegram_token: ${TELEGRAM_BOT_TOKEN}
+  telegram_chat_id: ${TELEGRAM_CHAT_ID}
+  webhook_url: ""
+
+# ─────────────────────────────────────────────
 # 예상 학습 시간 (RTX 3060 Ti 기준):
 # - 단일 PPO agent 500K steps: ~20분
 # - 4-agent ensemble (순차):   ~1.5시간
