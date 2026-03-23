@@ -400,6 +400,15 @@ def run_pipeline(
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
 
+    # Week 30: validate config schema
+    try:
+        from config.schema import FullConfig
+        FullConfig(**cfg)
+        logger.info("Config validation passed.")
+    except Exception as e:
+        logger.error("Config validation failed: %s", e)
+        raise
+
     logger.info("Config loaded: %s", config_path)
 
     # Pipeline state
