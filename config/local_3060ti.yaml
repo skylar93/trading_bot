@@ -136,6 +136,16 @@ paper_trading:
   risk_per_trade: 0.02
 
 # ─────────────────────────────────────────────
+# Week 30: Risk Management Config
+# ─────────────────────────────────────────────
+
+risk_management:
+  stop_loss_threshold: 0.05       # 5% 손실 시 stop loss
+  trailing_stop_buffer: 0.03      # 최고점에서 3% 하락 시 trailing stop
+  max_drawdown_pct: 0.20          # 20% max drawdown 허용
+  portfolio_stop_loss_threshold: 0.15  # 포트폴리오 15% 손실 시 stop
+
+# ─────────────────────────────────────────────
 # 예상 학습 시간 (RTX 3060 Ti 기준):
 # - 단일 PPO agent 500K steps: ~20분
 # - 4-agent ensemble (순차):   ~1.5시간

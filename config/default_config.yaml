@@ -29,3 +29,9 @@ paths:
   model_dir: "models"
   data_dir: "data"
   log_dir: "logs"
+
+risk_management:
+  stop_loss_threshold: 0.05
+  trailing_stop_buffer: 0.03
+  max_drawdown_pct: 0.20
+  portfolio_stop_loss_threshold: 0.15

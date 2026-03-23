@@ -762,7 +762,15 @@ def train_pipeline(config: Dict[str, Any], data: Optional[pd.DataFrame] = None) 
     """
     # Setup logging
     logger.info("Starting training pipeline")
-    
+
+    # Week 30: validate config schema
+    try:
+        from config.schema import FullConfig
+        FullConfig(**config)
+        logger.info("Config validation passed.")
+    except Exception as e:
+        logger.warning("Config validation warning: %s", e)
+
     # Extract paths from config
     paths_config = config.get("paths", {})
     checkpoint_dir = paths_config.get("checkpoint_dir", "checkpoints")
