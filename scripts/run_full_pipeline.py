@@ -187,6 +187,36 @@ def step_feature_engineering(
     return df
 
 
+def step_multi_timeframe_features(
+    cfg: dict[str, Any],
+    df: Any,
+    state: PipelineState,
+    dry_run: bool,
+) -> Any:
+    if state.is_done("multi_timeframe_features"):
+        logger.info("Step 2b already done — skipping.")
+        return df
+
+    mtf_cfg = cfg.get("multi_timeframe", {})
+    if not mtf_cfg.get("enabled", True):
+        logger.info("Multi-timeframe features disabled in config — skipping.")
+        return df
+
+    try:
+        from training.features.multi_timeframe import MultiTimeframeFeatures  # noqa: PLC0415
+        mtf = MultiTimeframeFeatures(
+            higher_timeframes=mtf_cfg.get("higher_timeframes", ["4H", "1D"]),
+        )
+        df = mtf.generate(df)
+        logger.info("Multi-timeframe features done: %d total columns", len(df.columns))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Multi-timeframe features failed (%s) — skipping.", exc)
+
+    if not dry_run:
+        state.mark_done("multi_timeframe_features", n_features=len(df.columns))
+    return df
+
+
 def step_regime_detection(
     cfg: dict[str, Any],
     df: Any,
@@ -400,6 +430,15 @@ def run_pipeline(
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
 
+    # Week 30: validate config schema
+    try:
+        from config.schema import FullConfig
+        FullConfig(**cfg)
+        logger.info("Config validation passed.")
+    except Exception as e:
+        logger.error("Config validation failed: %s", e)
+        raise
+
     logger.info("Config loaded: %s", config_path)
 
     # Pipeline state
@@ -439,6 +478,10 @@ def run_pipeline(
     # ── Step 2: Feature Engineering ──
     _header(2, "Feature Engineering")
     df = step_feature_engineering(cfg, df, state, dry_run)
+
+    # ── Step 2b: Multi-Timeframe Features ──
+    _header("2b", "Multi-Timeframe Features (4H, 1D)")
+    df = step_multi_timeframe_features(cfg, df, state, dry_run)
 
     # ── Step 3: Regime Detection ──
     _header(3, "HMM Regime Detection")

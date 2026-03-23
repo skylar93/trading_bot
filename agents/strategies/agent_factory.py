@@ -72,7 +72,8 @@ class DummyAgent:
         action = self.get_action(observation, deterministic)
         return action
 
-    def train_step(self, experience):
+    def train_step(self, state=None, action=None, reward=None,
+                   next_state=None, done=None, info=None, experience=None):
         return {"loss": 0.0}
 
     def update(self, *args, **kwargs):
@@ -161,17 +162,24 @@ def create_agent(
     device = config.get("device", "cuda" if torch.cuda.is_available() else "cpu")
     
     # Create observation and action spaces if not provided
+    # Also check config dict for pre-built spaces (test-friendly)
     if observation_space is None:
-        obs_dim = config.get("observation_size", 10)
-        observation_space = gym.spaces.Box(
-            low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
-        )
-    
+        if "observation_space" in config:
+            observation_space = config["observation_space"]
+        else:
+            obs_dim = config.get("observation_size", 10)
+            observation_space = gym.spaces.Box(
+                low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
+            )
+
     if action_space is None:
-        action_dim = config.get("action_dim", 1)
-        action_space = gym.spaces.Box(
-            low=-1, high=1, shape=(action_dim,), dtype=np.float32
-        )
+        if "action_space" in config:
+            action_space = config["action_space"]
+        else:
+            action_dim = config.get("action_dim", 1)
+            action_space = gym.spaces.Box(
+                low=-1, high=1, shape=(action_dim,), dtype=np.float32
+            )
     
     # Log agent creation attempt
     logger.info(f"Creating agent with type={agent_type}, strategy={strategy}")
@@ -324,7 +332,7 @@ def create_agent(
                 )
             except ImportError:
                 logger.warning("TD3 agent not available, using dummy agent")
-                from agents.strategies.single.dummy_agent import DummyAgent
+                # DummyAgent is defined at module level
                 return DummyAgent(
                     observation_space=observation_space,
                     action_space=action_space,
@@ -474,8 +482,7 @@ def create_agent(
                     vec_env = config["env"]
                 else:
                     # Wrap spaces in a simple passthrough env
-                    import gymnasium as gym
-
+                    # (gymnasium is already imported at module level)
                     class _SpaceEnv(gym.Env):
                         def __init__(self):
                             self.observation_space = observation_space
@@ -501,7 +508,7 @@ def create_agent(
                 return CVaRPPO("MlpPolicy", vec_env, **cvar_kwargs)
             except Exception as e:
                 logger.error(f"CVaRPPO creation failed: {e}")
-                from agents.strategies.single.dummy_agent import DummyAgent
+                # DummyAgent is defined at module level
                 return DummyAgent(observation_space=observation_space, action_space=action_space)
 
         # Default fallback

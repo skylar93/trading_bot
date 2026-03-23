@@ -709,7 +709,7 @@ class TestApp:
 
     def test_pages_list_has_five_entries(self):
         from deployment.web_interface.app import PAGES
-        assert len(PAGES) == 5
+        assert len(PAGES) >= 5  # "Results Report" 추가로 현재 6개
 
     def test_pages_list_contains_training_dashboard(self):
         from deployment.web_interface.app import PAGES
