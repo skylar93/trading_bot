@@ -731,11 +731,49 @@ class RLRiskManager(RiskManagerBase):
         
         if var_value is None:
             return None
-        
+
         # VaR is exceeded if the current loss (negative return) is greater than VaR
         if current_return < -var_value:
             if hasattr(self, "var_exceed_events"):
                 self.var_exceed_events += 1
             return self.config.action_on_var_exceed
-            
-        return None 
+
+        return None
+
+    def adjust_for_regime(self, action: float, regime_probs: np.ndarray) -> float:
+        """Adjust position size based on HMM regime probabilities.
+
+        Parameters
+        ----------
+        action : float
+            Raw action value (position size) from the agent, in [0, max_position_size].
+        regime_probs : np.ndarray
+            Probability vector over regimes [low_vol, medium_vol, high_vol] from
+            RegimeDetector.  Must sum to ~1.0 and have length == n_regimes.
+
+        Returns
+        -------
+        float
+            Adjusted action clipped to [0, max_position_size].
+
+        Notes
+        -----
+        High-volatility regime (index 2) triggers up to 50 % position reduction.
+        The scaling is linear in ``regime_probs[2]`` so a fully-certain high-vol
+        regime halves the position while a fully-certain low-vol regime leaves it
+        unchanged.
+        """
+        regime_probs = np.asarray(regime_probs, dtype=float)
+        if regime_probs.ndim != 1 or len(regime_probs) < 3:
+            logger.warning(
+                "adjust_for_regime: expected regime_probs of length >= 3, "
+                "got %s — skipping adjustment", regime_probs.shape
+            )
+            return float(action)
+
+        high_vol_prob = float(regime_probs[2])
+        # Linear scale-down: high-vol prob 1.0 → factor 0.5; prob 0.0 → factor 1.0
+        vol_factor = 1.0 - 0.5 * high_vol_prob
+        adjusted = float(action) * vol_factor
+        max_pos = getattr(self.config, "max_position_size", 1.0)
+        return float(np.clip(adjusted, 0.0, max_pos))

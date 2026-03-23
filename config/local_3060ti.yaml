@@ -136,6 +136,19 @@ paper_trading:
   risk_per_trade: 0.02
 
 # ─────────────────────────────────────────────
+# Week 33: Monitoring + Alerting
+# ─────────────────────────────────────────────
+
+monitoring:
+  enabled: true
+  alert_channels: ["console"]   # telegram, webhook 추가 가능
+  drawdown_alert_threshold: 0.10
+  daily_loss_alert: -500
+  telegram_token: ${TELEGRAM_BOT_TOKEN}
+  telegram_chat_id: ${TELEGRAM_CHAT_ID}
+  webhook_url: null
+
+# ─────────────────────────────────────────────
 # 예상 학습 시간 (RTX 3060 Ti 기준):
 # - 단일 PPO agent 500K steps: ~20분
 # - 4-agent ensemble (순차):   ~1.5시간
