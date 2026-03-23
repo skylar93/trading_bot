@@ -34,14 +34,25 @@ import time
 import urllib.request
 import urllib.parse
 import json
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# TradingAlerter
-# ---------------------------------------------------------------------------
+
+@dataclass
+class AlertRecord:
+    """Record of a dispatched alert (used for testing and audit)."""
+    level: str
+    event: str
+    message: str
+    timestamp: datetime = field(default_factory=datetime.utcnow)
+
+    def __str__(self) -> str:
+        ts = self.timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+        return f"[{ts}] [{self.level}] {self.event}: {self.message}"
+
 
 class TradingAlerter:
     """
@@ -79,11 +90,14 @@ class TradingAlerter:
         )
 
         # Webhook
-        self._webhook_url: Optional[str] = config.get("webhook_url")
+        self._webhook_url: Optional[str] = config.get("webhook_url") or None
 
         # Connection tracking
         self._last_connection_time: float = time.monotonic()
         self._connection_alert_sent: bool = False
+
+        # Audit log (useful for testing and post-hoc analysis)
+        self.alert_history: List[AlertRecord] = []
 
         logger.info(
             "TradingAlerter initialised | channels=%s drawdown_thresh=%.1f%% daily_loss=%.0f",
@@ -99,11 +113,6 @@ class TradingAlerter:
     def check_drawdown(self, current: float, peak: float) -> bool:
         """
         Check if drawdown from peak exceeds the alert threshold.
-
-        Parameters
-        ----------
-        current : current portfolio value
-        peak    : all-time-high portfolio value since session start
 
         Returns True if alert was triggered.
         """
@@ -142,38 +151,35 @@ class TradingAlerter:
             return True
         return False
 
-    def notify_drift(self, detector: str, signal_name: str, details: Optional[str] = None) -> None:
+    def check_connection_lost(self, seconds_since_last_tick: float) -> bool:
         """
-        Alert that concept drift was detected.
+        Fire an alert if the data feed has been silent for > connection_timeout seconds.
 
         Parameters
         ----------
-        detector    : name of the drift detector (e.g. "adwin", "page_hinkley")
-        signal_name : the monitored signal (e.g. "reward", "feature_mean")
-        details     : optional human-readable detail string
-        """
-        msg = f"Drift detected by {detector} on signal '{signal_name}'"
-        if details:
-            msg += f" — {details}"
-        self._dispatch(
-            level="WARNING",
-            event="drift_detected",
-            message=msg,
-        )
+        seconds_since_last_tick : float
+            Elapsed seconds since the last received data tick.
 
-    def notify_connection_lost(self) -> None:
+        Returns True if alert was triggered.
         """
-        Record a connection failure.  Sends an alert once the connection has
-        been lost for longer than ``connection_timeout_seconds``.
-        """
-        elapsed = time.monotonic() - self._last_connection_time
-        if elapsed >= self.connection_timeout and not self._connection_alert_sent:
+        if seconds_since_last_tick > self.connection_timeout:
             self._dispatch(
                 level="CRITICAL",
                 event="connection_lost",
-                message=f"Connection lost for {elapsed:.0f}s (timeout={self.connection_timeout:.0f}s)",
+                message=(
+                    f"Connection lost for {seconds_since_last_tick:.0f}s "
+                    f"(timeout={self.connection_timeout:.0f}s)"
+                ),
             )
-            self._connection_alert_sent = True
+            return True
+        return False
+
+    def notify_drift(self, detector: str, signal_name: str, details: Optional[str] = None) -> None:
+        """Alert that concept drift was detected."""
+        msg = f"Drift detected by {detector} on signal '{signal_name}'"
+        if details:
+            msg += f" — {details}"
+        self._dispatch(level="WARNING", event="drift_detected", message=msg)
 
     def notify_connection_restored(self) -> None:
         """Reset connection tracking after reconnect."""
@@ -182,16 +188,7 @@ class TradingAlerter:
         logger.info("Connection restored; alert state reset.")
 
     def notify_trade(self, side: str, amount: float, price: float, order_id: str = "") -> None:
-        """
-        Optionally alert on trade execution (only in verbose mode).
-
-        Parameters
-        ----------
-        side     : "buy" or "sell"
-        amount   : order size in base currency
-        price    : fill price
-        order_id : optional reference
-        """
+        """Optionally alert on trade execution (only in verbose mode)."""
         if not self.verbose:
             return
         self._dispatch(
@@ -203,14 +200,21 @@ class TradingAlerter:
             ),
         )
 
+    def send_alert(self, message: str, level: str = "WARNING") -> None:
+        """Manually dispatch an alert message."""
+        self._dispatch(level=level, event="manual_alert", message=message)
+
     # ------------------------------------------------------------------
     # Dispatch core
     # ------------------------------------------------------------------
 
     def _dispatch(self, level: str, event: str, message: str) -> None:
-        """Route an alert to all configured channels."""
+        """Route an alert to all configured channels and record it."""
         timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
         full_message = f"[{timestamp}] [{level}] {event}: {message}"
+
+        record = AlertRecord(level=level, event=event, message=message)
+        self.alert_history.append(record)
 
         for channel in self._channels:
             if channel == "console":

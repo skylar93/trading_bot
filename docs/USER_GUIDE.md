@@ -367,9 +367,96 @@ print(runs[['run_id', 'metrics.sharpe_ratio', 'metrics.max_drawdown']].head(10))
 
 ---
 
+## Phase 3 기능 (Week 30-34)
+
+### Monitoring 설정법 (Telegram bot)
+
+1. **Bot 생성**: Telegram에서 `@BotFather`에게 `/newbot` 명령어를 보내어 토큰을 발급받습니다.
+2. **Chat ID 확인**: Bot에 메시지를 보낸 후 `https://api.telegram.org/bot<TOKEN>/getUpdates`에서 `chat.id`를 확인합니다.
+3. **환경 변수 설정**:
+   ```bash
+   export TELEGRAM_BOT_TOKEN="1234567890:ABCdef..."
+   export TELEGRAM_CHAT_ID="-1001234567890"
+   ```
+4. **config 변경** (`config/local_3060ti.yaml`):
+   ```yaml
+   monitoring:
+     alert_channels: ["console", "telegram"]
+     drawdown_alert_threshold: 0.10
+     daily_loss_alert: -500
+   ```
+5. **동작 확인**:
+   ```python
+   from deployment.monitoring.alerter import TradingAlerter
+   alerter = TradingAlerter({"alert_channels": ["telegram"]})
+   alerter.send_alert("테스트 알림", level="WARNING")
+   ```
+
+---
+
+### Statistical Test 결과 읽는 법
+
+`StrategyStatisticalTests`는 세 가지 주요 지표를 제공합니다.
+
+**Bootstrap Sharpe CI** (`bootstrap_sharpe_ci`):
+```
+Sharpe 95% CI: [lo=0.42, point=0.87, hi=1.31]
+```
+- `lo`가 0보다 크면 95% 신뢰구간에서 양의 Sharpe → 통계적으로 유의한 전략
+- 구간이 넓을수록 샘플 수가 부족하거나 수익률 변동성이 큼
+
+**Permutation Test** (`permutation_test`):
+```
+p-value: 0.031  →  유의 (α=0.05 기준 통과)
+p-value: 0.210  →  비유의, 랜덤과 구분 불가
+```
+- `p < 0.05` → 전략 성능이 우연이 아닐 가능성 높음
+- `p > 0.05` → 과적합 의심, 하이퍼파라미터 또는 데이터 재검토
+
+**Deflated Sharpe Ratio (DSR)**:
+- 여러 번 하이퍼파라미터 탐색 시 다중검정 보정
+- `n_trials=50`으로 설정하면 50회 탐색을 보정
+- `DSR > 0.95` → 유의한 전략, `DSR < 0.5` → 과적합 강한 의심
+
+---
+
+### Regime별 성능 차이가 클 때 대응법
+
+`regime_conditional_report`로 Bull / Bear / Sideways 성능을 분리 확인:
+
+```python
+report = st.regime_conditional_report(returns, regimes)
+# {0: {sharpe: -0.3, max_drawdown: -0.15, ...},   # Bear
+#  1: {sharpe: 0.5, ...},                          # Sideways
+#  2: {sharpe: 1.2, ...}}                          # Bull
+```
+
+- **Bear Sharpe < -0.5**: `adjust_for_regime`의 `vol_factor`를 강화하거나 Stop-Loss 강화
+- **IS/OOS 비율 > 2**: Walk-forward 경고 확인 → 학습 데이터 기간 단축 검토
+- **특정 Regime에서만 수익**: 전략이 regime-specific한지 확인, MetaController 가중치 조정
+
+---
+
+### 일일 체크리스트
+
+매 거래일 시작 전/후 아래 항목을 확인합니다.
+
+**아침 (거래 시작 전)**:
+- [ ] `docker-compose ps` — 모든 서비스 `healthy` 상태 확인
+- [ ] MLflow에서 전일 Drift 감지 횟수 확인 (`drift_detection.n_detections`)
+- [ ] 최근 7일 OOS Sharpe 추이 확인 (하락 추세면 재학습 검토)
+
+**저녁 (거래 종료 후)**:
+- [ ] `alerter.alert_history`에서 당일 Drawdown/Loss 알림 확인
+- [ ] 일일 P&L이 `daily_loss_alert` 임계값 50% 초과 시 포지션 축소 검토
+- [ ] Regime 분포 확인 — High-vol 비율 > 60% 시 다음날 `adjust_for_regime` 활성화 유지
+
+---
+
 ## 문의 / 참고 자료
 
 - 개발 가이드라인: `DEVELOPMENT_GUIDELINES.md`
 - 변경 이력: `CHANGELOG.md`
 - 멀티에이전트 아키텍처: `docs/MULTI_AGENT_MANAGER.md`
 - MLflow 실험 관리: `docs/training_validation_guide.md`
+- Phase 3 통합 테스트: `tests/test_phase3_integration.py`

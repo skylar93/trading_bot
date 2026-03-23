@@ -8,7 +8,7 @@ unknown 필드는 허용(extra='allow')하여 기존 YAML 키를 보존.
 
 from __future__ import annotations
 
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
@@ -64,14 +64,7 @@ class EnsembleConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     enabled: bool = True
-    agents: List[dict] = []
-
-    @field_validator("agents")
-    @classmethod
-    def at_least_one(cls, v: list) -> list:
-        if len(v) < 1:
-            raise ValueError("ensemble.agents must have at least 1 agent")
-        return v
+    agents: List[Dict[str, Any]] = []
 
 
 class TrainingConfig(BaseModel):
@@ -84,8 +77,7 @@ class TrainingConfig(BaseModel):
     @field_validator("device")
     @classmethod
     def device_valid(cls, v: str) -> str:
-        # cuda, cuda:0, cuda:1, mps, cpu 등 허용
-        if v == "cpu" or v == "mps":
+        if v in ("cpu", "mps"):
             return v
         if v.startswith("cuda"):
             return v
@@ -116,6 +108,37 @@ class RiskConfig(BaseModel):
         return v
 
 
+class MonitoringConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    enabled: bool = True
+    alert_channels: List[str] = ["console"]
+    drawdown_alert_threshold: float = 0.10
+    daily_loss_alert: float = -500.0
+    connection_timeout_seconds: float = 60.0
+    verbose: bool = False
+    telegram_token: Optional[str] = None
+    telegram_chat_id: Optional[str] = None
+    webhook_url: Optional[str] = None
+
+
+class RegimeConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    method: str = "hmm"
+    n_regimes: int = 3
+
+
+class ValidationConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    method: str = "walk_forward"
+    n_folds: int = 5
+    train_window: int = 252
+    val_window: int = 63
+    test_window: int = 21
+
+
 class FullConfig(BaseModel):
     """
     최상위 config validation 모델.
@@ -130,3 +153,6 @@ class FullConfig(BaseModel):
     env: EnvConfig = EnvConfig()
     training: TrainingConfig = TrainingConfig()
     risk_management: RiskConfig = RiskConfig()
+    monitoring: MonitoringConfig = MonitoringConfig()
+    regime: RegimeConfig = RegimeConfig()
+    validation: ValidationConfig = ValidationConfig()

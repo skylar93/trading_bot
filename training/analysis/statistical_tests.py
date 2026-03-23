@@ -14,7 +14,7 @@ Week 32 implementation.
 from __future__ import annotations
 
 import logging
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 from scipy import stats
@@ -34,6 +34,7 @@ class StrategyStatisticalTests:
         returns: np.ndarray,
         n_bootstrap: int = 10000,
         ci: float = 0.95,
+        random_state: Optional[int] = None,
     ) -> Tuple[float, float, float]:
         """Bootstrap confidence interval for annualised Sharpe ratio.
 
@@ -45,6 +46,8 @@ class StrategyStatisticalTests:
             Number of bootstrap resamples.
         ci : float
             Confidence level (0 < ci < 1), e.g. 0.95.
+        random_state : int, optional
+            RNG seed for reproducibility.
 
         Returns
         -------
@@ -57,7 +60,7 @@ class StrategyStatisticalTests:
 
         point = self._sharpe(returns)
 
-        rng = np.random.default_rng()
+        rng = np.random.default_rng(random_state)
         bootstrapped = np.empty(n_bootstrap)
         for i in range(n_bootstrap):
             sample = rng.choice(returns, size=len(returns), replace=True)
@@ -81,6 +84,7 @@ class StrategyStatisticalTests:
         self,
         returns: np.ndarray,
         n_permutations: int = 10000,
+        random_state: Optional[int] = None,
     ) -> float:
         """Sign-randomization permutation test: H0 = returns are symmetric around 0 (no alpha).
 
@@ -88,15 +92,14 @@ class StrategyStatisticalTests:
         a null Sharpe distribution under H0 (zero-mean, no systematic bias), then
         computes the p-value as the fraction of permuted Sharpes >= observed Sharpe.
 
-        Note: shuffling order is equivalent for IID Sharpe (order-invariant).
-        Sign randomization is the correct null for testing mean > 0.
-
         Parameters
         ----------
         returns : np.ndarray
             Daily (or per-bar) return series.
         n_permutations : int
             Number of random sign assignments.
+        random_state : int, optional
+            RNG seed for reproducibility.
 
         Returns
         -------
@@ -111,7 +114,7 @@ class StrategyStatisticalTests:
 
         observed_sharpe = self._sharpe(returns)
 
-        rng = np.random.default_rng()
+        rng = np.random.default_rng(random_state)
         perm_sharpes = np.empty(n_permutations)
         for i in range(n_permutations):
             signs = rng.choice(np.array([-1.0, 1.0]), size=len(returns))
@@ -165,26 +168,20 @@ class StrategyStatisticalTests:
         if n_trials < 1:
             raise ValueError("n_trials must be >= 1")
 
-        # Expected maximum SR across n_trials iid trials (Eq. 4 in BLP 2014)
-        # Using the approximation: E[max SR] ≈ Z^{-1}(1 - 1/n_trials) * sqrt(var_sharpe)
         if n_trials == 1:
             sr_star = 0.0
         else:
-            # Euler-Mascheroni constant
             euler_gamma = 0.5772156649
-            # E[max of n iid normals] ≈ (1 - euler_gamma)*Z^{-1}(1-1/n) + euler_gamma*Z^{-1}(1-1/(n*e))
             z1 = stats.norm.ppf(1.0 - 1.0 / n_trials)
             z2 = stats.norm.ppf(1.0 - 1.0 / (n_trials * np.e))
             sr_star = (
                 (1.0 - euler_gamma) * z1 + euler_gamma * z2
             ) * np.sqrt(var_sharpe)
 
-        # Non-normality correction: adjust variance for skewness and kurtosis
-        # σ(SR) = sqrt((1 + 0.5*SR^2 - skew*SR + (kurt-3)/4*SR^2) / T)
-        # Here we accept var_sharpe as already adjusted or raw 1/T.
-        # Compute test statistic
         sigma_sr = np.sqrt(max(var_sharpe, 1e-10))
-        test_stat = (sharpe - sr_star) * np.sqrt(1.0 - skew * sharpe + (kurt - 1.0) / 4.0 * sharpe ** 2) / sigma_sr
+        test_stat = (sharpe - sr_star) * np.sqrt(
+            1.0 - skew * sharpe + (kurt - 1.0) / 4.0 * sharpe ** 2
+        ) / sigma_sr
 
         dsr = float(stats.norm.cdf(test_stat))
 
@@ -215,7 +212,7 @@ class StrategyStatisticalTests:
 
         Returns
         -------
-        dict mapping regime_id → {sharpe, max_drawdown, win_rate, n_steps}
+        dict mapping regime_id → {sharpe, max_drawdown, win_rate, n_trades, mean_return}
         """
         returns = np.asarray(returns, dtype=np.float64)
         regimes = np.asarray(regimes, dtype=int)
@@ -229,24 +226,28 @@ class StrategyStatisticalTests:
         for regime_id in np.unique(regimes):
             mask = regimes == regime_id
             r = returns[mask]
+
             if len(r) < 2:
                 report[int(regime_id)] = {
                     "sharpe": 0.0,
                     "max_drawdown": 0.0,
                     "win_rate": 0.0,
-                    "n_steps": float(len(r)),
+                    "n_trades": float(len(r)),
+                    "mean_return": float(np.mean(r)) if len(r) else 0.0,
                 }
                 continue
 
             sharpe = self._sharpe(r)
             max_dd = self._max_drawdown(r)
             win_rate = float(np.mean(r > 0))
+            mean_ret = float(np.mean(r))
 
             report[int(regime_id)] = {
                 "sharpe": sharpe,
                 "max_drawdown": max_dd,
                 "win_rate": win_rate,
-                "n_steps": float(len(r)),
+                "n_trades": float(len(r)),
+                "mean_return": mean_ret,
             }
             logger.info(
                 "Regime %d — Sharpe=%.3f, MaxDD=%.3f, WinRate=%.3f, n=%d",
