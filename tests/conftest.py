@@ -97,8 +97,8 @@ def mlflow_test_context(request):
                     mlflow.end_run(run_id=run.info.run_id)
             # Delete experiment
             mlflow.delete_experiment(experiment.experiment_id)
-    except:
-        pass
+    except Exception as e:
+        logger.error(f"mlflow experiment cleanup failed: {e}")
 
     # Clean up temp directory
     if os.path.exists(temp_dir):
@@ -290,8 +290,8 @@ def mlflow_tracking():
         if experiment:
             mlflow.delete_experiment(experiment.experiment_id)
             time.sleep(0.1)  # Wait for deletion to complete
-    except:
-        pass
+    except Exception as e:
+        logger.error(f"mlflow experiment pre-cleanup failed: {e}")
         
     mlflow.create_experiment(experiment_name)
     mlflow.set_experiment(experiment_name)

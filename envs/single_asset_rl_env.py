@@ -49,7 +49,7 @@ class SingleAssetRLTradingEnv(gym.Env):
         max_position_size: float = 1.0,
         # Risk reward shaping parameters
         risk_adjusted_reward: bool = True,
-        sharpe_lookback: int = 30,
+        sharpe_lookback: int = 60,
         sharpe_weight: float = 0.5,
         drawdown_penalty: bool = True,
         max_drawdown_penalty_threshold: float = 0.1,
@@ -710,8 +710,8 @@ class SingleAssetRLTradingEnv(gym.Env):
                 # DEBUG: Log Sharpe calculation details
                 self.logger.debug(f"📊 SHARPE CALC: mean={mean_return:.6f}, std={std_return:.6f}, n={len(returns_array)}")
                 
-                sharpe_proxy = mean_return / std_return
-                
+                sharpe_proxy = mean_return / std_return * np.sqrt(252)
+
                 # Avoid extreme values
                 sharpe_proxy = np.clip(sharpe_proxy, -10.0, 10.0)
                 sharpe_component = sharpe_proxy

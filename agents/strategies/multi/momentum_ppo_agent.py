@@ -175,7 +175,8 @@ class MomentumPPOAgent(PPOAgent):
                         x = np.arange(len(prices))
                         try:
                             trend_values[i] = np.polyfit(x, prices, 1)[0]
-                        except:
+                        except Exception as e:
+                            logger.error(f"polyfit failed for batch sample {i}: {e}")
                             trend_values[i] = 0.0
                     else:
                         trend_values[i] = 0.0
@@ -209,7 +210,8 @@ class MomentumPPOAgent(PPOAgent):
                     x = np.arange(len(prices))
                     try:
                         trend = np.polyfit(x, prices, 1)[0]
-                    except:
+                    except Exception as e:
+                        logger.error(f"polyfit failed for single sample: {e}")
                         trend = 0.0
                 else:
                     trend = 0.0

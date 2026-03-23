@@ -1124,15 +1124,15 @@ class MultiAgentManager:
             for arr in flat_arrays:
                 try:
                     forced_1d.append(arr.flatten())
-                except:
+                except Exception as e:
                     # Skip arrays that cannot be flattened
-                    logger.error(f"Could not flatten array of type {type(arr)}")
+                    logger.error(f"Could not flatten array of type {type(arr)}: {e}")
             
             if forced_1d:
                 try:
                     return np.concatenate(forced_1d).astype(np.float32)
-                except:
-                    pass
+                except Exception as e:
+                    logger.error(f"Final concatenation failed: {e}")
                 
             # Ultimate fallback
             return np.zeros(sum(arr.size for arr in flat_arrays), dtype=np.float32)
