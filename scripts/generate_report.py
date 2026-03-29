@@ -29,6 +29,8 @@ from typing import Any, Optional
 import numpy as np
 import pandas as pd
 
+from training.analysis.statistical_tests import StrategyStatisticalTests
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -198,6 +200,7 @@ class ReportGenerator:
         drawdown_fig_json: str,
         fold_table_rows: str,
         config_json: str,
+        stat_results: Optional[dict[str, float]] = None,
     ) -> str:
         plotly_cdn = "https://cdn.plot.ly/plotly-2.27.0.min.js"
         generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -213,6 +216,47 @@ class ReportGenerator:
     Plotly.newPlot('{div_id}', fig.data, fig.layout, {{responsive: true, displayModeBar: false}});
   }})();
 </script>"""
+
+        def _stat_section(sr: Optional[dict[str, float]]) -> str:
+            if not sr:
+                return ""
+            ci_lo = sr.get("sharpe_ci_lower", 0)
+            ci_pt = sr.get("sharpe_ci_point", 0)
+            ci_hi = sr.get("sharpe_ci_upper", 0)
+            p_val = sr.get("permutation_p_value", 1)
+            dsr   = sr.get("deflated_sharpe_ratio", 0)
+
+            p_color  = "#4CAF50" if p_val < 0.05 else ("#FF9800" if p_val < 0.10 else "#F44336")
+            ci_color = "#4CAF50" if ci_lo > 0 else "#F44336"
+            dsr_color = "#4CAF50" if dsr > 0.95 else ("#FF9800" if dsr > 0.5 else "#F44336")
+
+            return f"""
+  <!-- Section 6: Statistical Significance -->
+  <h2>6. Statistical Significance</h2>
+  <div class="chart-card">
+    <table style="width:100%; border-collapse:collapse; margin:1em 0;">
+      <tr style="border-bottom:1px solid #333;">
+        <th style="text-align:left; padding:8px;">Metric</th>
+        <th style="text-align:left; padding:8px;">Value</th>
+        <th style="text-align:left; padding:8px;">Interpretation</th>
+      </tr>
+      <tr>
+        <td style="padding:8px;">Bootstrap Sharpe 95% CI</td>
+        <td style="padding:8px; color:{ci_color};">[{ci_lo:.3f}, {ci_pt:.3f}, {ci_hi:.3f}]</td>
+        <td style="padding:8px;">{"&#x2705; CI lower &gt; 0 &rarr; 유의" if ci_lo > 0 else "&#x26A0; CI에 0 포함 &rarr; 비유의"}</td>
+      </tr>
+      <tr>
+        <td style="padding:8px;">Permutation p-value</td>
+        <td style="padding:8px; color:{p_color};">{p_val:.4f}</td>
+        <td style="padding:8px;">{"&#x2705; p &lt; 0.05 &rarr; 우연 아님" if p_val < 0.05 else "&#x26A0; p &ge; 0.05 &rarr; 과적합 의심"}</td>
+      </tr>
+      <tr>
+        <td style="padding:8px;">Deflated Sharpe Ratio</td>
+        <td style="padding:8px; color:{dsr_color};">{dsr:.4f}</td>
+        <td style="padding:8px;">{"&#x2705; DSR &gt; 0.95 &rarr; 다중검정 통과" if dsr > 0.95 else "&#x26A0; DSR &le; 0.95 &rarr; 탐색 횟수 대비 유의성 부족"}</td>
+      </tr>
+    </table>
+  </div>"""
 
         oos_sharpe = summary.get("oos_sharpe_mean", 0.0)
         max_dd = summary.get("max_drawdown", 0.0)
@@ -358,6 +402,8 @@ class ReportGenerator:
     <pre class="config-pre">{config_json}</pre>
   </div>
 
+  {_stat_section(stat_results)}
+
 </div>
 <div class="footer">
   Trading Bot — Multi-Agent RL &nbsp;|&nbsp; Generated {generated_at}
@@ -455,6 +501,34 @@ class ReportGenerator:
             )
         fold_table_rows = "\n".join(fold_rows) if fold_rows else "<tr><td colspan='6'>No data</td></tr>"
 
+        # --- Statistical significance tests ---
+        stat_tester = StrategyStatisticalTests()
+        all_returns = []
+        for f in walk_forward_results:
+            eq = np.array(f.get("equity_curve", [1.0]))
+            if len(eq) > 1:
+                ret = np.diff(eq) / np.array(eq[:-1])
+                all_returns.extend(ret.tolist())
+
+        stat_results: dict[str, float] = {}
+        if len(all_returns) >= 30:
+            returns_arr = np.array(all_returns)
+            lo, mid, hi = stat_tester.bootstrap_sharpe_ci(returns_arr, n_bootstrap=5000)
+            p_val = stat_tester.permutation_test(returns_arr, n_permutations=5000)
+            n_folds = len(walk_forward_results)
+            sharpe_var = float(np.var([f.get("oos_sharpe", 0.0) for f in walk_forward_results]))
+            dsr = stat_tester.deflated_sharpe_ratio(
+                sharpe=mid, n_trials=max(n_folds, 1),
+                var_sharpe=max(sharpe_var, 1e-6), skew=0.0, kurt=0.0,
+            )
+            stat_results = {
+                "sharpe_ci_lower": lo,
+                "sharpe_ci_point": mid,
+                "sharpe_ci_upper": hi,
+                "permutation_p_value": p_val,
+                "deflated_sharpe_ratio": dsr,
+            }
+
         # Build figures
         equity_fig_json = self._make_equity_curve(walk_forward_results)
         sharpe_fig_json = self._make_sharpe_bar(walk_forward_results)
@@ -473,6 +547,7 @@ class ReportGenerator:
             drawdown_fig_json=drawdown_fig_json,
             fold_table_rows=fold_table_rows,
             config_json=config_json,
+            stat_results=stat_results,
         )
 
         # Save
