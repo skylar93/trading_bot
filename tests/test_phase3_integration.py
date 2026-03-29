@@ -363,6 +363,19 @@ class TestBacktestingAndStatisticalTests:
             assert "win_rate" in stats
             assert "n_trades" in stats
 
+    def test_report_includes_stat_results(self, tmp_path):
+        """HTML report에 statistical significance 섹션이 포함되는지 확인."""
+        from scripts.generate_report import ReportGenerator
+
+        rg = ReportGenerator(output_dir=tmp_path)
+        report_path = rg.generate(output_path=tmp_path / "test_report.html")
+
+        html = report_path.read_text(encoding="utf-8")
+        assert "Statistical Significance" in html, "Report must contain stat section"
+        assert "Bootstrap Sharpe" in html
+        assert "Permutation p-value" in html
+        assert "Deflated Sharpe" in html
+
 
 # ===========================================================================
 # Test 7: Risk manager with regime sizing

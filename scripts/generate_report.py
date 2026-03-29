@@ -29,11 +29,11 @@ from typing import Any, Optional
 import numpy as np
 import pandas as pd
 
+from training.analysis.statistical_tests import StrategyStatisticalTests
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-
-from training.analysis.statistical_tests import StrategyStatisticalTests
 
 logger = logging.getLogger(__name__)
 
@@ -200,7 +200,7 @@ class ReportGenerator:
         drawdown_fig_json: str,
         fold_table_rows: str,
         config_json: str,
-        stat_results=None,
+        stat_results: Optional[dict[str, float]] = None,
     ) -> str:
         plotly_cdn = "https://cdn.plot.ly/plotly-2.27.0.min.js"
         generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -528,6 +528,34 @@ class ReportGenerator:
                 f"</tr>"
             )
         fold_table_rows = "\n".join(fold_rows) if fold_rows else "<tr><td colspan='6'>No data</td></tr>"
+
+        # --- Statistical significance tests ---
+        stat_tester = StrategyStatisticalTests()
+        all_returns = []
+        for f in walk_forward_results:
+            eq = np.array(f.get("equity_curve", [1.0]))
+            if len(eq) > 1:
+                ret = np.diff(eq) / np.array(eq[:-1])
+                all_returns.extend(ret.tolist())
+
+        stat_results: dict[str, float] = {}
+        if len(all_returns) >= 30:
+            returns_arr = np.array(all_returns)
+            lo, mid, hi = stat_tester.bootstrap_sharpe_ci(returns_arr, n_bootstrap=5000)
+            p_val = stat_tester.permutation_test(returns_arr, n_permutations=5000)
+            n_folds = len(walk_forward_results)
+            sharpe_var = float(np.var([f.get("oos_sharpe", 0.0) for f in walk_forward_results]))
+            dsr = stat_tester.deflated_sharpe_ratio(
+                sharpe=mid, n_trials=max(n_folds, 1),
+                var_sharpe=max(sharpe_var, 1e-6), skew=0.0, kurt=0.0,
+            )
+            stat_results = {
+                "sharpe_ci_lower": lo,
+                "sharpe_ci_point": mid,
+                "sharpe_ci_upper": hi,
+                "permutation_p_value": p_val,
+                "deflated_sharpe_ratio": dsr,
+            }
 
         # Build figures
         equity_fig_json = self._make_equity_curve(walk_forward_results)
