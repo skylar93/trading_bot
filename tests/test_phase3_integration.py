@@ -334,6 +334,19 @@ class TestBacktestingAndStatisticalTests:
         )
         assert 0.0 <= dsr <= 1.0, f"DSR must be in [0,1], got {dsr}"
 
+    def test_report_includes_stat_results(self, tmp_path):
+        """HTML report에 statistical significance 섹션이 포함되는지 확인."""
+        from scripts.generate_report import ReportGenerator
+
+        rg = ReportGenerator(output_dir=tmp_path)
+        report_path = rg.generate(output_path=tmp_path / "test_report.html")
+
+        html = report_path.read_text(encoding="utf-8")
+        assert "Statistical Significance" in html, "Report must contain stat section"
+        assert "Bootstrap Sharpe" in html
+        assert "Permutation p-value" in html
+        assert "Deflated Sharpe" in html
+
     def test_regime_conditional_report(self):
         from training.analysis.statistical_tests import StrategyStatisticalTests
 
