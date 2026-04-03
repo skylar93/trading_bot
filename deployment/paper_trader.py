@@ -28,6 +28,22 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# Optional component imports (graceful fallback if not used)
+try:
+    from deployment.monitoring.alerter import TradingAlerter
+except ImportError:
+    TradingAlerter = None  # type: ignore
+
+try:
+    from deployment.execution.order_manager import OrderManager
+except ImportError:
+    OrderManager = None  # type: ignore
+
+try:
+    from training.monitoring.drift_detector import DriftDetector
+except ImportError:
+    DriftDetector = None  # type: ignore
+
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -92,11 +108,17 @@ class PaperTrader:
         config: Dict[str, Any],
         mlflow_manager=None,
         simulation_mode: bool = False,
+        alerter: Optional["TradingAlerter"] = None,
+        drift_detector: Optional["DriftDetector"] = None,
+        order_manager: Optional["OrderManager"] = None,
     ) -> None:
         self.agent = agent
         self.config = config
         self.mlflow_manager = mlflow_manager
         self.simulation_mode = simulation_mode
+        self.alerter = alerter
+        self.drift_detector = drift_detector
+        self.order_manager = order_manager
 
         pt = config.get("paper_trading", config)
         self.symbol: str = pt.get("symbol", "BTC/USDT")
@@ -175,6 +197,7 @@ class PaperTrader:
             action, _ = self.agent.predict(obs, deterministic=True)
             self._execute_action(action, price)
             self._check_risk(price)
+            self._check_drift()
             self._maybe_daily_report()
 
             step += 1
@@ -366,6 +389,14 @@ class PaperTrader:
         )
         logger.debug("BUY qty=%.6f price=%.2f fee=%.4f", quantity, price, fee)
 
+        if self.order_manager is not None:
+            try:
+                order_id = self.order_manager.submit_order("buy", quantity, current_price=price)
+                if self.alerter is not None:
+                    self.alerter.notify_trade("buy", quantity, price, order_id=order_id)
+            except Exception as e:
+                logger.warning("OrderManager buy submission failed: %s", e)
+
     def _execute_sell(self, strength: float, price: float) -> None:
         sell_qty = self.state.position * min(strength, 1.0)
         if sell_qty < 1e-8:
@@ -391,20 +422,50 @@ class PaperTrader:
         )
         logger.debug("SELL qty=%.6f price=%.2f pnl=%.4f", sell_qty, price, pnl)
 
+        if self.order_manager is not None:
+            try:
+                order_id = self.order_manager.submit_order("sell", sell_qty, current_price=price)
+                if self.alerter is not None:
+                    self.alerter.notify_trade("sell", sell_qty, price, order_id=order_id)
+            except Exception as e:
+                logger.warning("OrderManager sell submission failed: %s", e)
+
     def _check_risk(self, price: float) -> None:
-        """Enforce max drawdown shutdown."""
+        """Enforce max drawdown shutdown and fire alerts."""
         if not self.state.portfolio_history:
             return
         current_pv = self.state.portfolio_history[-1]
-        if self.state.peak_portfolio_value > 0:
-            drawdown = (
-                self.state.peak_portfolio_value - current_pv
-            ) / self.state.peak_portfolio_value
+        peak_pv = self.state.peak_portfolio_value
+
+        if self.alerter is not None:
+            self.alerter.check_drawdown(current=current_pv, peak=peak_pv)
+            daily_pnl = current_pv - self.initial_balance
+            self.alerter.check_daily_pnl(daily_pnl)
+
+        if peak_pv > 0:
+            drawdown = (peak_pv - current_pv) / peak_pv
             if drawdown >= self.max_drawdown_threshold:
                 self._trigger_shutdown(
                     f"Max drawdown {drawdown:.1%} >= threshold "
                     f"{self.max_drawdown_threshold:.1%}"
                 )
+
+    def _check_drift(self) -> None:
+        """Feed latest portfolio return into drift detector; alert if drift found."""
+        if self.drift_detector is None:
+            return
+        history = self.state.portfolio_history
+        if len(history) < 2:
+            return
+        prev_pv = history[-2]
+        if prev_pv <= 0:
+            return
+        step_return = (history[-1] - prev_pv) / prev_pv
+        if self.drift_detector.update(step_return) and self.alerter is not None:
+            self.alerter.notify_drift(
+                detector=self.drift_detector.method,
+                signal_name="portfolio_return",
+            )
 
     def _trigger_shutdown(self, reason: str) -> None:
         logger.warning("SHUTDOWN triggered: %s", reason)

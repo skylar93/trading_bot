@@ -37,6 +37,11 @@ from scipy.stats import norm
 
 from risk_management.risk_manager_base import RiskManagerBase, RiskConfigBase
 
+try:
+    from deployment.monitoring.alerter import TradingAlerter
+except ImportError:
+    TradingAlerter = None  # type: ignore
+
 
 @dataclass
 class RLRiskConfig(RiskConfigBase):
@@ -90,15 +95,17 @@ class RLRiskManager(RiskManagerBase):
     Also includes correlation-based risk management and portfolio-level controls.
     """
     
-    def __init__(self, config: RLRiskConfig):
+    def __init__(self, config: RLRiskConfig, alerter: Optional["TradingAlerter"] = None):
         """
         Initialize the risk manager with the given configuration.
-        
+
         Args:
             config: Risk management configuration
+            alerter: Optional TradingAlerter for risk event notifications
         """
         super().__init__(config)
         self.config = config
+        self.alerter = alerter
         
         # Portfolio tracking
         self.peak_values = {}  # Dict[agent_id, peak_value]
@@ -215,8 +222,15 @@ class RLRiskManager(RiskManagerBase):
         
         if is_loss and loss_exceeded:
             self.stop_loss_events += 1
+            if self.alerter is not None:
+                self.alerter.send_alert(
+                    f"Stop loss triggered for agent '{agent_id}': "
+                    f"entry={entry_price:.4f} current={current_price:.4f} "
+                    f"loss={abs(pct_change):.1%}",
+                    level="WARNING",
+                )
             return True
-            
+
         return False
     
     def update_trailing_stop(self, symbol: str, current_price: float) -> None:
@@ -659,13 +673,27 @@ class RLRiskManager(RiskManagerBase):
             price_drop = (highest_price - current_price) / highest_price
             if price_drop > self.config.trailing_stop_buffer:
                 self.trailing_stop_events += 1
+                if self.alerter is not None:
+                    self.alerter.send_alert(
+                        f"Trailing stop triggered for agent '{agent_id}' asset '{asset}': "
+                        f"high={highest_price:.4f} current={current_price:.4f} "
+                        f"drop={price_drop:.1%}",
+                        level="WARNING",
+                    )
                 return True
         else:  # Short position
             price_rise = (current_price - highest_price) / highest_price
             if price_rise > self.config.trailing_stop_buffer:
                 self.trailing_stop_events += 1
+                if self.alerter is not None:
+                    self.alerter.send_alert(
+                        f"Trailing stop triggered for agent '{agent_id}' asset '{asset}': "
+                        f"low={highest_price:.4f} current={current_price:.4f} "
+                        f"rise={price_rise:.1%}",
+                        level="WARNING",
+                    )
                 return True
-                
+
         return False
     
     def get_risk_events_info(self) -> Dict[str, int]:
@@ -702,8 +730,10 @@ class RLRiskManager(RiskManagerBase):
             # Direct call with values
             if peak_value <= 0:
                 return False
-                
+
             drawdown = (peak_value - current_value) / peak_value
+            if drawdown > self.config.max_drawdown_pct and self.alerter is not None:
+                self.alerter.check_drawdown(current=current_value, peak=peak_value)
             return drawdown > self.config.max_drawdown_pct
         
         # Original implementation with agent_id lookup
@@ -719,10 +749,12 @@ class RLRiskManager(RiskManagerBase):
         drawdown = (peak - current) / peak
         
         if drawdown > self.config.max_drawdown_pct:
+            if self.alerter is not None:
+                self.alerter.check_drawdown(current=current, peak=peak)
             if self.config.use_forced_liquidation:
                 if agent_id not in self.liquidation_triggered:
                     self.liquidation_triggered[agent_id] = False
-                
+
                 if not self.liquidation_triggered[agent_id]:
                     self.liquidation_triggered[agent_id] = True
                     if hasattr(self, "forced_liquidation_events"):
