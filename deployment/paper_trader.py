@@ -26,6 +26,8 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
 
+from deployment.execution.position_tracker import PositionTracker
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,22 +47,72 @@ class Trade:
 
 @dataclass
 class TradingState:
-    balance: float
-    position: float = 0.0          # units held (positive = long)
-    entry_price: float = 0.0
-    peak_portfolio_value: float = 0.0
+    """
+    Mutable trading state.
+
+    Position-related fields (position, entry_price, cash/balance,
+    current_price, peak_portfolio_value) are consolidated in
+    `pos` (a PositionTracker).  All other bookkeeping lives here.
+    """
+    pos: PositionTracker
     trades: List[Trade] = field(default_factory=list)
     portfolio_history: List[float] = field(default_factory=list)
     step: int = 0
     shutdown_triggered: bool = False
     shutdown_reason: str = ""
 
+    # ------------------------------------------------------------------
+    # Convenience pass-throughs so callers keep working without changes
+    # ------------------------------------------------------------------
+
+    @property
+    def balance(self) -> float:
+        return self.pos.cash
+
+    @balance.setter
+    def balance(self, value: float) -> None:
+        with self.pos._lock:
+            self.pos._cash = float(value)
+
+    @property
+    def position(self) -> float:
+        return self.pos.position
+
+    @position.setter
+    def position(self, value: float) -> None:
+        with self.pos._lock:
+            self.pos._position = float(value)
+
+    @property
+    def entry_price(self) -> float:
+        return self.pos.entry_price
+
+    @entry_price.setter
+    def entry_price(self, value: float) -> None:
+        with self.pos._lock:
+            self.pos._entry_price = float(value)
+
+    @property
+    def peak_portfolio_value(self) -> float:
+        return self.pos.peak_value
+
+    @peak_portfolio_value.setter
+    def peak_portfolio_value(self, value: float) -> None:
+        with self.pos._lock:
+            self.pos._peak_value = float(value)
+
+    @property
+    def _current_price(self) -> float:
+        return self.pos.current_price
+
+    @_current_price.setter
+    def _current_price(self, value: float) -> None:
+        with self.pos._lock:
+            self.pos._current_price = float(value)
+
     @property
     def portfolio_value(self) -> float:
-        return self.balance + self.position * self._current_price
-
-    # injected at runtime
-    _current_price: float = field(default=0.0, repr=False)
+        return self.pos.portfolio_value
 
 
 # ---------------------------------------------------------------------------
@@ -115,8 +167,7 @@ class PaperTrader:
         self._last_report_time: float = time.time()
 
         self.state = TradingState(
-            balance=self.initial_balance,
-            peak_portfolio_value=self.initial_balance,
+            pos=PositionTracker(initial_cash=self.initial_balance),
         )
 
         if not simulation_mode:
@@ -244,10 +295,7 @@ class PaperTrader:
         import json
 
         state_dict = {
-            "balance": self.state.balance,
-            "position": self.state.position,
-            "entry_price": self.state.entry_price,
-            "peak_portfolio_value": self.state.peak_portfolio_value,
+            "position_tracker": self.state.pos.snapshot(),
             "step": self.state.step,
             "shutdown_triggered": self.state.shutdown_triggered,
             "shutdown_reason": self.state.shutdown_reason,
@@ -272,10 +320,7 @@ class PaperTrader:
         import json
 
         data = json.loads(Path(path).read_text())
-        self.state.balance = data["balance"]
-        self.state.position = data["position"]
-        self.state.entry_price = data["entry_price"]
-        self.state.peak_portfolio_value = data["peak_portfolio_value"]
+        self.state.pos.restore(data["position_tracker"])
         self.state.step = data["step"]
         self.state.shutdown_triggered = data["shutdown_triggered"]
         self.state.shutdown_reason = data["shutdown_reason"]
@@ -299,11 +344,8 @@ class PaperTrader:
 
     def _update_price(self, price: float) -> None:
         self._price_history.append(price)
-        self.state._current_price = price
-        pv = self.state.balance + self.state.position * price
-        self.state.portfolio_history.append(pv)
-        if pv > self.state.peak_portfolio_value:
-            self.state.peak_portfolio_value = pv
+        self.state.pos.update_price(price)   # updates current_price + peak_value atomically
+        self.state.portfolio_history.append(self.state.pos.portfolio_value)
 
     def _build_observation(self) -> Optional[np.ndarray]:
         """Build observation vector from price history window."""
@@ -343,18 +385,15 @@ class PaperTrader:
             self._execute_sell(abs(action), price)
 
     def _execute_buy(self, strength: float, price: float) -> None:
-        max_spend = self.state.balance * min(strength, self.max_position_size)
+        max_spend = self.state.pos.cash * min(strength, self.max_position_size)
         if max_spend < price * 1e-6:
             return
         quantity = max_spend / price
         fee = max_spend * self.trading_fee
         cost = max_spend + fee
-        if cost > self.state.balance:
+        if cost > self.state.pos.cash:
             return
-        self.state.balance -= cost
-        self.state.position += quantity
-        if self.state.entry_price == 0.0:
-            self.state.entry_price = price
+        self.state.pos.apply_buy(quantity=quantity, price=price, fee=fee)
         self.state.trades.append(
             Trade(
                 timestamp=datetime.utcnow(),
@@ -367,18 +406,11 @@ class PaperTrader:
         logger.debug("BUY qty=%.6f price=%.2f fee=%.4f", quantity, price, fee)
 
     def _execute_sell(self, strength: float, price: float) -> None:
-        sell_qty = self.state.position * min(strength, 1.0)
+        sell_qty = self.state.pos.position * min(strength, 1.0)
         if sell_qty < 1e-8:
             return
-        proceeds = sell_qty * price
-        fee = proceeds * self.trading_fee
-        net_proceeds = proceeds - fee
-        pnl = (price - self.state.entry_price) * sell_qty if self.state.entry_price else 0.0
-        self.state.balance += net_proceeds
-        self.state.position -= sell_qty
-        if self.state.position < 1e-8:
-            self.state.position = 0.0
-            self.state.entry_price = 0.0
+        fee = sell_qty * price * self.trading_fee
+        pnl = self.state.pos.apply_sell(quantity=sell_qty, price=price, fee=fee)
         self.state.trades.append(
             Trade(
                 timestamp=datetime.utcnow(),
