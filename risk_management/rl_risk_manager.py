@@ -37,10 +37,7 @@ from scipy.stats import norm
 
 from risk_management.risk_manager_base import RiskManagerBase, RiskConfigBase
 
-try:
-    from deployment.monitoring.alerter import TradingAlerter
-except ImportError:
-    TradingAlerter = None  # type: ignore
+from deployment.monitoring.alerter import TradingAlerter
 
 
 @dataclass
@@ -95,7 +92,7 @@ class RLRiskManager(RiskManagerBase):
     Also includes correlation-based risk management and portfolio-level controls.
     """
     
-    def __init__(self, config: RLRiskConfig, alerter: Optional["TradingAlerter"] = None):
+    def __init__(self, config: RLRiskConfig, alerter: Optional[TradingAlerter] = None):
         """
         Initialize the risk manager with the given configuration.
 

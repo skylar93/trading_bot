@@ -26,25 +26,12 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
 
+from deployment.execution.order_manager import OrderManager
 from deployment.execution.position_tracker import PositionTracker
+from deployment.monitoring.alerter import TradingAlerter
+from training.monitoring.drift_detector import DriftDetector
 
 logger = logging.getLogger(__name__)
-
-# Optional component imports (graceful fallback if not used)
-try:
-    from deployment.monitoring.alerter import TradingAlerter
-except ImportError:
-    TradingAlerter = None  # type: ignore
-
-try:
-    from deployment.execution.order_manager import OrderManager
-except ImportError:
-    OrderManager = None  # type: ignore
-
-try:
-    from training.monitoring.drift_detector import DriftDetector
-except ImportError:
-    DriftDetector = None  # type: ignore
 
 
 # ---------------------------------------------------------------------------
@@ -160,9 +147,9 @@ class PaperTrader:
         config: Dict[str, Any],
         mlflow_manager=None,
         simulation_mode: bool = False,
-        alerter: Optional["TradingAlerter"] = None,
-        drift_detector: Optional["DriftDetector"] = None,
-        order_manager: Optional["OrderManager"] = None,
+        alerter: Optional[TradingAlerter] = None,
+        drift_detector: Optional[DriftDetector] = None,
+        order_manager: Optional[OrderManager] = None,
     ) -> None:
         self.agent = agent
         self.config = config
