@@ -294,10 +294,16 @@ class CalendarFeatureEngine:
                     val = max(val, 0.5 * (1.0 - delta / lookahead))
 
             # Check halving proximity
+            # Use signed delta to avoid look-ahead: only fire for upcoming halving
+            # or 1-day post-halving window (already happened).
             for hd in self._halvings:
-                delta = abs(hd - d)
-                if delta <= halving_window:
+                delta = hd - d  # positive = upcoming, negative = already happened
+                if pd.Timedelta(0) <= delta <= halving_window:
+                    # Upcoming halving: +1.0 decaying as event approaches
                     val = max(val, 1.0 * (1.0 - delta / halving_window))
+                elif -pd.Timedelta(days=1) <= delta < pd.Timedelta(0):
+                    # Day after halving: mild positive signal (event just occurred)
+                    val = max(val, 0.5)
 
             flags[i] = float(np.clip(val, -1.0, 1.0))
 

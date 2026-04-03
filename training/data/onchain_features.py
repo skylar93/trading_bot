@@ -138,7 +138,7 @@ class OnChainFeatureEngine:
             try:
                 hist = self._fetch_historical(index)
                 if hist is not None and not hist.empty:
-                    hist = hist.reindex(index, method="ffill").fillna(0.0)
+                    hist = hist.reindex(index).ffill().fillna(0.0)
                     result.update(hist)
             except Exception as exc:
                 logger.warning(

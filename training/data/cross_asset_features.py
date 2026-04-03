@@ -245,7 +245,7 @@ def _align_series(reference: pd.Series, other: pd.Series) -> pd.Series:
         return other
 
     try:
-        aligned = other.reindex(reference.index, method="ffill")
+        aligned = other.reindex(reference.index).ffill()
     except Exception:
         # Fallback: positional alignment
         n = len(reference)
