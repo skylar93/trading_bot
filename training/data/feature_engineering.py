@@ -197,7 +197,7 @@ class FeatureEngineer:
         # Forward-fill any residual NaN, then zero-fill
         for col in ALL_FEATURE_COLS:
             if col in out.columns:
-                out[col] = out[col].ffill().fillna(0.0)
+                out[col] = out[col].ffill(limit=5).fillna(0.0)
 
         return out
 

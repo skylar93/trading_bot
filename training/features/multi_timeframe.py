@@ -122,7 +122,7 @@ class MultiTimeframeFeatures:
                     )
                     continue
                 tf_features = self._compute_indicators_ta(tf_df, prefix)
-                tf_features_aligned = tf_features.reindex(df_indexed.index, method="ffill")
+                tf_features_aligned = tf_features.reindex(df_indexed.index).ffill()
                 for col in tf_features_aligned.columns:
                     out[col] = tf_features_aligned[col].values
                 logger.info(
