@@ -1,5 +1,5 @@
 """
-Config Schema — Week 30
+Config Schema — Week 30 (강화: Week 41)
 
 Pydantic v2 기반 config validation.
 FullConfig(**raw_yaml_dict) 호출 시 잘못된 값이면 즉시 오류를 발생시킨다.
@@ -139,6 +139,98 @@ class ValidationConfig(BaseModel):
     test_window: int = 21
 
 
+class DataConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    exchange: str = "binance"
+    symbols: List[str] = ["BTC/USDT"]
+    timeframe: str = "1h"
+    cache_dir: str = "data/raw"
+
+    @field_validator("timeframe")
+    @classmethod
+    def timeframe_valid(cls, v: str) -> str:
+        allowed = {"1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"}
+        if v not in allowed:
+            raise ValueError(f"timeframe must be one of {allowed}, got '{v}'")
+        return v
+
+
+class ExecutionConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    paper_mode: bool = True
+    exchange_id: str = "binance"
+    symbol: str = "BTC/USDT"
+    max_order_size: float = 0.1
+    daily_loss_limit: float = -500.0
+    initial_cash: float = 100_000.0
+    rate_limit_calls: int = 10
+    rate_limit_period: float = 1.0
+
+    @field_validator("max_order_size")
+    @classmethod
+    def max_order_size_positive(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError(f"max_order_size must be > 0, got {v}")
+        return v
+
+    @field_validator("daily_loss_limit")
+    @classmethod
+    def daily_loss_limit_negative(cls, v: float) -> float:
+        if v > 0:
+            raise ValueError(f"daily_loss_limit must be <= 0, got {v}")
+        return v
+
+
+class MLflowConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    enabled: bool = True
+    experiment_name: str = "trading_bot"
+    tracking_uri: str = "mlruns"
+
+
+class PaperTradingConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    enabled: bool = False
+    exchange: str = "binance"
+    symbol: str = "BTC/USDT"
+    initial_capital: float = 100_000.0
+    risk_per_trade: float = 0.02
+
+    @field_validator("risk_per_trade")
+    @classmethod
+    def risk_per_trade_range(cls, v: float) -> float:
+        if not (0.0 < v <= 0.5):
+            raise ValueError(f"risk_per_trade must be in (0, 0.5], got {v}")
+        return v
+
+
+class DriftDetectionConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    enabled: bool = True
+    method: str = "adwin"
+    confidence: float = 0.01
+
+    @field_validator("method")
+    @classmethod
+    def method_valid(cls, v: str) -> str:
+        allowed = {"adwin", "ks", "psi", "page_hinkley"}
+        if v not in allowed:
+            raise ValueError(f"drift method must be one of {allowed}, got '{v}'")
+        return v
+
+    @field_validator("confidence")
+    @classmethod
+    def confidence_range(cls, v: float) -> float:
+        if not (0.0 < v < 1.0):
+            raise ValueError(f"confidence must be in (0, 1), got {v}")
+        return v
+
+
 class FullConfig(BaseModel):
     """
     최상위 config validation 모델.
@@ -151,8 +243,15 @@ class FullConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     env: EnvConfig = EnvConfig()
+    agent: AgentConfig = AgentConfig()
+    ensemble: EnsembleConfig = EnsembleConfig()
     training: TrainingConfig = TrainingConfig()
+    data: DataConfig = DataConfig()
+    execution: ExecutionConfig = ExecutionConfig()
     risk_management: RiskConfig = RiskConfig()
     monitoring: MonitoringConfig = MonitoringConfig()
+    mlflow: MLflowConfig = MLflowConfig()
+    paper_trading: PaperTradingConfig = PaperTradingConfig()
+    drift_detection: DriftDetectionConfig = DriftDetectionConfig()
     regime: RegimeConfig = RegimeConfig()
     validation: ValidationConfig = ValidationConfig()
