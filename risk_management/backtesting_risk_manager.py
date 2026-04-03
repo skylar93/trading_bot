@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Any, Union, List, Tuple, Set
+from scipy.stats import norm
 
 from risk_management.risk_manager_base import RiskManagerBase, RiskConfigBase
 
@@ -263,22 +264,6 @@ class BacktestingRiskManager(RiskManagerBase):
                 stop_config.lowest_price = current_price
                 stop_config.stop_price = current_price * (1 + stop_config.trailing_pct)
 
-    def calculate_var(self, returns: np.ndarray) -> float:
-        """
-        Calculate Value at Risk (VaR) based on historical returns.
-        
-        Args:
-            returns: Array of historical returns
-            
-        Returns:
-            float: Value at Risk at the configured confidence level
-        """
-        if len(returns) < 10:
-            return 0.0
-            
-        # Use historical VaR calculation
-        return np.percentile(returns, 100 * (1 - self.config.var_confidence_level))
-
     def get_risk_metrics(self) -> Dict[str, Any]:
         """
         Get current risk metrics.
@@ -394,6 +379,8 @@ class BacktestingRiskManager(RiskManagerBase):
         try:
             df = pd.DataFrame({k: v for k, v in returns.items() if len(v) > 1})
             self._correlation_matrix = df.corr()
+            self._asset_returns_df = df
+            self._asset_stds = df.std()
             self._last_correlation_update = pd.Timestamp.now()
         except Exception as e:
             self.logger.error(f"Error calculating correlation matrix: {e}")
@@ -528,10 +515,9 @@ class BacktestingRiskManager(RiskManagerBase):
         # Use provided confidence level or default from config
         cl = confidence_level if confidence_level is not None else self.config.var_confidence_level
         
-        # Calculate historical VaR
-        var = abs(np.percentile(returns, (1 - cl) * 100))
-        
-        return var
+        # Historical VaR: negate left-tail percentile → positive loss amount
+        var = -np.percentile(returns, (1 - cl) * 100)
+        return max(0.0, float(var))
     
     def get_portfolio_var(self, 
                      portfolio_value: float, 
@@ -548,15 +534,65 @@ class BacktestingRiskManager(RiskManagerBase):
         Returns:
             float: Portfolio VaR as a fraction of portfolio value
         """
-        # Simplified implementation for compatibility
-        total_position_value = sum(abs(pos["units"] * prices.get(asset, 0)) 
-                                for asset, pos in positions.items() if asset in prices)
-        
-        if total_position_value < 1e-8 or portfolio_value < 1e-8:
+        if portfolio_value < 1e-8:
             return 0.0
-            
-        # Return a simple VaR estimate based on portfolio value
-        return 0.02  # Default 2% VaR estimate 
+
+        # Find active assets that have return history
+        has_returns = (
+            hasattr(self, "_asset_returns_df") and self._asset_returns_df is not None
+        )
+        active = [
+            a for a, pos in positions.items()
+            if abs(pos.get("units", 0) * prices.get(a, 0)) > 1e-8
+        ]
+        if not active:
+            return 0.0
+
+        if has_returns:
+            available = [a for a in active if a in self._asset_returns_df.columns]
+        else:
+            available = []
+
+        # Single-asset or no history: use per-asset std from stored data
+        if len(available) == 1:
+            asset = available[0]
+            if hasattr(self, "_asset_stds") and asset in self._asset_stds.index:
+                std = float(self._asset_stds[asset])
+                return max(0.0, norm.ppf(self.config.var_confidence_level) * std)
+            return 0.0
+
+        if len(available) >= 2:
+            returns_matrix = self._asset_returns_df[available].dropna()
+            if len(returns_matrix) < 2:
+                return 0.0
+
+            pos_values = np.array([
+                abs(positions[a]["units"] * prices.get(a, 0)) for a in available
+            ])
+            total_val = pos_values.sum()
+            if total_val < 1e-8:
+                return 0.0
+            w = pos_values / total_val
+
+            # Parametric portfolio VaR: sqrt(w' Cov w) * z_alpha
+            cov = returns_matrix.cov().values
+            portfolio_variance = float(w @ cov @ w)
+            portfolio_std = np.sqrt(max(portfolio_variance, 0.0))
+            portfolio_mean = float(w @ returns_matrix.mean().values)
+            var = -(portfolio_mean + norm.ppf(1 - self.config.var_confidence_level) * portfolio_std)
+            return max(0.0, float(var))
+
+        # Fallback: no correlated history → sum individual VaRs conservatively
+        individual_vars = []
+        for a in active:
+            if has_returns and a in self._asset_returns_df.columns:
+                ret = self._asset_returns_df[a].dropna().values
+                if len(ret) >= 2:
+                    v = -np.percentile(ret, (1 - self.config.var_confidence_level) * 100)
+                    individual_vars.append(max(0.0, v))
+        if individual_vars:
+            return float(np.mean(individual_vars))
+        return 0.0
 
     def check_stop_losses(self, current_prices: Dict[str, float], positions: Dict[str, Dict[str, float]]) -> Dict[str, bool]:
         """

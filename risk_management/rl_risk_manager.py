@@ -265,17 +265,15 @@ class RLRiskManager(RiskManagerBase):
             return None
             
         if self.config.use_parametric_var:
-            # Parametric VaR calculation
+            # Parametric VaR: -(mean + z_alpha * std), z_alpha < 0 for left tail
             mean = np.mean(returns)
             std = np.std(returns)
-            var = mean + norm.ppf(1 - self.config.var_confidence_level) * std
-            # Return absolute value of VaR to ensure positivity
-            return abs(var)
+            var = -(mean + norm.ppf(1 - self.config.var_confidence_level) * std)
+            return max(0.0, float(var))
         else:
-            # Historical VaR calculation
-            var = np.percentile(returns, 100 * (1 - self.config.var_confidence_level))
-            # Return absolute value of VaR to ensure positivity
-            return abs(var)
+            # Historical VaR: negate left-tail percentile → positive loss amount
+            var = -np.percentile(returns, 100 * (1 - self.config.var_confidence_level))
+            return max(0.0, float(var))
     
     def get_risk_metrics(self) -> Dict[str, Any]:
         """
@@ -534,28 +532,51 @@ class RLRiskManager(RiskManagerBase):
         Returns:
             float: Portfolio VaR, or None if insufficient data
         """
-        # Check if we have enough data for calculation
-        if not hasattr(self, "asset_returns_history") or len(self.asset_returns_history) < 2:
-            return 0.02  # Default 2% VaR
-            
-        # Filter to assets we have positions in
-        active_assets = [asset for asset, size in position_sizes.items() if abs(size) > 1e-8]
-        
-        # If we have only one asset or no assets, return default
-        if len(active_assets) <= 1:
+        # Filter to assets with nonzero positions
+        active_assets = [a for a, s in position_sizes.items() if abs(s) > 1e-8]
+        if not active_assets:
+            return 0.0
+
+        # Filter further to assets with enough return history
+        available = [
+            a for a in active_assets
+            if a in self.asset_returns_history and len(self.asset_returns_history[a]) >= 10
+        ]
+
+        # Single-asset fallback: use individual historical VaR
+        if len(available) == 1:
+            asset = available[0]
+            returns = np.array(list(self.asset_returns_history[asset]))
+            var = -np.percentile(returns, 100 * (1 - self.config.var_confidence_level))
+            return max(0.0, float(var))
+
+        if len(available) < 2:
+            return 0.02  # not enough history
+
+        min_len = min(len(self.asset_returns_history[a]) for a in available)
+        returns_matrix = np.column_stack([
+            list(self.asset_returns_history[a])[-min_len:] for a in available
+        ])  # shape: (min_len, n_assets)
+
+        # Position weights by market value
+        pos_values = np.array([abs(position_sizes[a]) * prices.get(a, 1.0) for a in available])
+        total_value = pos_values.sum()
+        if total_value < 1e-8:
             return 0.02
-            
-        # Check if we have a diversified portfolio (stocks + bonds)
-        has_stocks = any(asset.startswith(("SPY", "QQQ", "IWM")) for asset in active_assets)
-        has_bonds = any(asset.startswith(("TLT", "IEF", "AGG")) for asset in active_assets)
-        has_gold = any(asset.startswith(("GLD", "IAU")) for asset in active_assets)
-        
-        # If we have a diversified portfolio, return a lower VaR
-        if (has_stocks and has_bonds) or (has_stocks and has_gold) or (has_bonds and has_gold):
-            return 0.015  # 1.5% VaR for diversified portfolio
-            
-        # Default return
-        return 0.02  # 2% VaR for non-diversified portfolio
+        w = pos_values / total_value
+
+        if self.config.use_parametric_var:
+            cov = np.cov(returns_matrix.T)  # (n_assets, n_assets)
+            portfolio_variance = float(w @ cov @ w)
+            portfolio_std = np.sqrt(max(portfolio_variance, 0.0))
+            portfolio_mean = float(w @ returns_matrix.mean(axis=0))
+            var = -(portfolio_mean + norm.ppf(1 - self.config.var_confidence_level) * portfolio_std)
+            return max(0.0, float(var))
+        else:
+            # Historical: reconstruct portfolio return series
+            portfolio_returns = returns_matrix @ w
+            var = -np.percentile(portfolio_returns, 100 * (1 - self.config.var_confidence_level))
+            return max(0.0, float(var))
     
     def check_portfolio_var_exceed(self, position_sizes: Dict[str, float], prices: Dict[str, float], 
                                   current_portfolio_return: float) -> bool:
