@@ -543,6 +543,150 @@ class TestAlertSystem:
         assert fire is True
 
 
+# ===========================================================================
+# Week 39: PositionTracker — thread-safety + consolidation
+# ===========================================================================
+
+
+class TestPositionTracker:
+    """Week 39: PositionTracker 통합 — lock, 5개 변수 → 1개."""
+
+    def _tracker(self, cash: float = 10_000.0):
+        from deployment.execution.position_tracker import PositionTracker
+        return PositionTracker(initial_cash=cash)
+
+    def test_initial_state(self):
+        t = self._tracker(10_000.0)
+        assert t.position == 0.0
+        assert t.cash == 10_000.0
+        assert t.entry_price == 0.0
+        assert t.current_price == 0.0
+        assert t.peak_value == 10_000.0
+        assert t.portfolio_value == 10_000.0
+
+    def test_update_price_and_peak(self):
+        t = self._tracker(10_000.0)
+        t.apply_buy(quantity=1.0, price=100.0, fee=0.1)
+        t.update_price(120.0)
+        assert t.current_price == 120.0
+        assert t.peak_value >= t.portfolio_value
+
+        t.update_price(80.0)
+        # peak should not decrease
+        assert t.peak_value >= t.portfolio_value
+
+    def test_apply_buy(self):
+        t = self._tracker(10_000.0)
+        t.update_price(100.0)
+        t.apply_buy(quantity=1.0, price=100.0, fee=0.1)
+        assert t.position == 1.0
+        assert t.entry_price == 100.0
+        assert abs(t.cash - (10_000.0 - 100.1)) < 1e-6
+
+    def test_apply_sell_clears_position(self):
+        t = self._tracker(10_000.0)
+        t.apply_buy(quantity=1.0, price=100.0, fee=0.1)
+        pnl = t.apply_sell(quantity=1.0, price=110.0, fee=0.11)
+        assert abs(t.position) < 1e-8
+        assert t.entry_price == 0.0
+        assert pnl > 0.0
+
+    def test_drawdown(self):
+        t = self._tracker(10_000.0)
+        t.apply_buy(quantity=1.0, price=100.0, fee=0.0)
+        t.update_price(100.0)   # establish peak
+        t.update_price(80.0)    # price drops
+        assert t.drawdown > 0.0
+
+    def test_snapshot_and_restore(self):
+        t = self._tracker(10_000.0)
+        t.apply_buy(quantity=2.0, price=50.0, fee=0.05)
+        t.update_price(60.0)
+        snap = t.snapshot()
+
+        t2 = self._tracker(1.0)
+        t2.restore(snap)
+        assert t2.position == t.position
+        assert t2.cash == t.cash
+        assert t2.entry_price == t.entry_price
+        assert t2.peak_value == t.peak_value
+
+    def test_reset(self):
+        t = self._tracker(10_000.0)
+        t.apply_buy(quantity=1.0, price=100.0, fee=0.1)
+        t.reset(initial_cash=5_000.0)
+        assert t.position == 0.0
+        assert t.cash == 5_000.0
+        assert t.entry_price == 0.0
+
+    def test_thread_safety(self):
+        """Concurrent price updates and buys must not corrupt state."""
+        import threading
+
+        t = self._tracker(1_000_000.0)
+        errors = []
+
+        def updater():
+            for i in range(50):
+                try:
+                    t.update_price(100.0 + i)
+                except Exception as e:
+                    errors.append(e)
+
+        def buyer():
+            for _ in range(20):
+                try:
+                    t.apply_buy(quantity=0.001, price=100.0, fee=0.0)
+                except Exception as e:
+                    errors.append(e)
+
+        threads = [threading.Thread(target=updater) for _ in range(4)]
+        threads += [threading.Thread(target=buyer) for _ in range(4)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+
+        assert errors == [], f"Thread safety errors: {errors}"
+        assert t.position >= 0.0
+
+    def test_order_manager_uses_position_tracker(self):
+        """OrderManager position state lives in PositionTracker."""
+        from deployment.execution.order_manager import OrderManager
+        from deployment.execution.position_tracker import PositionTracker
+
+        mgr = OrderManager({"initial_cash": 10_000.0}, paper_mode=True)
+        assert isinstance(mgr._position_tracker, PositionTracker)
+
+        mgr.update_paper_price(100.0)
+        mgr.submit_order("buy", amount=0.1, current_price=100.0)
+        assert mgr._position_tracker.position > 0.0
+
+    def test_paper_trader_uses_position_tracker(self):
+        """PaperTrader.state.pos is a PositionTracker; convenience props work."""
+        from deployment.paper_trader import PaperTrader
+        from deployment.execution.position_tracker import PositionTracker
+
+        class _DummyAgent:
+            def predict(self, obs, deterministic=True):
+                return 0.5, None
+
+        cfg = {"paper_trading": {"initial_balance": 10_000.0, "window_size": 5,
+                                  "trading_fee": 0.001, "max_position_size": 1.0,
+                                  "max_drawdown_threshold": 0.5}}
+        trader = PaperTrader(_DummyAgent(), cfg, simulation_mode=True)
+        assert isinstance(trader.state.pos, PositionTracker)
+
+        prices = [100.0 + i for i in range(10)]
+        trader.run(price_stream=iter(prices))
+
+        # Convenience pass-throughs must still work
+        _ = trader.state.balance
+        _ = trader.state.position
+        _ = trader.state.entry_price
+        _ = trader.state.peak_portfolio_value
+
+
 # ---------------------------------------------------------------------------
 # Timing guard
 # ---------------------------------------------------------------------------

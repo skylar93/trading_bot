@@ -27,6 +27,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, date
 from typing import Any, Dict, List, Optional
 
+from deployment.execution.position_tracker import PositionTracker
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -121,9 +123,9 @@ class OrderManager:
         self._daily_pnl: float = 0.0
         self._last_reset_date: date = date.today()
         self._halted: bool = False
-        self._paper_position: float = 0.0
-        self._paper_cash: float = float(exchange_config.get("initial_cash", 10_000.0))
-        self._paper_last_price: float = 0.0
+        self._position_tracker = PositionTracker(
+            initial_cash=float(exchange_config.get("initial_cash", 10_000.0))
+        )
 
         if not paper_mode:
             self._exchange = self._init_exchange(exchange_config)
@@ -233,13 +235,14 @@ class OrderManager:
     def reconcile(self, current_price: Optional[float] = None) -> Dict[str, Any]:
         """Compare internal state with exchange and return summary dict."""
         open_orders = sum(1 for o in self._orders.values() if o.status == "pending")
+        internal_pos = self._position_tracker.position
         if self.paper_mode:
             return {
-                "position": self._paper_position,
+                "position": internal_pos,
                 "daily_pnl": self._daily_pnl,
                 "open_orders": open_orders,
-                "internal_position": self._paper_position,
-                "actual_position": self._paper_position,
+                "internal_position": internal_pos,
+                "actual_position": internal_pos,
                 "discrepancy": 0.0,
                 "ok": True,
                 "mode": "paper",
@@ -249,18 +252,18 @@ class OrderManager:
             balance = self._exchange.fetch_balance()
             base, _ = self.symbol.split("/")
             actual_position = float(balance.get("free", {}).get(base, 0.0))
-            discrepancy = abs(actual_position - self._paper_position)
+            discrepancy = abs(actual_position - internal_pos)
             ok = discrepancy < 0.001
             if not ok:
                 logger.warning(
                     "Reconcile mismatch | internal=%.6f actual=%.6f",
-                    self._paper_position, actual_position,
+                    internal_pos, actual_position,
                 )
             return {
-                "position": self._paper_position,
+                "position": internal_pos,
                 "daily_pnl": self._daily_pnl,
                 "open_orders": open_orders,
-                "internal_position": self._paper_position,
+                "internal_position": internal_pos,
                 "actual_position": actual_position,
                 "discrepancy": discrepancy,
                 "ok": ok,
@@ -269,12 +272,12 @@ class OrderManager:
         except Exception as e:
             logger.error("Reconcile failed: %s", e)
             return {"ok": False, "error": str(e), "mode": "live",
-                    "position": self._paper_position, "daily_pnl": self._daily_pnl,
+                    "position": internal_pos, "daily_pnl": self._daily_pnl,
                     "open_orders": open_orders}
 
     def update_paper_price(self, price: float) -> None:
         """Notify manager of latest market price (paper mode)."""
-        self._paper_last_price = price
+        self._position_tracker.update_price(price)
 
     def get_order(self, order_id: str) -> Order:
         if order_id not in self._orders:
@@ -295,28 +298,29 @@ class OrderManager:
     # ------------------------------------------------------------------
 
     def _execute_paper_order(self, order: Order, current_price: Optional[float]) -> None:
-        price = current_price or self._paper_last_price
+        price = current_price or self._position_tracker.current_price
         if price <= 0:
             price = 1.0
 
         if order.side == "buy":
-            cost = order.amount * price
-            fee = cost * 0.001
-            self._paper_cash -= (cost + fee)
-            self._paper_position += order.amount
+            fee = order.amount * price * 0.001
+            self._position_tracker.apply_buy(
+                quantity=order.amount, price=price, fee=fee
+            )
             order.filled_amount = order.amount
             order.avg_fill_price = price
             order.fee = fee
         else:
-            sell_qty = min(order.amount, self._paper_position)
+            sell_qty = min(order.amount, self._position_tracker.position)
             if sell_qty < 1e-9:
                 order.status = "failed"
                 order.updated_at = datetime.utcnow()
                 return
             proceeds = sell_qty * price
             fee = proceeds * 0.001
-            self._paper_cash += (proceeds - fee)
-            self._paper_position -= sell_qty
+            self._position_tracker.apply_sell(
+                quantity=sell_qty, price=price, fee=fee
+            )
             order.filled_amount = sell_qty
             order.avg_fill_price = price
             order.fee = fee
