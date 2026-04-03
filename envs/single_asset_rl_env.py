@@ -231,6 +231,7 @@ class SingleAssetRLTradingEnv(gym.Env):
         # Week 30: regime-based position sizing
         self._risk_manager = risk_manager
         self._regime_probs = None  # 외부에서 set_regime_probs()로 업데이트
+        self._entry_price: Optional[float] = None  # Week 37: entry price for stop loss tracking
 
         logger.info(
             f"Initialized TradingEnvironment with window_size={window_size}, "
@@ -274,6 +275,9 @@ class SingleAssetRLTradingEnv(gym.Env):
         self.last_trade_size = 0
         self.last_fill_rate = 1.0
         self.last_slippage = 0.0
+        self._entry_price = None
+        if self._risk_manager is not None:
+            self._risk_manager.reset()
 
         # Get observation using _get_observation which handles padding
         observation = self._get_observation()
@@ -473,8 +477,17 @@ class SingleAssetRLTradingEnv(gym.Env):
             
             self.current_capital += capital_change
             # Use the actual_change after fill rate application
+            _prev_position = self.current_position
             self.current_position += actual_change
-            
+
+            # Week 37: update entry price for stop loss tracking
+            if abs(_prev_position) < 1e-8 and abs(self.current_position) >= 1e-8:
+                self._entry_price = executed_price  # flat → non-flat: new position opened
+            elif abs(self.current_position) < 1e-8:
+                self._entry_price = None  # position fully closed
+            elif (_prev_position > 0) != (self.current_position > 0):
+                self._entry_price = executed_price  # direction flipped
+
             trade_log_details["capital_after"] = self.current_capital
             trade_log_details["position_after"] = self.current_position
 
@@ -598,6 +611,17 @@ class SingleAssetRLTradingEnv(gym.Env):
         if not (np.isnan(self.portfolio_value) or np.isinf(self.portfolio_value) or self.portfolio_value <= 0):
              self.peak_portfolio_value = max(self.peak_portfolio_value, self.portfolio_value)
 
+        # --- Week 37: hard risk limit enforcement ---
+        _risk_limit_info: Dict[str, Any] = {}
+        if self._risk_manager is not None and abs(self.current_position) >= 1e-8:
+            _risk_triggered, _risk_reason = self._enforce_risk_limits(current_price)
+            if _risk_triggered:
+                _risk_limit_info["risk_limit_triggered"] = _risk_reason
+                # Position is now 0; recalc portfolio value
+                self.portfolio_value = self.current_capital
+                if _risk_reason == "max_drawdown":
+                    self.done = True
+
         # Calculate basic reward (change in portfolio value) using log returns with ratio clipping
         eps = 1e-8 # Small epsilon to prevent division by zero
         current_val = max(self.portfolio_value, eps)
@@ -660,7 +684,8 @@ class SingleAssetRLTradingEnv(gym.Env):
         observation = self._get_observation()
         info = self._get_info()
         info["reward_debug"] = reward_debug
-        
+        info.update(_risk_limit_info)
+
         # If we decided self.done = True above, we can forcibly end now
         if self.done and self.current_step < len(self.data):  # Only early termination, not normal end
             # Smaller penalty for capital <= 1.0
@@ -673,9 +698,10 @@ class SingleAssetRLTradingEnv(gym.Env):
             info = self._get_info()
             info["reward_debug"] = reward_debug
             info["early_termination"] = True  # Add flag for agent to know this was early termination
+            info.update(_risk_limit_info)
 
             return observation, reward, True, False, info
-        
+
         # DEBUG: Log step summary periodically
         if self.current_step % 10 == 0:
             self.logger.info(
@@ -683,8 +709,65 @@ class SingleAssetRLTradingEnv(gym.Env):
                 f"position={self.current_position:.4f}, reward={reward:.4f}"
             )
             self.logger.info(f"📈 REWARD DEBUG: {reward_debug}")
-        
+
         return observation, reward, self.done, False, info
+
+    def _enforce_risk_limits(self, current_price: float) -> Tuple[bool, str]:
+        """Week 37: check risk manager limits and force-close position when triggered.
+
+        Checks (in priority order):
+        1. Stop loss (uses entry_price vs current_price)
+        2. Trailing stop (uses peak price tracked by risk manager)
+        3. Max drawdown (uses peak_portfolio_value vs current portfolio_value)
+
+        Returns:
+            (triggered, reason) — reason is 'stop_loss' | 'trailing_stop' | 'max_drawdown' | ''
+        """
+        if self._risk_manager is None or abs(self.current_position) < 1e-8:
+            return False, ""
+
+        # 1. Stop loss
+        if self._entry_price is not None:
+            if self._risk_manager.check_stop_loss(
+                "env", self.current_position, self._entry_price, current_price
+            ):
+                self._force_close_position(current_price, "stop_loss")
+                return True, "stop_loss"
+
+        # 2. Trailing stop
+        if self._risk_manager.check_trailing_stop(
+            "env", "asset", self.current_position, current_price
+        ):
+            self._force_close_position(current_price, "trailing_stop")
+            return True, "trailing_stop"
+
+        # 3. Max drawdown
+        if self._risk_manager.check_max_drawdown(
+            "env", self.peak_portfolio_value, self.portfolio_value
+        ):
+            self._force_close_position(current_price, "max_drawdown")
+            return True, "max_drawdown"
+
+        return False, ""
+
+    def _force_close_position(self, current_price: float, reason: str) -> None:
+        """Week 37: close entire position at current_price with fee only (no slippage)."""
+        trade_value = abs(self.current_position) * current_price
+        trade_cost = trade_value * self.trading_fee
+
+        if self.current_position > 0:  # Long: sell
+            self.current_capital += trade_value - trade_cost
+        else:  # Short: buy back
+            self.current_capital -= trade_value + trade_cost
+
+        self.logger.warning(
+            f"Risk limit ({reason}) at step {self.current_step}: "
+            f"force-closed {self.current_position:.4f} @ {current_price:.4f}, "
+            f"capital after={self.current_capital:.2f}"
+        )
+        self.last_trade_size = trade_value
+        self.current_position = 0.0
+        self._entry_price = None
 
     def _calculate_risk_adjusted_reward(self, basic_reward: float, reward_debug: dict = None) -> float:
         """
