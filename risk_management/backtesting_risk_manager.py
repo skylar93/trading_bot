@@ -280,7 +280,11 @@ class BacktestingRiskManager(RiskManagerBase):
             "stop_losses": {k: v.stop_price for k, v in self.stop_losses.items()},
             "trade_count": sum(self.trade_counter.values())
         }
-    
+
+    def _get_risk_metrics(self) -> Dict[str, Any]:
+        """Implement abstract method — delegates to get_risk_metrics."""
+        return self.get_risk_metrics()
+
     # Additional backtesting-specific methods
     def check_trade_limits(self, timestamp: pd.Timestamp) -> bool:
         """
