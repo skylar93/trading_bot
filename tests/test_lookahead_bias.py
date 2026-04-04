@@ -153,3 +153,152 @@ class TestForwardFillLimit:
         for col in result.columns:
             nan_frac = result[col].isna().mean()
             assert nan_frac < 0.1, f"Column {col} has {nan_frac:.1%} NaN — ffill limit may be too aggressive"
+
+
+# ---------------------------------------------------------------------------
+# 42.3a  OnChainFeatureEngine — truncation consistency
+# ---------------------------------------------------------------------------
+
+class TestOnChainLookaheadBias:
+    """OnChainFeatureEngine.align_to_prices() must not leak future data at time T."""
+
+    def _get_engine(self):
+        from training.data.onchain_features import OnChainFeatureEngine, OnChainConfig
+        # Disable external fetches so tests are network-isolated
+        cfg = OnChainConfig(use_coingecko=False, use_ccxt_derivatives=False, cache_db=None)
+        return OnChainFeatureEngine(cfg)
+
+    def test_truncation_returns_same_value(self):
+        """align_to_prices on full vs. truncated data gives identical values at T."""
+        engine = self._get_engine()
+        df = _make_price_df(n=50, freq="1D", start="2024-01-01")
+
+        full_result = engine.align_to_prices(df)
+
+        for t in range(5, 20):
+            partial_result = engine.align_to_prices(df.iloc[: t + 1])
+            for col in full_result.columns:
+                full_val = float(full_result[col].iloc[t])
+                partial_val = float(partial_result[col].iloc[-1])
+                assert full_val == pytest.approx(partial_val, abs=1e-6), (
+                    f"OnChain look-ahead at t={t}, col={col}: "
+                    f"full={full_val:.4f} partial={partial_val:.4f}"
+                )
+
+    def test_output_no_nan_on_network_failure(self):
+        """Returns zero-filled DataFrame (no NaN) when network is unavailable."""
+        engine = self._get_engine()
+        df = _make_price_df(n=30, freq="1D", start="2024-06-01")
+        result = engine.align_to_prices(df)
+
+        assert len(result) == len(df)
+        assert not result.isnull().any().any(), "OnChain result must not contain NaN"
+
+    def test_ffill_does_not_introduce_future_values(self):
+        """Forward-fill propagates only within the available history, not beyond."""
+        engine = self._get_engine()
+        df_short = _make_price_df(n=10, freq="1D", start="2024-01-01")
+        df_long = _make_price_df(n=30, freq="1D", start="2024-01-01")
+
+        result_short = engine.align_to_prices(df_short)
+        result_long = engine.align_to_prices(df_long)
+
+        # Values at the last row of the short series must equal those in the long series
+        for col in result_short.columns:
+            short_val = float(result_short[col].iloc[-1])
+            long_val = float(result_long[col].iloc[len(df_short) - 1])
+            assert short_val == pytest.approx(long_val, abs=1e-6), (
+                f"OnChain ffill look-ahead in col={col}: "
+                f"short_end={short_val:.4f} long_at_same_t={long_val:.4f}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# 42.3b  CrossAssetFeatureEngineer — truncation consistency
+# ---------------------------------------------------------------------------
+
+class TestCrossAssetLookaheadBias:
+    """CrossAssetFeatureEngineer.compute_features() must be look-ahead free."""
+
+    def _make_cross_asset_engineer(self, primary_df: pd.DataFrame):
+        from training.data.cross_asset_features import (
+            CrossAssetFeatureEngineer,
+            CrossAssetConfig,
+        )
+        rng = np.random.default_rng(0)
+        # Synthetic aux asset with same index as primary
+        aux_close = 50.0 * np.cumprod(1 + rng.normal(0, 0.01, len(primary_df)))
+        aux_df = pd.DataFrame(
+            {"$close": aux_close},
+            index=primary_df.index,
+        )
+        cfg = CrossAssetConfig(
+            aux_assets={"aux": aux_df},
+            correlation_window=10,
+            beta_window=10,
+            relstr_window=10,
+            min_periods=5,
+        )
+        return CrossAssetFeatureEngineer(cfg)
+
+    def test_truncation_correlation_no_lookahead(self):
+        """Rolling correlation at time T is the same on full vs. truncated data."""
+        df = _make_price_df(n=100, freq="1D", start="2024-01-01")
+        engineer = self._make_cross_asset_engineer(df)
+        full_out = engineer.compute_features(df)
+        cross_cols = [c for c in full_out.columns if c not in df.columns]
+
+        for t in range(15, 30):
+            partial_df = df.iloc[: t + 1].copy()
+            partial_engineer = self._make_cross_asset_engineer(partial_df)
+            partial_out = partial_engineer.compute_features(partial_df)
+
+            for col in cross_cols:
+                if col not in partial_out.columns:
+                    continue
+                full_val = float(full_out[col].iloc[t])
+                partial_val = float(partial_out[col].iloc[-1])
+                assert full_val == pytest.approx(partial_val, abs=1e-5), (
+                    f"Cross-asset look-ahead at t={t}, col={col}: "
+                    f"full={full_val:.6f} partial={partial_val:.6f}"
+                )
+
+    def test_no_future_values_in_new_columns(self):
+        """Feature columns added by compute_features() must not be NaN."""
+        df = _make_price_df(n=80, freq="1D", start="2024-01-01")
+        engineer = self._make_cross_asset_engineer(df)
+        out = engineer.compute_features(df)
+        new_cols = [c for c in out.columns if c not in df.columns]
+
+        assert new_cols, "No cross-asset feature columns were produced"
+        for col in new_cols:
+            # After the warm-up window, values should not be NaN
+            tail = out[col].iloc[20:]
+            nan_frac = tail.isnull().mean()
+            assert nan_frac == 0.0, (
+                f"Column '{col}' has {nan_frac:.0%} NaN after warm-up"
+            )
+
+    def test_ffill_stays_within_history(self):
+        """ffill inside compute_features must not pull values from beyond T."""
+        df = _make_price_df(n=60, freq="1D", start="2024-01-01")
+        engineer_full = self._make_cross_asset_engineer(df)
+        out_full = engineer_full.compute_features(df)
+
+        # Compare last value when using 40-row subset vs. full 60-row
+        df_short = df.iloc[:40].copy()
+        engineer_short = self._make_cross_asset_engineer(df_short)
+        out_short = engineer_short.compute_features(df_short)
+
+        new_cols_full = [c for c in out_full.columns if c not in df.columns]
+        new_cols_short = [c for c in out_short.columns if c not in df_short.columns]
+
+        for col in new_cols_full:
+            if col not in new_cols_short:
+                continue
+            full_at_39 = float(out_full[col].iloc[39])
+            short_at_end = float(out_short[col].iloc[-1])
+            assert full_at_39 == pytest.approx(short_at_end, abs=1e-5), (
+                f"Cross-asset ffill look-ahead in col={col}: "
+                f"full[39]={full_at_39:.6f} short[-1]={short_at_end:.6f}"
+            )
