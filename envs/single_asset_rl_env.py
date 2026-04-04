@@ -498,29 +498,10 @@ class SingleAssetRLTradingEnv(gym.Env):
             # 중요: 상세 거래 로그 출력
             self.logger.info(f"📊 TRADE EXECUTION DETAILS: {trade_log_details}")
 
-            # Check if we should end the episode based on capital
-            force_done = False
-            capital_floor = self.initial_capital * 0.5
-            if self.current_capital <= capital_floor:
-                self.logger.warning(f"❌ CAPITAL BELOW FLOOR ({self.current_capital:.4f} <= {capital_floor:.4f}); flagging for episode end.")
-                force_done = True
-            elif self.current_capital > 1e9:
-                self.logger.warning(f"❌ EXTREME CAPITAL ({self.current_capital:.2f}); flagging for episode end.")
-                force_done = True
-            
-            # But don't actually end if we haven't reached minimum episode steps
-            if force_done and (self.current_step - self.window_size) < self.min_episode_steps:
-                self.logger.warning(f"Delaying episode termination until minimum steps {self.min_episode_steps} are reached. Current: {self.current_step - self.window_size}")
-                force_done = False
-            
-            # Apply force_done only if we've reached minimum steps
-            if force_done:
-                self.done = True
-            
             # DEBUG: Check for negative capital (shouldn't happen but could cause issues)
             if self.current_capital < 0:
                 self.logger.warning(f"❌ NEGATIVE CAPITAL after trade: {self.current_capital:.4f}")
-            
+
             # Record trade
             self.trades.append({
                 "step": self.current_step,
@@ -534,9 +515,27 @@ class SingleAssetRLTradingEnv(gym.Env):
                 "type": "buy" if actual_change > 0 else "sell"
             })
 
+        # Check if we should end the episode based on capital (runs every step)
+        capital_floor = self.initial_capital * 0.5
+        if self.current_capital <= capital_floor:
+            self.logger.warning(f"❌ CAPITAL BELOW FLOOR ({self.current_capital:.4f} <= {capital_floor:.4f}); flagging for episode end.")
+            _capital_force_done = True
+        elif self.current_capital > 1e9:
+            self.logger.warning(f"❌ EXTREME CAPITAL ({self.current_capital:.2f}); flagging for episode end.")
+            _capital_force_done = True
+        else:
+            _capital_force_done = False
+
+        if _capital_force_done and (self.current_step - self.window_size) < self.min_episode_steps:
+            self.logger.warning(f"Delaying episode termination until minimum steps {self.min_episode_steps} are reached. Current: {self.current_step - self.window_size}")
+            _capital_force_done = False
+
+        if _capital_force_done:
+            self.done = True
+
         # Move to next step
         self.current_step += 1
-        self.done = self.current_step >= len(self.data)
+        self.done = self.done or (self.current_step >= len(self.data))
         
         # Calculate new portfolio value after action and step
         # --- START: Added Portfolio Calc Logging ---
