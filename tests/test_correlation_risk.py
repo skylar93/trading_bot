@@ -65,12 +65,12 @@ class TestCorrelationRisk(unittest.TestCase):
                 "C": 150 * (1 + np.cumsum(self.asset_c_returns)[i]),
                 "D": 300 * (1 + np.cumsum(self.asset_d_returns)[i])
             }
-            self.risk_manager.record_asset_data(asset_prices, asset_returns)
+            self.risk_manager._record_asset_data(asset_prices, asset_returns)
     
     def test_correlation_matrix_calculation(self):
         """Test that correlation matrix is correctly calculated."""
         # Check that correlation matrix exists
-        corr_matrix = self.risk_manager.get_correlation_matrix()
+        corr_matrix = self.risk_manager._get_correlation_matrix()
         self.assertIsNotNone(corr_matrix)
         
         # Check matrix dimensions
@@ -133,15 +133,15 @@ class TestCorrelationRisk(unittest.TestCase):
         
         # No stop loss - current value higher than peak
         self.risk_manager.portfolio_current_value = 11000.0
-        self.assertFalse(self.risk_manager.check_portfolio_stop_loss())
+        self.assertFalse(self.risk_manager._check_portfolio_stop_loss())
         
         # No stop loss - small drawdown
         self.risk_manager.portfolio_current_value = 9000.0  # 10% drawdown
-        self.assertFalse(self.risk_manager.check_portfolio_stop_loss())
+        self.assertFalse(self.risk_manager._check_portfolio_stop_loss())
         
         # Stop loss triggered - large drawdown
         self.risk_manager.portfolio_current_value = 8000.0  # 20% drawdown
-        self.assertTrue(self.risk_manager.check_portfolio_stop_loss())
+        self.assertTrue(self.risk_manager._check_portfolio_stop_loss())
         
         # Check that event was tracked
         self.assertEqual(self.risk_manager.portfolio_stop_loss_events, 1)
@@ -153,18 +153,18 @@ class TestCorrelationRisk(unittest.TestCase):
         
         # No trailing stop - current value higher than peak
         self.risk_manager.portfolio_current_value = 11000.0
-        self.assertFalse(self.risk_manager.check_portfolio_trailing_stop())
+        self.assertFalse(self.risk_manager._check_portfolio_trailing_stop())
         
         # Update peak
         self.risk_manager.portfolio_peak_value = 11000.0
         
         # No trailing stop - small drawdown
         self.risk_manager.portfolio_current_value = 10450.0  # 5% drawdown
-        self.assertFalse(self.risk_manager.check_portfolio_trailing_stop())
+        self.assertFalse(self.risk_manager._check_portfolio_trailing_stop())
         
         # Trailing stop triggered - drawdown exceeds buffer
         self.risk_manager.portfolio_current_value = 10000.0  # 9.1% drawdown
-        self.assertTrue(self.risk_manager.check_portfolio_trailing_stop())
+        self.assertTrue(self.risk_manager._check_portfolio_trailing_stop())
     
     def test_portfolio_var_calculation(self):
         """Test portfolio VaR calculation."""
@@ -184,13 +184,13 @@ class TestCorrelationRisk(unittest.TestCase):
         
         # Calculate VaR using parametric method
         self.risk_manager.config.use_parametric_var = True
-        var_parametric = self.risk_manager.calculate_portfolio_var(position_sizes, prices)
+        var_parametric = self.risk_manager._calculate_portfolio_var(position_sizes, prices)
         self.assertIsNotNone(var_parametric)
         self.assertGreater(var_parametric, 0)
         
         # Calculate VaR using historical method
         self.risk_manager.config.use_parametric_var = False
-        var_historical = self.risk_manager.calculate_portfolio_var(position_sizes, prices)
+        var_historical = self.risk_manager._calculate_portfolio_var(position_sizes, prices)
         self.assertIsNotNone(var_historical)
         self.assertGreater(var_historical, 0)
         
@@ -268,11 +268,11 @@ class TestMultiAssetRiskManagement(unittest.TestCase):
             for asset in self.prices:
                 self.prices[asset] *= (1 + self.returns[asset][i])
             asset_prices = self.prices.copy()
-            self.risk_manager.record_asset_data(asset_prices, asset_returns)
+            self.risk_manager._record_asset_data(asset_prices, asset_returns)
     
     def test_multi_asset_correlation(self):
         """Test correlation matrix for multiple assets."""
-        corr_matrix = self.risk_manager.get_correlation_matrix()
+        corr_matrix = self.risk_manager._get_correlation_matrix()
         self.assertIsNotNone(corr_matrix)
         
         # Check dimensions
@@ -317,18 +317,18 @@ class TestMultiAssetRiskManagement(unittest.TestCase):
         
         # Calculate VaR for stock-only portfolio
         self.risk_manager.config.use_parametric_var = True
-        stock_var = self.risk_manager.calculate_portfolio_var(stock_positions, self.prices)
+        stock_var = self.risk_manager._calculate_portfolio_var(stock_positions, self.prices)
         
         # Calculate VaR for diversified portfolio
-        diverse_var = self.risk_manager.calculate_portfolio_var(diversified_positions, self.prices)
+        diverse_var = self.risk_manager._calculate_portfolio_var(diversified_positions, self.prices)
         
         # Diversified portfolio should have lower VaR
         self.assertLess(diverse_var, stock_var)
         
         # Test with historical VaR
         self.risk_manager.config.use_parametric_var = False
-        stock_var_hist = self.risk_manager.calculate_portfolio_var(stock_positions, self.prices)
-        diverse_var_hist = self.risk_manager.calculate_portfolio_var(diversified_positions, self.prices)
+        stock_var_hist = self.risk_manager._calculate_portfolio_var(stock_positions, self.prices)
+        diverse_var_hist = self.risk_manager._calculate_portfolio_var(diversified_positions, self.prices)
         
         # Same relationship should hold
         self.assertLess(diverse_var_hist, stock_var_hist)

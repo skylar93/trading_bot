@@ -251,7 +251,7 @@ class TestRiskManagerReset:
         env.reset()
         assert env._entry_price is None, "_entry_price must be None after reset"
         # Risk manager event counters should be cleared
-        metrics = env._risk_manager.get_risk_events_info()
+        metrics = env._risk_manager._get_risk_events_info()
         assert metrics["stop_loss_events"] == 0
         assert metrics["trailing_stop_events"] == 0
 

@@ -50,8 +50,23 @@ from agents.strategies.agent_factory import create_agent
 from training.utils.unified_mlflow_manager import MLflowManager
 from training.validation.walk_forward import WalkForwardValidator, WalkForwardResult
 from training.signals.regime_detector import RegimeDetector
+from training.monitoring.drift_detector import DriftDetector
 
 logger = logging.getLogger(__name__)
+
+
+def _build_drift_callback(config: Dict[str, Any]):
+    """Build DriftCallback if drift detection is enabled in config."""
+    monitoring = config.get("monitoring", {})
+    if not monitoring.get("use_drift_detection", False):
+        return None
+    try:
+        from agents.sb3.drift_callback import DriftCallback
+        detector = DriftDetector(window_size=500)
+        return DriftCallback(drift_detector=detector)
+    except ImportError:
+        logging.getLogger(__name__).warning("DriftCallback not available")
+        return None
 
 def run_walk_forward(
     config: Dict[str, Any],
@@ -841,6 +856,11 @@ def train_pipeline(config: Dict[str, Any], data: Optional[pd.DataFrame] = None) 
             observation_space=env.observation_space,
             action_space=env.action_space
         )
+
+    # Inject drift callback if enabled
+    drift_cb = _build_drift_callback(config)
+    if drift_cb is not None and hasattr(agent, '_drift_callback'):
+        agent._drift_callback = drift_cb
 
     # Select training method based on environment type
     if env_type == "single_asset_rl" or env_type == "multi_asset_rl":

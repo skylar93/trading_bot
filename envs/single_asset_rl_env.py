@@ -78,6 +78,8 @@ class SingleAssetRLTradingEnv(gym.Env):
         dt_forecaster: Optional["DTForecaster"] = None,
         # Week 30: optional risk manager for regime-based position sizing
         risk_manager=None,
+        # Week 37: data frequency for correct Sharpe annualization
+        data_frequency: str = "daily",
     ):
         """Initialize environment
 
@@ -231,6 +233,8 @@ class SingleAssetRLTradingEnv(gym.Env):
         # Week 30: regime-based position sizing
         self._risk_manager = risk_manager
         self._regime_probs = None  # 외부에서 set_regime_probs()로 업데이트
+        _annualize_map = {"daily": 252, "hourly": 252 * 6.5, "minute": 252 * 390}
+        self._annualize_factor = np.sqrt(_annualize_map.get(data_frequency, 252))
         self._entry_price: Optional[float] = None  # Week 37: entry price for stop loss tracking
 
         logger.info(
@@ -496,8 +500,9 @@ class SingleAssetRLTradingEnv(gym.Env):
 
             # Check if we should end the episode based on capital
             force_done = False
-            if self.current_capital <= 1.0:
-                self.logger.warning(f"❌ NEGATIVE OR NEAR-ZERO CAPITAL ({self.current_capital:.4f}); flagging for episode end.")
+            capital_floor = self.initial_capital * 0.5
+            if self.current_capital <= capital_floor:
+                self.logger.warning(f"❌ CAPITAL BELOW FLOOR ({self.current_capital:.4f} <= {capital_floor:.4f}); flagging for episode end.")
                 force_done = True
             elif self.current_capital > 1e9:
                 self.logger.warning(f"❌ EXTREME CAPITAL ({self.current_capital:.2f}); flagging for episode end.")
@@ -807,7 +812,7 @@ class SingleAssetRLTradingEnv(gym.Env):
                 # DEBUG: Log Sharpe calculation details
                 self.logger.debug(f"📊 SHARPE CALC: mean={mean_return:.6f}, std={std_return:.6f}, n={len(returns_array)}")
                 
-                sharpe_proxy = mean_return / std_return * np.sqrt(252)
+                sharpe_proxy = mean_return / std_return * self._annualize_factor
 
                 # Avoid extreme values
                 sharpe_proxy = np.clip(sharpe_proxy, -10.0, 10.0)

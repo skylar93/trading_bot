@@ -231,16 +231,12 @@ class RLRiskManager(RiskManagerBase):
         return False
     
     def update_trailing_stop(self, symbol: str, current_price: float) -> None:
-        """
-        Update trailing stop for a symbol based on current price.
-        
-        Args:
-            symbol: Asset symbol to update
-            current_price: Current price of the asset
-        """
-        # Implementation would depend on how trailing stops are tracked
-        # This is a placeholder implementation
-        pass
+        """Update trailing stop high-water-mark for a symbol."""
+        if not hasattr(self, "_trailing_hwm"):
+            self._trailing_hwm: Dict[str, float] = {}
+
+        if symbol not in self._trailing_hwm or current_price > self._trailing_hwm[symbol]:
+            self._trailing_hwm[symbol] = current_price
     
     def calculate_var(self, agent_id_or_returns: Union[str, np.ndarray]) -> Optional[float]:
         """
@@ -286,7 +282,7 @@ class RLRiskManager(RiskManagerBase):
             var = -np.percentile(returns, 100 * (1 - self.config.var_confidence_level))
             return max(0.0, float(var))
     
-    def get_risk_metrics(self) -> Dict[str, Any]:
+    def _get_risk_metrics(self) -> Dict[str, Any]:
         """
         Get current risk metrics.
         
@@ -346,7 +342,7 @@ class RLRiskManager(RiskManagerBase):
                 self.returns_history[agent_id] = deque(maxlen=self.config.rolling_var_window)
             self.returns_history[agent_id].append(ret)
     
-    def record_asset_data(self, asset_prices: Dict[str, float], asset_returns: Dict[str, float]):
+    def _record_asset_data(self, asset_prices: Dict[str, float], asset_returns: Dict[str, float]):
         """
         Record asset prices and returns for correlation and portfolio VaR calculation.
         
@@ -410,7 +406,7 @@ class RLRiskManager(RiskManagerBase):
             # Keep existing matrices if calculation fails
     
     # Legacy compatibility methods
-    def get_correlation_matrix(self) -> Optional[pd.DataFrame]:
+    def _get_correlation_matrix(self) -> Optional[pd.DataFrame]:
         """
         Get the current correlation matrix.
         
@@ -493,7 +489,7 @@ class RLRiskManager(RiskManagerBase):
         correlation = abs(self.correlation_matrix.loc[asset1, asset2])
         return correlation > self.config.correlation_threshold
     
-    def check_portfolio_stop_loss(self) -> bool:
+    def _check_portfolio_stop_loss(self) -> bool:
         """
         Check if portfolio-wide stop loss has been triggered.
         
@@ -515,7 +511,7 @@ class RLRiskManager(RiskManagerBase):
             
         return False
     
-    def check_portfolio_trailing_stop(self) -> bool:
+    def _check_portfolio_trailing_stop(self) -> bool:
         """
         Check if portfolio-wide trailing stop has been triggered.
         
@@ -532,7 +528,7 @@ class RLRiskManager(RiskManagerBase):
         
         return drawdown > self.config.portfolio_trailing_stop_buffer
     
-    def calculate_portfolio_var(self, position_sizes: Dict[str, float], prices: Dict[str, float]) -> Optional[float]:
+    def _calculate_portfolio_var(self, position_sizes: Dict[str, float], prices: Dict[str, float]) -> Optional[float]:
         """
         Calculate portfolio Value at Risk using the covariance matrix.
         
@@ -693,7 +689,7 @@ class RLRiskManager(RiskManagerBase):
 
         return False
     
-    def get_risk_events_info(self) -> Dict[str, int]:
+    def _get_risk_events_info(self) -> Dict[str, int]:
         """
         Get information about risk events that have occurred.
         

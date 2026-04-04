@@ -1,4 +1,5 @@
 import gymnasium as gym
+import threading
 import logging
 import asyncio
 import numpy as np
@@ -135,6 +136,7 @@ class LiveTradingEnvironment(gym.Env):
         self.active_orders: Dict[str, Order] = {}
         self.filled_orders: List[Order] = []
         self.canceled_orders: List[Order] = []
+        self._state_lock = threading.Lock()
         
         # Rate limiting
         self.last_api_call = datetime.min
@@ -148,21 +150,22 @@ class LiveTradingEnvironment(gym.Env):
         try:
             # Store current price if it exists
             current_price = getattr(self, '_last_price', 50000.0)
-            
-            # Reset account state
-            self.balance = float(self.initial_balance)
-            self.position = 0.0
-            self.trades = []
-            
-            # Reset order management
-            self.active_orders = {}
-            self.filled_orders = []
-            self.canceled_orders = []
-            
-            # Reset tracking variables
-            self._last_portfolio_value = float(self.initial_balance)
-            self._last_price = current_price  # Preserve the last price
-            
+
+            with self._state_lock:
+                # Reset account state
+                self.balance = float(self.initial_balance)
+                self.position = 0.0
+                self.trades = []
+
+                # Reset order management
+                self.active_orders = {}
+                self.filled_orders = []
+                self.canceled_orders = []
+
+                # Reset tracking variables
+                self._last_portfolio_value = float(self.initial_balance)
+                self._last_price = current_price  # Preserve the last price
+
             # Reset rate limiting
             self.last_api_call = datetime.min
             self.rate_limit_reset = 0.0
@@ -242,17 +245,18 @@ class LiveTradingEnvironment(gym.Env):
     def _reset_position(self):
         """Reset position and update state"""
         try:
-            # Reset position
-            self.position = 0.0
-            
-            # Cancel all active orders
-            self.active_orders.clear()
-            self.filled_orders.clear()
-            self.canceled_orders.clear()
-            
-            # Reset tracking variables
-            self._last_portfolio_value = float(self.balance)
-            
+            with self._state_lock:
+                # Reset position
+                self.position = 0.0
+
+                # Cancel all active orders
+                self.active_orders.clear()
+                self.filled_orders.clear()
+                self.canceled_orders.clear()
+
+                # Reset tracking variables
+                self._last_portfolio_value = float(self.balance)
+
             # Log reset
             logger.info("Position and state reset")
             
@@ -400,15 +404,16 @@ class LiveTradingEnvironment(gym.Env):
                                     else:
                                         new_position = round(self.position - order.filled, 8)
                                         new_balance = round(self.balance + order.filled * order.price * (1 - self.trading_fee), 8)
-                                    
+
                                     # Validate updates
                                     if new_balance >= 0 and np.isfinite(new_position) and np.isfinite(new_balance):
-                                        self.position = new_position
-                                        self.balance = new_balance
-                                        
-                                        # Move to filled orders
-                                        self.filled_orders.append(order)
-                                        del self.active_orders[order_id]
+                                        with self._state_lock:
+                                            self.position = new_position
+                                            self.balance = new_balance
+
+                                            # Move to filled orders
+                                            self.filled_orders.append(order)
+                                            del self.active_orders[order_id]
                                     else:
                                         logger.error(f"Invalid position/balance update: position={new_position}, balance={new_balance}")
                                         self._reset_position()
@@ -470,14 +475,15 @@ class LiveTradingEnvironment(gym.Env):
                                 order.filled = order.amount
                                 order.remaining = 0.0
                                 order.status = OrderStatus.CLOSED
-                                
-                                # Update position and balance
-                                self.position = new_position
-                                self.balance = new_balance
-                                
-                                # Move to filled orders
-                                self.filled_orders.append(order)
-                                del self.active_orders[order_id]
+
+                                with self._state_lock:
+                                    # Update position and balance
+                                    self.position = new_position
+                                    self.balance = new_balance
+
+                                    # Move to filled orders
+                                    self.filled_orders.append(order)
+                                    del self.active_orders[order_id]
                             else:
                                 logger.error(f"Invalid position/balance update: position={new_position}, balance={new_balance}")
                                 self._reset_position()
@@ -915,10 +921,12 @@ class LiveTradingEnvironment(gym.Env):
             # Get the latest data point
             portfolio_value = self.portfolio_value
             
+            with self._state_lock:
+                active_orders_count = len(self.active_orders)
             return {
                 'balance': round(float(self.balance), 8),
                 'position': round(float(self.position), 8),
-                'active_orders': [order.id for order in self.active_orders],
+                'active_orders': active_orders_count,
                 'portfolio_value': round(float(portfolio_value), 8)
             }
         except Exception as e:

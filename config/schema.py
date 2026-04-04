@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 
 class EnvConfig(BaseModel):
@@ -57,6 +57,13 @@ class AgentConfig(BaseModel):
         allowed = {"sb3_ppo", "sb3_sac", "sb3_td3", "sb3_cvar_ppo", "flag_trader"}
         if v not in allowed:
             raise ValueError(f"algo_type must be one of {allowed}, got '{v}'")
+        return v
+
+    @field_validator("learning_rate")
+    @classmethod
+    def learning_rate_range(cls, v: float) -> float:
+        if not 0 < v <= 1.0:
+            raise ValueError(f"learning_rate must be in (0, 1.0], got {v}")
         return v
 
 
@@ -107,6 +114,20 @@ class RiskConfig(BaseModel):
             raise ValueError(f"threshold must be in (0, 1], got {v}")
         return v
 
+    @model_validator(mode="after")
+    def risk_thresholds_consistent(self):
+        if self.stop_loss_threshold >= self.max_drawdown_pct:
+            raise ValueError(
+                f"stop_loss_threshold ({self.stop_loss_threshold}) must be < "
+                f"max_drawdown_pct ({self.max_drawdown_pct})"
+            )
+        if self.trailing_stop_buffer >= self.max_drawdown_pct:
+            raise ValueError(
+                f"trailing_stop_buffer ({self.trailing_stop_buffer}) must be < "
+                f"max_drawdown_pct ({self.max_drawdown_pct})"
+            )
+        return self
+
 
 class MonitoringConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
@@ -120,6 +141,7 @@ class MonitoringConfig(BaseModel):
     telegram_token: Optional[str] = None
     telegram_chat_id: Optional[str] = None
     webhook_url: Optional[str] = None
+    use_drift_detection: bool = False
 
 
 class RegimeConfig(BaseModel):

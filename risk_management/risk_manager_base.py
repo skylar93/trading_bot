@@ -148,11 +148,11 @@ class RiskManagerBase(ABC):
         pass
     
     @abstractmethod
-    def get_risk_metrics(self) -> Dict[str, Any]:
+    def _get_risk_metrics(self) -> Dict[str, Any]:
         """
         Get current risk metrics as a dictionary.
-        
+
         Returns:
             Dict[str, Any]: Dictionary of risk metrics
         """
-        pass 
+        pass

@@ -250,7 +250,7 @@ class TestRLRiskManager(unittest.TestCase):
     def test_risk_events_info(self):
         """Test tracking of risk events."""
         # Initial state
-        info = self.risk_manager.get_risk_events_info()
+        info = self.risk_manager._get_risk_events_info()
         self.assertEqual(info["stop_loss_events"], 0)
         self.assertEqual(info["trailing_stop_events"], 0)
         self.assertEqual(info["var_exceed_events"], 0)
@@ -275,14 +275,14 @@ class TestRLRiskManager(unittest.TestCase):
         self.risk_manager.check_var_exceed(agent_id, -0.04)
         
         # Check updated counts
-        info = self.risk_manager.get_risk_events_info()
+        info = self.risk_manager._get_risk_events_info()
         self.assertEqual(info["stop_loss_events"], 1)
         self.assertEqual(info["trailing_stop_events"], 1)
         self.assertEqual(info["var_exceed_events"], 1)
         
         # Reset risk manager
         self.risk_manager.reset()
-        info = self.risk_manager.get_risk_events_info()
+        info = self.risk_manager._get_risk_events_info()
         self.assertEqual(info["stop_loss_events"], 0)
 
 
