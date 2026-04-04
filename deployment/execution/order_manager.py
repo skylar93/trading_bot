@@ -336,13 +336,16 @@ class OrderManager:
                 return
             proceeds = sell_qty * price
             fee = proceeds * 0.001
+            # Capture entry price BEFORE apply_sell (resets on full close)
+            entry_price = self._position_tracker.entry_price
             self._position_tracker.apply_sell(
                 quantity=sell_qty, price=price, fee=fee
             )
             order.filled_amount = sell_qty
             order.avg_fill_price = price
             order.fee = fee
-            self._daily_pnl += (proceeds - fee - sell_qty * price)
+            pnl = (price - entry_price) * sell_qty if entry_price > 0 else 0.0
+            self._daily_pnl += (pnl - fee)
             self._check_daily_loss_limit()
 
         order.status = "filled"
@@ -377,13 +380,13 @@ class OrderManager:
                 if order.status == "filled" and self._position_tracker is not None:
                     if order.side == "buy":
                         self._position_tracker.apply_buy(
-                            qty=order.filled_amount,
+                            quantity=order.filled_amount,
                             price=order.avg_fill_price,
                             fee=order.fee,
                         )
                     else:
                         self._position_tracker.apply_sell(
-                            qty=order.filled_amount,
+                            quantity=order.filled_amount,
                             price=order.avg_fill_price,
                             fee=order.fee,
                         )

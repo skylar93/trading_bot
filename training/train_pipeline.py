@@ -137,7 +137,8 @@ def train_single_agent(
     agent,
     env,
     config: Dict[str, Any],
-    mlflow_manager: Optional[MLflowManager] = None
+    mlflow_manager: Optional[MLflowManager] = None,
+    eval_data: Optional[pd.DataFrame] = None,
 ) -> Dict[str, Any]:
     """
     Train a single agent using the standard RL loop.
@@ -167,7 +168,14 @@ def train_single_agent(
     
     # Ensure checkpoint directory exists
     os.makedirs(checkpoint_dir, exist_ok=True)
-    
+
+    # Build evaluation environment from held-out data
+    if eval_data is not None and len(eval_data) > 0:
+        eval_env = create_eval_env(config, eval_data)
+    else:
+        logger.warning("No eval_data provided; evaluation will reuse training env")
+        eval_env = env
+
     # Set up tracking
     steps_done = 0
     episode_num = 0
@@ -301,10 +309,7 @@ def train_single_agent(
         
         # Evaluation
         if steps_done % eval_interval == 0:
-            # Create evaluation environment
-            eval_env = env  # In a real implementation, you'd create a separate env with test data
-            
-            # 평가 실행
+            # 평가 실행 (use dedicated eval env with held-out data)
             eval_rewards = evaluate_agent(agent, eval_env, num_episodes=5)
             mean_eval_reward = np.mean(eval_rewards)
             
@@ -805,6 +810,12 @@ def train_pipeline(config: Dict[str, Any], data: Optional[pd.DataFrame] = None) 
     # Get MLflow manager if provided
     mlflow_manager = config.get("mlflow_manager", None)
     
+    # Split data: last 20% as eval, remainder as training
+    eval_data_split: Optional[pd.DataFrame] = None
+    if data is not None and len(data) > 0:
+        split_idx = int(len(data) * 0.8)
+        eval_data_split = data.iloc[split_idx:].copy()
+
     # Create environment based on config
     env = create_env(config, data)
 
@@ -866,7 +877,7 @@ def train_pipeline(config: Dict[str, Any], data: Optional[pd.DataFrame] = None) 
     if env_type == "single_asset_rl" or env_type == "multi_asset_rl":
         # Single agent training for both single and multi-asset environments
         logger.info(f"Starting single agent training for environment type: {env_type}")
-        results = train_single_agent(agent, env, config, mlflow_manager)
+        results = train_single_agent(agent, env, config, mlflow_manager, eval_data=eval_data_split)
     elif env_type == "multi_agent_rl" or env_type == "multi_asset_multi_agent_rl":
         # Multi-agent training
         logger.info(f"Starting multi-agent training for environment type: {env_type}")

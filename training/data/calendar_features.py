@@ -105,7 +105,7 @@ _SESSION_BOUNDARIES = {
 class CalendarConfig:
     """Configuration for the calendar feature engine."""
     # Event look-ahead window (how many days counts as "upcoming")
-    event_lookahead_days: int = 3
+    event_lookahead_days: int = 0
     # Proximity decay rate for month/quarter end
     # prox = exp(-k * days_to_end); k controls steepness
     month_end_decay: float = 0.3
@@ -270,6 +270,9 @@ class CalendarFeatureEngine:
         Bitcoin halving proximity: +1.0 within 7 days.
         """
         lookahead = pd.Timedelta(days=self.cfg.event_lookahead_days)
+        if self.cfg.event_lookahead_days <= 0:
+            # Only encode same-day and post-event signals (no future lookahead)
+            lookahead = pd.Timedelta(0)
         postvent = pd.Timedelta(days=1)
         halving_window = pd.Timedelta(days=7)
 
@@ -283,7 +286,8 @@ class CalendarFeatureEngine:
             for fd in self._fomc:
                 delta = fd - d
                 if pd.Timedelta(0) <= delta <= lookahead:
-                    val = max(val, 0.7 * (1.0 - delta / lookahead))
+                    ratio = float(delta / lookahead) if lookahead > pd.Timedelta(0) else 0.0
+                    val = max(val, 0.7 * (1.0 - ratio))
                 elif -postvent <= delta < pd.Timedelta(0):
                     val = min(val, -0.3)
 
@@ -291,7 +295,8 @@ class CalendarFeatureEngine:
             for cd in self._cme:
                 delta = cd - d
                 if pd.Timedelta(0) <= delta <= lookahead:
-                    val = max(val, 0.5 * (1.0 - delta / lookahead))
+                    ratio = float(delta / lookahead) if lookahead > pd.Timedelta(0) else 0.0
+                    val = max(val, 0.5 * (1.0 - ratio))
 
             # Check halving proximity
             # Use signed delta to avoid look-ahead: only fire for upcoming halving
