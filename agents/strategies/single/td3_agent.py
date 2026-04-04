@@ -82,6 +82,7 @@ class TD3Agent(BaseAgent):
 
         self._model = None
         self._step_count = 0
+        self._drift_callback = None  # set externally via train_pipeline
 
         unused = [k for k in kwargs if k not in ("type", "strategy")]
         if unused:
@@ -163,7 +164,13 @@ class TD3Agent(BaseAgent):
     def train(self, env, total_timesteps: int = 10000, batch_size: int = 64) -> Dict[str, Any]:
         self._ensure_model()
         self._model.set_env(env)
-        self._model.learn(total_timesteps=total_timesteps)
+        callbacks = []
+        if self._drift_callback is not None:
+            callbacks.append(self._drift_callback)
+        self._model.learn(
+            total_timesteps=total_timesteps,
+            callback=callbacks if callbacks else None,
+        )
         return {"total_timesteps": total_timesteps}
 
     def update_if_buffer_ready(self) -> Optional[Dict[str, float]]:

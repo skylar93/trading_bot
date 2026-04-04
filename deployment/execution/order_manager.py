@@ -106,13 +106,14 @@ class OrderManager:
         connection is established.
     """
 
-    def __init__(self, exchange_config: Optional[Dict[str, Any]] = None, paper_mode: bool = True) -> None:
+    def __init__(self, exchange_config: Optional[Dict[str, Any]] = None, paper_mode: bool = True, risk_manager=None) -> None:
         exchange_config = exchange_config or {}
         self.paper_mode = paper_mode
         self._config = exchange_config
         self.symbol: str = exchange_config.get("symbol", "BTC/USDT")
         self.max_order_size: float = float(exchange_config.get("max_order_size", 1.0))
         self.daily_loss_limit: float = float(exchange_config.get("daily_loss_limit", -500.0))
+        self._risk_manager = risk_manager
 
         self.rate_limiter = RateLimiter(
             max_calls=int(exchange_config.get("rate_limit_calls", 10)),
@@ -165,6 +166,23 @@ class OrderManager:
 
         if amount <= 0:
             raise ValueError(f"Order amount must be positive, got {amount}.")
+
+        # Pre-trade risk check
+        if self._risk_manager is not None:
+            tracker = self._position_tracker
+            if tracker is not None:
+                peak = tracker.peak_value
+                current = tracker.portfolio_value
+                if self._risk_manager.check_max_drawdown(peak, current):
+                    order_id = str(uuid.uuid4())[:8]
+                    order = Order(
+                        order_id=order_id, side=side, amount=amount,
+                        order_type=order_type, limit_price=limit_price,
+                        status="failed",
+                    )
+                    self._orders[order_id] = order
+                    logger.warning("Order %s rejected: max drawdown exceeded", order_id)
+                    return order_id
 
         if amount > self.max_order_size:
             logger.warning(
@@ -355,6 +373,20 @@ class OrderManager:
                 fee_info = result.get("fee") or {}
                 order.fee = float(fee_info.get("cost", 0.0))
                 order.updated_at = datetime.utcnow()
+                # Update position tracker on successful fill
+                if order.status == "filled" and self._position_tracker is not None:
+                    if order.side == "buy":
+                        self._position_tracker.apply_buy(
+                            qty=order.filled_amount,
+                            price=order.avg_fill_price,
+                            fee=order.fee,
+                        )
+                    else:
+                        self._position_tracker.apply_sell(
+                            qty=order.filled_amount,
+                            price=order.avg_fill_price,
+                            fee=order.fee,
+                        )
                 return
             except Exception as e:
                 logger.warning("Live order attempt %d/%d failed: %s", attempt, max_retries, e)
@@ -411,12 +443,17 @@ class OrderManager:
                 "enableRateLimit": True,
             })
         except ImportError:
-            logger.warning("ccxt not installed; falling back to paper mode")
-            self.paper_mode = True
+            if not self.paper_mode:
+                raise RuntimeError(
+                    "ccxt not installed but paper_mode=False. "
+                    "Install ccxt or set paper_mode=True."
+                )
+            logger.info("ccxt not installed; using paper mode")
             return None
         except Exception as e:
-            logger.warning("Exchange init failed (%s); falling back to paper mode", e)
-            self.paper_mode = True
+            if not self.paper_mode:
+                raise RuntimeError(f"Exchange init failed: {e}. Check API credentials.")
+            logger.warning("Exchange init failed (%s); using paper mode", e)
             return None
 
     def __enter__(self) -> "OrderManager":

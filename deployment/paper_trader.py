@@ -150,6 +150,7 @@ class PaperTrader:
         alerter: Optional[TradingAlerter] = None,
         drift_detector: Optional[DriftDetector] = None,
         order_manager: Optional[OrderManager] = None,
+        risk_manager=None,
     ) -> None:
         self.agent = agent
         self.config = config
@@ -158,6 +159,7 @@ class PaperTrader:
         self.alerter = alerter
         self.drift_detector = drift_detector
         self.order_manager = order_manager
+        self.risk_manager = risk_manager
 
         pt = config.get("paper_trading", config)
         self.symbol: str = pt.get("symbol", "BTC/USDT")
@@ -461,6 +463,15 @@ class PaperTrader:
             daily_pnl = current_pv - self.initial_balance
             self.alerter.check_daily_pnl(daily_pnl)
 
+        # Delegate to risk_manager if available
+        if self.risk_manager is not None:
+            if self.risk_manager.check_max_drawdown(peak_pv, current_pv):
+                self._trigger_shutdown(
+                    f"RiskManager: max drawdown exceeded (peak={peak_pv:.2f}, current={current_pv:.2f})"
+                )
+                return
+
+        # Fallback: original homebrew check
         if peak_pv > 0:
             drawdown = (peak_pv - current_pv) / peak_pv
             if drawdown >= self.max_drawdown_threshold:
