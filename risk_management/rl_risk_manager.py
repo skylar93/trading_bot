@@ -77,7 +77,7 @@ class RLRiskConfig(RiskConfigBase):
     # Multi-asset VaR settings
     use_portfolio_var: bool = False
     portfolio_var_threshold: float = 0.02  # Maximum acceptable portfolio VaR (2%)
-    use_parametric_var: bool = True  # Use parametric (True) or historical (False) VaR calculation
+    use_parametric_var: bool = False  # Use parametric (True) or historical (False) VaR calculation
     
     # Action on VaR exceeding threshold
     action_on_var_exceed: str = "reduce_position"  # "reduce_position" or "close_position"
@@ -156,23 +156,6 @@ class RLRiskManager(RiskManagerBase):
         self.portfolio_stop_loss_events = 0
         self.portfolio_var_exceed_events = 0
     
-    def check_max_drawdown(self, peak_value: float, current_value: float) -> bool:
-        """
-        Check if maximum drawdown has been exceeded.
-        
-        Args:
-            peak_value: Historical peak portfolio value
-            current_value: Current portfolio value
-            
-        Returns:
-            bool: True if max drawdown exceeded, False otherwise
-        """
-        if peak_value <= 0:
-            return False
-            
-        drawdown = (peak_value - current_value) / peak_value
-        return drawdown > self.config.max_drawdown_pct
-    
     def calculate_stop_loss(self, entry_price: float, position_size: float, is_long: bool = True) -> float:
         """
         Calculate stop loss price based on entry price and position direction.
@@ -232,11 +215,11 @@ class RLRiskManager(RiskManagerBase):
     
     def update_trailing_stop(self, symbol: str, current_price: float) -> None:
         """Update trailing stop high-water-mark for a symbol."""
-        if not hasattr(self, "_trailing_hwm"):
-            self._trailing_hwm: Dict[str, float] = {}
-
-        if symbol not in self._trailing_hwm or current_price > self._trailing_hwm[symbol]:
-            self._trailing_hwm[symbol] = current_price
+        if not hasattr(self, "position_highest_values"):
+            self.position_highest_values = {}
+        key = symbol  # simple key when no agent_id context
+        if key not in self.position_highest_values or current_price > self.position_highest_values[key]:
+            self.position_highest_values[key] = current_price
     
     def calculate_var(self, agent_id_or_returns: Union[str, np.ndarray]) -> Optional[float]:
         """
@@ -706,54 +689,63 @@ class RLRiskManager(RiskManagerBase):
             "portfolio_var_exceed_events": getattr(self, "portfolio_var_exceed_events", 0)
         }
     
-    def check_max_drawdown(self, agent_id: str, peak_value: float = None, current_value: float = None) -> bool:
+    def check_max_drawdown(self, agent_id_or_peak, peak_value=None, current_value=None) -> bool:
         """
         Check if maximum drawdown has been exceeded.
-        
-        Args:
-            agent_id: Identifier for the agent
-            peak_value: Historical peak portfolio value (optional, uses stored value if None)
-            current_value: Current portfolio value (optional, uses stored value if None)
-            
+
+        Supports three call patterns:
+        1. check_max_drawdown(peak, current)          — legacy 2-arg float
+        2. check_max_drawdown("agent", peak, current) — 3-arg string agent_id
+        3. check_max_drawdown("agent")                — lookup from stored values
+
         Returns:
             bool: True if max drawdown exceeded, False otherwise
         """
-        # Support legacy method signature
+        # Pattern 1: called with (peak_float, current_float)
+        if isinstance(agent_id_or_peak, (int, float)):
+            peak = agent_id_or_peak
+            current = peak_value  # second positional arg
+            if peak <= 0:
+                return False
+            drawdown = (peak - current) / peak
+            if drawdown > self.config.max_drawdown_pct and self.alerter is not None:
+                self.alerter.check_drawdown(current=current, peak=peak)
+            return drawdown > self.config.max_drawdown_pct
+
+        # Pattern 2 & 3: string agent_id
+        agent_id = agent_id_or_peak
         if peak_value is not None and current_value is not None:
-            # Direct call with values
             if peak_value <= 0:
                 return False
-
             drawdown = (peak_value - current_value) / peak_value
             if drawdown > self.config.max_drawdown_pct and self.alerter is not None:
                 self.alerter.check_drawdown(current=current_value, peak=peak_value)
             return drawdown > self.config.max_drawdown_pct
-        
-        # Original implementation with agent_id lookup
+
+        # Pattern 3: lookup from stored values
         if agent_id not in self.peak_values or agent_id not in self.current_values:
             return False
-            
+
         peak = self.peak_values[agent_id]
         current = self.current_values[agent_id]
-        
+
         if peak <= 0:
             return False
-            
+
         drawdown = (peak - current) / peak
-        
+
         if drawdown > self.config.max_drawdown_pct:
             if self.alerter is not None:
                 self.alerter.check_drawdown(current=current, peak=peak)
             if self.config.use_forced_liquidation:
                 if agent_id not in self.liquidation_triggered:
                     self.liquidation_triggered[agent_id] = False
-
                 if not self.liquidation_triggered[agent_id]:
                     self.liquidation_triggered[agent_id] = True
                     if hasattr(self, "forced_liquidation_events"):
                         self.forced_liquidation_events += 1
             return True
-            
+
         return False
     
     def adjust_for_regime(self, action: float, regime_probs: np.ndarray) -> float:

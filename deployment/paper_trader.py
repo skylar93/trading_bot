@@ -22,6 +22,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
+from collections import deque
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
@@ -59,7 +60,7 @@ class TradingState:
     """
     pos: PositionTracker
     trades: List[Trade] = field(default_factory=list)
-    portfolio_history: List[float] = field(default_factory=list)
+    portfolio_history: deque = field(default_factory=lambda: deque(maxlen=100_000))
     step: int = 0
     shutdown_triggered: bool = False
     shutdown_reason: str = ""
@@ -311,7 +312,7 @@ class PaperTrader:
             "step": self.state.step,
             "shutdown_triggered": self.state.shutdown_triggered,
             "shutdown_reason": self.state.shutdown_reason,
-            "portfolio_history": self.state.portfolio_history,
+            "portfolio_history": list(self.state.portfolio_history),
             "trades": [
                 {
                     "timestamp": t.timestamp.isoformat(),
@@ -336,7 +337,7 @@ class PaperTrader:
         self.state.step = data["step"]
         self.state.shutdown_triggered = data["shutdown_triggered"]
         self.state.shutdown_reason = data["shutdown_reason"]
-        self.state.portfolio_history = data["portfolio_history"]
+        self.state.portfolio_history = deque(data["portfolio_history"], maxlen=100_000)
         self.state.trades = [
             Trade(
                 timestamp=datetime.fromisoformat(t["timestamp"]),
@@ -424,6 +425,10 @@ class PaperTrader:
                     self.alerter.notify_trade("buy", quantity, price, order_id=order_id)
             except Exception as e:
                 logger.warning("OrderManager buy submission failed: %s", e)
+                logger.error(
+                    "STATE DESYNC: position updated (buy qty=%.6f) but order not tracked. "
+                    "Manual reconciliation may be needed.", quantity,
+                )
 
     def _execute_sell(self, strength: float, price: float) -> None:
         sell_qty = self.state.pos.position * min(strength, 1.0)
@@ -450,6 +455,10 @@ class PaperTrader:
                     self.alerter.notify_trade("sell", sell_qty, price, order_id=order_id)
             except Exception as e:
                 logger.warning("OrderManager sell submission failed: %s", e)
+                logger.error(
+                    "STATE DESYNC: position updated (sell qty=%.6f) but order not tracked. "
+                    "Manual reconciliation may be needed.", sell_qty,
+                )
 
     def _check_risk(self, price: float) -> None:
         """Enforce max drawdown shutdown and fire alerts."""
