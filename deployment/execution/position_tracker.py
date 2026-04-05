@@ -23,8 +23,11 @@ Usage:
 
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Dict
+
+logger = logging.getLogger(__name__)
 
 
 class PositionTracker:
@@ -130,6 +133,14 @@ class PositionTracker:
             Realised P&L for this sell (positive = profit).
         """
         with self._lock:
+            if quantity > self._position + 1e-8:
+                logger.warning(
+                    "Sell quantity %.6f exceeds position %.6f; clamping.",
+                    quantity, self._position,
+                )
+                quantity = self._position
+            if quantity < 1e-8:
+                return 0.0
             proceeds = quantity * price - fee
             pnl = (price - self._entry_price) * quantity if self._entry_price else 0.0
             self._cash += proceeds
