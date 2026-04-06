@@ -234,7 +234,9 @@ class SingleAssetRLTradingEnv(gym.Env):
         self._risk_manager = risk_manager
         self._regime_probs = None  # 외부에서 set_regime_probs()로 업데이트
         _annualize_map = {"daily": 252, "hourly": 252 * 6.5, "minute": 252 * 390}
-        self._annualize_factor = np.sqrt(_annualize_map.get(data_frequency, 252))
+        if data_frequency not in _annualize_map:
+            raise ValueError(f"data_frequency must be one of {set(_annualize_map)}, got {data_frequency!r}")
+        self._annualize_factor = np.sqrt(_annualize_map[data_frequency])
         self._entry_price: Optional[float] = None  # Week 37: entry price for stop loss tracking
 
         logger.info(
@@ -539,7 +541,7 @@ class SingleAssetRLTradingEnv(gym.Env):
         
         # Calculate new portfolio value after action and step
         # --- START: Added Portfolio Calc Logging ---
-        portfolio_calc_price = self.data.iloc[self.current_step - 1 if self.done else self.current_step]["$close"]
+        portfolio_calc_price = self.data.iloc[self.current_step - 1]["$close"]
         # Handle potential invalid price during calculation
         if portfolio_calc_price <= 0 or np.isnan(portfolio_calc_price) or np.isinf(portfolio_calc_price):
              self.logger.warning(f"❌ Invalid price used in portfolio calculation at step {self.current_step}: {portfolio_calc_price}. Using 1.0 as fallback.")

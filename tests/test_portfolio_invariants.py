@@ -62,7 +62,7 @@ def _make_env(prices) -> SingleAssetRLTradingEnv:
 
 def _portfolio_price(env: SingleAssetRLTradingEnv) -> float:
     """Return the price the env used to mark portfolio_value after the last step."""
-    idx = min(env.current_step, len(env.data) - 1)
+    idx = max(0, min(env.current_step - 1, len(env.data) - 1))
     return float(env.data.iloc[idx]["$close"])
 
 

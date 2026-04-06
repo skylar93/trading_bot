@@ -214,10 +214,12 @@ class RLRiskManager(RiskManagerBase):
         return False
     
     def update_trailing_stop(self, symbol: str, current_price: float) -> None:
-        """Update trailing stop high-water-mark for a symbol."""
-        if not hasattr(self, "position_highest_values"):
-            self.position_highest_values = {}
-        key = symbol  # simple key when no agent_id context
+        """Update trailing stop high-water-mark for a symbol.
+
+        Uses position_highest_values with key format matching check_trailing_stop().
+        When called without agent_id context, uses "_default_{symbol}" as key.
+        """
+        key = f"_default_{symbol}"
         if key not in self.position_highest_values or current_price > self.position_highest_values[key]:
             self.position_highest_values[key] = current_price
     
