@@ -562,7 +562,7 @@ class BacktestingRiskManager(RiskManagerBase):
             asset = available[0]
             if hasattr(self, "_asset_stds") and asset in self._asset_stds.index:
                 std = float(self._asset_stds[asset])
-                return max(0.0, norm.ppf(self.config.var_confidence_level) * std)
+                return max(0.0, -norm.ppf(1 - self.config.var_confidence_level) * std)
             return 0.0
 
         if len(available) >= 2:

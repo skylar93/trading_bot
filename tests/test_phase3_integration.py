@@ -32,7 +32,7 @@ if str(REPO_ROOT) not in sys.path:
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-N_ROWS = 300
+N_ROWS = 2000
 WINDOW = 20
 
 
@@ -47,7 +47,8 @@ def _make_ohlcv(n: int = N_ROWS, seed: int = 7) -> pd.DataFrame:
             "$low": price * (1 - rng.uniform(0, 0.01, n)),
             "$close": price * (1 + rng.normal(0, 0.005, n)),
             "$volume": rng.uniform(1e5, 1e6, n),
-        }
+        },
+        index=pd.date_range("2024-01-01", periods=n, freq="1h"),
     ).assign(**{"$close": lambda df: df["$close"].clip(lower=1.0)})
 
 
@@ -847,11 +848,7 @@ class TestOrphanComponentIntegration:
         rm.update_portfolio_values({"agent_0": 10_000.0})
         rm.update_portfolio_values({"agent_0": 8_500.0})  # 15% drawdown
 
-        triggered = rm.check_max_drawdown(
-            agent_id="agent_0",
-            peak_value=10_000.0,
-            current_value=8_500.0,
-        )
+        triggered = rm.check_max_drawdown("agent_0", 10_000.0, 8_500.0)
 
         assert triggered is True
         assert any(r.event == "drawdown_alert" for r in alerter.alert_history), \

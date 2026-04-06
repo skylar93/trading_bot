@@ -39,7 +39,7 @@ class TestTrailingStopHWM:
         rm.update_trailing_stop("BTC", 100.0)
         rm.update_trailing_stop("BTC", 110.0)
         rm.update_trailing_stop("BTC", 105.0)
-        assert rm._trailing_hwm["BTC"] == 110.0
+        assert rm.position_highest_values["_default_BTC"] == 110.0
 
 
 class TestPortfolioVaR:
