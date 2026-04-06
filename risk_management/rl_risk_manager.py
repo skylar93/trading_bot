@@ -214,10 +214,12 @@ class RLRiskManager(RiskManagerBase):
         return False
     
     def update_trailing_stop(self, symbol: str, current_price: float) -> None:
-        """Update trailing stop high-water-mark for a symbol."""
-        if not hasattr(self, "position_highest_values"):
-            self.position_highest_values = {}
-        key = symbol  # simple key when no agent_id context
+        """Update trailing stop high-water-mark for a symbol.
+
+        Uses position_highest_values with key format matching check_trailing_stop().
+        When called without agent_id context, uses "_default_{symbol}" as key.
+        """
+        key = f"_default_{symbol}"
         if key not in self.position_highest_values or current_price > self.position_highest_values[key]:
             self.position_highest_values[key] = current_price
     
@@ -396,9 +398,7 @@ class RLRiskManager(RiskManagerBase):
         Returns:
             Optional[pd.DataFrame]: Correlation matrix or None if not available
         """
-        if hasattr(self, "correlation_matrix"):
-            return self.correlation_matrix
-        return None
+        return self.correlation_matrix
     
     def get_correlation_adjustment(self, asset1: str, asset2_or_positions: Union[str, Dict[str, float]]) -> float:
         """
@@ -422,9 +422,9 @@ class RLRiskManager(RiskManagerBase):
             return 1.0
             
         # Check if correlation matrix exists
-        if not hasattr(self, "correlation_matrix") or self.correlation_matrix is None:
+        if self.correlation_matrix is None:
             return 1.0
-            
+
         # Old interface: asset and position sizes dictionary
         if isinstance(asset2_or_positions, dict):
             # Count how many highly correlated assets we have positions in
@@ -439,16 +439,14 @@ class RLRiskManager(RiskManagerBase):
                     
             # If we have positions in correlated assets, reduce position size
             if correlated_assets > 0:
-                if hasattr(self, "correlation_adjustment_events"):
-                    self.correlation_adjustment_events += 1
+                self.correlation_adjustment_events += 1
                 return self.config.correlation_risk_reduction
             return 1.0
-        
+
         # New interface: two asset names
         # Check if correlation is above threshold
         if self._check_correlation(asset1, asset2_or_positions):
-            if hasattr(self, "correlation_adjustment_events"):
-                self.correlation_adjustment_events += 1
+            self.correlation_adjustment_events += 1
             return self.config.correlation_risk_reduction
         return 1.0
     
@@ -463,9 +461,9 @@ class RLRiskManager(RiskManagerBase):
         Returns:
             bool: True if correlation exceeds threshold, False otherwise
         """
-        if not hasattr(self, "correlation_matrix") or self.correlation_matrix is None:
+        if self.correlation_matrix is None:
             return False
-            
+
         if asset1 not in self.correlation_matrix.index or asset2 not in self.correlation_matrix.columns:
             return False
             
@@ -488,8 +486,7 @@ class RLRiskManager(RiskManagerBase):
         drawdown = (self.portfolio_peak_value - self.portfolio_current_value) / self.portfolio_peak_value
         
         if drawdown > self.config.portfolio_stop_loss_threshold:
-            if hasattr(self, "portfolio_stop_loss_events"):
-                self.portfolio_stop_loss_events += 1
+            self.portfolio_stop_loss_events += 1
             return True
             
         return False
@@ -586,8 +583,7 @@ class RLRiskManager(RiskManagerBase):
             
         # Simple implementation for compatibility
         if current_portfolio_return < -self.config.portfolio_var_threshold:
-            if hasattr(self, "portfolio_var_exceed_events"):
-                self.portfolio_var_exceed_events += 1
+            self.portfolio_var_exceed_events += 1
             return True
             
         return False
@@ -600,9 +596,6 @@ class RLRiskManager(RiskManagerBase):
             asset: Asset to update
             price: Current price
         """
-        if not hasattr(self, "asset_prices_history"):
-            self.asset_prices_history = {}
-            
         if asset not in self.asset_prices_history:
             self.asset_prices_history[asset] = deque(maxlen=self.config.correlation_window)
             
@@ -624,10 +617,6 @@ class RLRiskManager(RiskManagerBase):
         """
         if not self.config.use_trailing_stop:
             return False
-            
-        # Initialize tracking for this position if needed
-        if not hasattr(self, "position_highest_values"):
-            self.position_highest_values = {}
             
         position_key = f"{agent_id}_{asset}"
         if position_key not in self.position_highest_values:
@@ -680,13 +669,13 @@ class RLRiskManager(RiskManagerBase):
             dict: Dictionary with risk event counts
         """
         return {
-            "stop_loss_events": getattr(self, "stop_loss_events", 0),
-            "trailing_stop_events": getattr(self, "trailing_stop_events", 0),
-            "var_exceed_events": getattr(self, "var_exceed_events", 0),
-            "forced_liquidation_events": getattr(self, "forced_liquidation_events", 0),
-            "correlation_adjustment_events": getattr(self, "correlation_adjustment_events", 0),
-            "portfolio_stop_loss_events": getattr(self, "portfolio_stop_loss_events", 0),
-            "portfolio_var_exceed_events": getattr(self, "portfolio_var_exceed_events", 0)
+            "stop_loss_events": self.stop_loss_events,
+            "trailing_stop_events": self.trailing_stop_events,
+            "var_exceed_events": self.var_exceed_events,
+            "forced_liquidation_events": self.forced_liquidation_events,
+            "correlation_adjustment_events": self.correlation_adjustment_events,
+            "portfolio_stop_loss_events": self.portfolio_stop_loss_events,
+            "portfolio_var_exceed_events": self.portfolio_var_exceed_events,
         }
     
     def check_max_drawdown(self, agent_id_or_peak, peak_value=None, current_value=None) -> bool:
@@ -742,8 +731,7 @@ class RLRiskManager(RiskManagerBase):
                     self.liquidation_triggered[agent_id] = False
                 if not self.liquidation_triggered[agent_id]:
                     self.liquidation_triggered[agent_id] = True
-                    if hasattr(self, "forced_liquidation_events"):
-                        self.forced_liquidation_events += 1
+                    self.forced_liquidation_events += 1
             return True
 
         return False
@@ -787,7 +775,7 @@ class RLRiskManager(RiskManagerBase):
         var_value = None
         
         # Try to calculate VaR from returns history
-        if hasattr(self, "returns_history") and agent_id in self.returns_history:
+        if agent_id in self.returns_history:
             returns = np.array(list(self.returns_history[agent_id]))
             if len(returns) >= 10:
                 var_value = self.calculate_var(returns)
@@ -797,8 +785,7 @@ class RLRiskManager(RiskManagerBase):
 
         # VaR is exceeded if the current loss (negative return) is greater than VaR
         if current_return < -var_value:
-            if hasattr(self, "var_exceed_events"):
-                self.var_exceed_events += 1
+            self.var_exceed_events += 1
             return self.config.action_on_var_exceed
 
         return None

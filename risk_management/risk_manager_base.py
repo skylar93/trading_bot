@@ -79,14 +79,14 @@ class RiskManagerBase(ABC):
         pass
     
     @abstractmethod
-    def check_max_drawdown(self, peak_value: float, current_value: float) -> bool:
+    def check_max_drawdown(self, *args, **kwargs) -> bool:
         """
         Check if maximum drawdown has been exceeded.
-        
-        Args:
-            peak_value: Historical peak portfolio value
-            current_value: Current portfolio value
-            
+
+        Implementations may accept different signatures:
+        - BacktestingRiskManager: (peak_value: float, current_value: float)
+        - RLRiskManager: (agent_id_or_peak, peak_value=None, current_value=None)
+
         Returns:
             bool: True if max drawdown exceeded, False otherwise
         """
@@ -110,14 +110,15 @@ class RiskManagerBase(ABC):
         pass
     
     @abstractmethod
-    def check_stop_loss(self, symbol: str, current_price: float) -> bool:
+    def check_stop_loss(self, *args, **kwargs) -> bool:
         """
-        Check if stop loss has been triggered for the given symbol.
-        
-        Args:
-            symbol: The symbol/asset to check
-            current_price: The current price of the asset
-            
+        Check if stop loss has been triggered.
+
+        Implementations may accept different signatures:
+        - BacktestingRiskManager: (symbol: str, current_price: float)
+        - RLRiskManager: (agent_id: str, position_size: float,
+                          entry_price: float, current_price: float)
+
         Returns:
             bool: True if stop loss triggered, False otherwise
         """
@@ -135,15 +136,13 @@ class RiskManagerBase(ABC):
         pass
     
     @abstractmethod
-    def calculate_var(self, returns: np.ndarray) -> float:
+    def calculate_var(self, *args, **kwargs) -> Optional[float]:
         """
-        Calculate Value at Risk (VaR) based on historical returns.
-        
-        Args:
-            returns: Array of historical returns
-            
-        Returns:
-            float: Value at Risk at the configured confidence level
+        Calculate Value at Risk (VaR).
+
+        Implementations:
+        - BacktestingRiskManager: (returns: pd.Series, confidence: float) -> float
+        - RLRiskManager: (agent_id_or_returns: Union[str, np.ndarray]) -> Optional[float]
         """
         pass
     

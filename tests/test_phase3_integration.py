@@ -847,11 +847,7 @@ class TestOrphanComponentIntegration:
         rm.update_portfolio_values({"agent_0": 10_000.0})
         rm.update_portfolio_values({"agent_0": 8_500.0})  # 15% drawdown
 
-        triggered = rm.check_max_drawdown(
-            agent_id="agent_0",
-            peak_value=10_000.0,
-            current_value=8_500.0,
-        )
+        triggered = rm.check_max_drawdown("agent_0", 10_000.0, 8_500.0)
 
         assert triggered is True
         assert any(r.event == "drawdown_alert" for r in alerter.alert_history), \

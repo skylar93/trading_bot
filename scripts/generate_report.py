@@ -17,11 +17,13 @@ Plotly 차트가 embedded되어 있어 인터넷 연결 없이도 열람 가능�
     5. Risk Analysis (drawdown, CVaR 분포)
 """
 
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import argparse
 import json
 import logging
-import os
-import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -32,8 +34,6 @@ import pandas as pd
 from training.analysis.statistical_tests import StrategyStatisticalTests
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
 logger = logging.getLogger(__name__)
 
