@@ -70,13 +70,31 @@ except ImportError:
                     self.meta_agent_id = agent_id
 
             self.agent_performance = {agent_id: {"weight": 1.0, "returns": []} for agent_id in self.agents}
-            self.action_correlation = {agent_id: {} for agent_id in self.agents}
-            self.recent_actions = {agent_id: [] for agent_id in self.agents}
+            non_meta = [aid for aid in self.agents if aid != self.meta_agent_id]
+            self.action_correlation = {
+                aid: {oid: 0.0 for oid in non_meta if oid != aid}
+                for aid in non_meta
+            }
+            self.recent_actions = {agent_id: [] for agent_id in non_meta}
             self.synergy_score = 0.5
             
         def act(self, observations, deterministic=False):
-            return {agent_id: agent.get_action(observations[agent_id], deterministic) 
-                   for agent_id, agent in self.agents.items()}
+            individual = {}
+            for agent_id, agent in self.agents.items():
+                if agent_id == self.meta_agent_id:
+                    continue
+                obs = observations.get(agent_id, next(iter(observations.values())))
+                individual[agent_id] = agent.get_action(obs, deterministic)
+            if self.ensemble_method in ("weighted", "best"):
+                weights = {aid: self.agent_performance.get(aid, {}).get("weight", 1.0) for aid in individual}
+                if self.ensemble_method == "best":
+                    best = max(weights, key=weights.get)
+                    ensemble = individual[best]
+                else:
+                    total = sum(weights.values()) or 1.0
+                    ensemble = sum((weights[aid] / total) * act for aid, act in individual.items())
+                return {aid: ensemble for aid in individual}
+            return individual
                    
         def train_step(self, experiences):
             return {agent_id: {"loss": 0.0} for agent_id in self.agents}
@@ -85,7 +103,12 @@ except ImportError:
             pass
             
         def _update_weights_based_on_performance(self, returns):
-            pass
+            for agent_id, ret in returns.items():
+                if agent_id in self.agent_performance:
+                    self.agent_performance[agent_id]["returns"].append(ret)
+                    current = self.agent_performance[agent_id]["weight"]
+                    adjustment = 0.1 * (1 if ret > 0 else -1)
+                    self.agent_performance[agent_id]["weight"] = max(0.1, current + adjustment)
             
         def _identify_market_regime(self, state):
             return "ranging"

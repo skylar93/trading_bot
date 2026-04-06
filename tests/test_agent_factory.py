@@ -186,10 +186,10 @@ def test_agent_behavior_differentiation():
         # Set close price to show an uptrend
         trend_obs[i, 3] = i / 10.0  # Increasing close prices
     
-    # Get predictions
-    momentum_trend_action = momentum.predict(trend_obs)
-    mean_reversion_trend_action = mean_reversion.predict(trend_obs)
-    
+    # Get predictions (SB3-compatible: returns (action, state) tuple)
+    momentum_trend_action, _ = momentum.predict(trend_obs)
+    mean_reversion_trend_action, _ = mean_reversion.predict(trend_obs)
+
     # We can't guarantee exact behavior without training, but we can check
     # that the agents return valid actions
     assert isinstance(momentum_trend_action, np.ndarray)
@@ -262,8 +262,8 @@ def test_agent_state_initialization():
     
     # Test with an observation matching the space
     obs = np.random.uniform(-10, 10, (10, 5)).astype(np.float32)
-    action = agent.predict(obs)
-    
+    action, _ = agent.predict(obs)
+
     # Check that action is a valid numpy array
     # Note: We can't guarantee exact bounds without training the agent
     # The action might be outside the specified bounds initially

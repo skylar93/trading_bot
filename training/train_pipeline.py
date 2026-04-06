@@ -879,9 +879,28 @@ def train_pipeline(config: Dict[str, Any], data: Optional[pd.DataFrame] = None) 
         logger.info(f"Starting single agent training for environment type: {env_type}")
         results = train_single_agent(agent, env, config, mlflow_manager, eval_data=eval_data_split)
     elif env_type == "multi_agent_rl" or env_type == "multi_asset_multi_agent_rl":
-        # Multi-agent training
+        # Multi-agent training — create per-agent instances first
         logger.info(f"Starting multi-agent training for environment type: {env_type}")
-        results = train_multi_agent(env, config, mlflow_manager)
+        multi_agent_configs = config.get("env", {}).get("multi_agent_configs", [])
+        agents_dict = {}
+        for _acfg in multi_agent_configs:
+            _aid = _acfg.get("id", f"agent_{len(agents_dict)}")
+            _atype = _acfg.get("agent_type", _acfg.get("type", "ppo"))
+            _astrat = _acfg.get("strategy", None)
+            _obs_sp = (env.observation_space[_aid]
+                       if isinstance(env.observation_space, dict) and _aid in env.observation_space
+                       else env.observation_space)
+            _act_sp = (env.action_space[_aid]
+                       if isinstance(env.action_space, dict) and _aid in env.action_space
+                       else env.action_space)
+            agents_dict[_aid] = create_agent(
+                agent_type=_atype,
+                strategy=_astrat,
+                config=_acfg,
+                observation_space=_obs_sp,
+                action_space=_act_sp,
+            )
+        results = train_multi_agent(agents_dict, env, config, mlflow_manager)
     else:
         raise ValueError(f"Unsupported environment type: {env_type}")
     

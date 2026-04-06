@@ -246,7 +246,19 @@ class MomentumPPOAgent(PPOAgent):
         # Convert DataFrame to numpy if needed
         if isinstance(state, pd.DataFrame):
             state = state.to_numpy()
-        
+
+        # Handle 1D flattened input from backtester
+        if isinstance(state, np.ndarray) and state.ndim == 1:
+            n_features = self.original_obs_space.shape[1] if hasattr(self, 'original_obs_space') else 5
+            window = self.original_obs_space.shape[0] if hasattr(self, 'original_obs_space') else max(1, len(state) // n_features)
+            if len(state) >= window * n_features:
+                state = state[:window * n_features].reshape(window, n_features)
+            elif len(state) >= n_features:
+                actual_window = len(state) // n_features
+                state = state[:actual_window * n_features].reshape(actual_window, n_features)
+            else:
+                state = state.reshape(1, -1)
+
         # Calculate momentum features
         momentum_features = self._calculate_momentum_features(state)
         
@@ -304,13 +316,12 @@ class MomentumPPOAgent(PPOAgent):
         # Handle any NaN/inf values and clip
         action = np.nan_to_num(action, nan=0.0, posinf=1.0, neginf=-1.0)
         action = np.clip(action, -1.0, 1.0)
-        
-        # Ensure action is a numpy array with shape (1,)
-        if isinstance(action, (float, np.float32, np.float64)):
-            action = np.array([action], dtype=np.float32)
-        elif isinstance(action, np.ndarray) and action.shape != (1,):
-            action = action.reshape(1)
-        
+
+        # Reshape to match action_space
+        target_shape = self.action_space.shape if hasattr(self, 'action_space') and self.action_space is not None else (1,)
+        scalar = float(action.flat[0]) if isinstance(action, np.ndarray) else float(action)
+        action = np.full(target_shape, scalar, dtype=np.float32)
+
         return action
     
     def train_step(self, state: np.ndarray, action: np.ndarray, 

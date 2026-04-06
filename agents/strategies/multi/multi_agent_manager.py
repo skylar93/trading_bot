@@ -171,24 +171,19 @@ class MultiAgentManager:
             
             # Create the agent
             logger.info(f"Creating agent {agent_id} with strategy {config.get('strategy', agent_type)}")
-            self.agents[agent_id] = create_agent(
+            agent = create_agent(
                 agent_type=config.get("strategy", agent_type),  # Use 'strategy' field if available
                 config=config,
                 observation_space=observation_space,
                 action_space=action_space
             )
-        
-        # Initialize action correlation matrix
-        self.action_correlation = {
-            agent_id: {other_id: 0.0 for other_id in self.agents 
-                       if other_id != agent_id and other_id != self.meta_agent_id}
-            for agent_id in self.agents if agent_id != self.meta_agent_id
-        }
-        
-        # Recent actions for correlation calculation
-        self.recent_actions = {
-            agent_id: [] for agent_id in self.agents if agent_id != self.meta_agent_id
-        }
+            if agent is None:
+                logger.warning(f"Failed to create agent {agent_id}, skipping")
+                continue
+            self.agents[agent_id] = agent
+
+        # Initialize action correlation matrix and recent actions
+        self._rebuild_correlation_matrix()
         
         # Track hidden states from sub-agents
         self.hidden_states = {
@@ -198,6 +193,17 @@ class MultiAgentManager:
         # Hidden state dimensions for each agent (to be populated dynamically)
         self.hidden_dim = {
             agent_id: 0 for agent_id in self.agents if agent_id != self.meta_agent_id
+        }
+
+    def _rebuild_correlation_matrix(self):
+        """Rebuild action_correlation dict from current self.agents."""
+        non_meta = [aid for aid in self.agents if aid != self.meta_agent_id]
+        self.action_correlation = {
+            aid: {oid: 0.0 for oid in non_meta if oid != aid}
+            for aid in non_meta
+        }
+        self.recent_actions = {
+            aid: [] for aid in non_meta
         }
 
     def act(self, observations: Dict[str, np.ndarray], deterministic: bool = False) -> Dict[str, np.ndarray]:

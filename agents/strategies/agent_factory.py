@@ -64,13 +64,17 @@ class DummyAgent:
 
     def get_action(self, observation=None, deterministic=False, eval_mode=False, **kwargs):
         if self.action_space is not None:
+            if isinstance(self.action_space, dict):
+                # dict action_space (multi-agent env): sample from first available space
+                first_space = next(iter(self.action_space.values()))
+                return first_space.sample()
             return self.action_space.sample()
         return np.zeros(1, dtype=np.float32)
 
     def predict(self, observation, deterministic=False, **kwargs):
-        """Return action as np.ndarray (SB3-compatible wrapper also sets state=None)."""
+        """SB3-compatible predict: returns (action, state) tuple."""
         action = self.get_action(observation, deterministic)
-        return action
+        return action, None
 
     def train_step(self, state=None, action=None, reward=None,
                    next_state=None, done=None, info=None, experience=None):
