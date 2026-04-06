@@ -575,7 +575,7 @@ def main() -> None:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--asset",       default="BTCUSDT",  help="심볼 (e.g. BTCUSDT, ETH/USDT)")
-    parser.add_argument("--period",      default="1y",       choices=list(PERIOD_MAP), help="수집 기간")
+    parser.add_argument("--period",      default="1y",       help="수집 기간 (e.g. 1d, 1w, 1m, 3m, 6m, 1y, 2y, 30d)")
     parser.add_argument("--interval",    default="1h",       choices=list(CCXT_TIMEFRAME_MAP), help="봉 단위")
     parser.add_argument("--exchange",    default="binance",  help="CCXT 거래소 ID")
     parser.add_argument("--cross-assets", action="store_true", help="SPY, DXY, VIX, Gold, US10Y 수집")

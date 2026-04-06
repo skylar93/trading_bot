@@ -154,6 +154,8 @@ class BacktestingRiskManager(RiskManagerBase):
         self._correlation_matrix = None
         self._asset_returns = {}
         self._last_correlation_update = None
+        self._asset_returns_df = None
+        self._asset_stds = None
 
     def reset(self):
         """Reset all internal state."""
@@ -170,6 +172,8 @@ class BacktestingRiskManager(RiskManagerBase):
         self._correlation_matrix = None
         self._asset_returns = {}
         self._last_correlation_update = None
+        self._asset_returns_df = None
+        self._asset_stds = None
 
     def check_max_drawdown(self, peak_value: float, current_value: float) -> bool:
         """
@@ -442,7 +446,7 @@ class BacktestingRiskManager(RiskManagerBase):
             position_size *= vol_scalar
             
         # Adjust for correlation if applicable
-        if current_positions and asset_name and hasattr(self, '_correlation_matrix') and self._correlation_matrix is not None:
+        if current_positions and asset_name and self._correlation_matrix is not None:
             # Apply simple correlation-based adjustment
             for other_asset, pos_value in current_positions.items():
                 if not self.check_correlation_limits(asset_name, other_asset):
@@ -487,7 +491,7 @@ class BacktestingRiskManager(RiskManagerBase):
         Returns:
             bool: True if correlation is within limits, False otherwise
         """
-        if not hasattr(self, '_correlation_matrix') or self._correlation_matrix is None:
+        if self._correlation_matrix is None:
             return True
             
         if asset1 not in self._correlation_matrix.index or asset2 not in self._correlation_matrix.columns:
@@ -542,9 +546,7 @@ class BacktestingRiskManager(RiskManagerBase):
             return 0.0
 
         # Find active assets that have return history
-        has_returns = (
-            hasattr(self, "_asset_returns_df") and self._asset_returns_df is not None
-        )
+        has_returns = self._asset_returns_df is not None
         active = [
             a for a, pos in positions.items()
             if abs(pos.get("units", 0) * prices.get(a, 0)) > 1e-8
@@ -560,7 +562,7 @@ class BacktestingRiskManager(RiskManagerBase):
         # Single-asset or no history: use per-asset std from stored data
         if len(available) == 1:
             asset = available[0]
-            if hasattr(self, "_asset_stds") and asset in self._asset_stds.index:
+            if self._asset_stds is not None and asset in self._asset_stds.index:
                 std = float(self._asset_stds[asset])
                 return max(0.0, -norm.ppf(1 - self.config.var_confidence_level) * std)
             return 0.0
@@ -878,7 +880,7 @@ class BacktestingRiskManager(RiskManagerBase):
                 self.logger.info(f"Removed stop loss for {asset} (position closed)")
         
         # Update correlation matrix if we have price data
-        if hasattr(self, '_last_correlation_update') and self._last_correlation_update is not None:
+        if self._last_correlation_update is not None:
             days_since_update = (timestamp - self._last_correlation_update).days
             if days_since_update >= 7:  # Update weekly
                 self.logger.info("Updating correlation matrix (weekly)")
@@ -1100,7 +1102,7 @@ class BacktestingRiskManager(RiskManagerBase):
         Returns:
             bool: True if trade is allowed, False if max drawdown exceeded
         """
-        if self.peak_value is None or not hasattr(self, 'current_value'):
+        if self.peak_value is None or self.current_value is None:
             return True
             
         current_drawdown = (self.peak_value - self.current_value) / self.peak_value
