@@ -20,6 +20,14 @@ docker/
 
 # Ignore any sensitive files
 .env
+secrets.json
+~/.trading_bot/
+
+# State and audit data (runtime-generated, never commit)
+state/
+*.db
+audit_log/
+audit_logs/
 
 # Test and coverage files
 .coverage

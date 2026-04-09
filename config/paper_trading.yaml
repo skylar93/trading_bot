@@ -12,9 +12,12 @@ paper_trading:
   poll_interval_seconds: 5.0       # Live price polling interval
   daily_report_interval: 86400     # Seconds between daily reports (86400 = 1 day)
 
-  # Exchange API credentials (leave empty for simulation mode)
-  api_key: ""
-  api_secret: ""
+  # Exchange API credentials — resolved via SecretProvider at runtime.
+  # Set EXCHANGE_BINANCE_KEY / EXCHANGE_BINANCE_SECRET env vars (or equivalent
+  # for the chosen backend).  Leave both _ref fields empty to run in
+  # simulation mode (no live exchange connection).
+  api_key_ref: "EXCHANGE_BINANCE_KEY"
+  api_secret_ref: "EXCHANGE_BINANCE_SECRET"
 
 # Agent to run
 agent:
