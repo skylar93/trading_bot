@@ -30,6 +30,7 @@ import numpy as np
 from deployment.execution.order_manager import OrderManager
 from deployment.execution.position_tracker import PositionTracker
 from deployment.monitoring.alerter import TradingAlerter
+from deployment.monitoring.metrics_exporter import MetricsExporter
 from training.monitoring.drift_detector import DriftDetector
 
 logger = logging.getLogger(__name__)
@@ -160,6 +161,8 @@ class PaperTrader:
         self.alerter = alerter
         self.drift_detector = drift_detector
         self.order_manager = order_manager
+        monitoring_config = config.get("monitoring", {})
+        self.metrics_exporter = MetricsExporter(monitoring_config)
         self.risk_manager = risk_manager
 
         pt = config.get("paper_trading", config)
@@ -535,6 +538,21 @@ class PaperTrader:
             self.mlflow_manager.log_metric("balance", self.state.balance, step=self.state.step)
         except Exception as e:
             logger.debug("MLflow step logging failed: %s", e)
+
+        # Export to metrics exporter
+        if self.metrics_exporter is not None:
+            pv = self.state.portfolio_history[-1] if self.state.portfolio_history else self.initial_balance
+            peak = self.state.peak_portfolio_value
+            dd = (peak - pv) / peak if peak > 0 else 0.0
+            self.metrics_exporter.update(
+                portfolio_value=pv,
+                cash=self.state.balance,
+                position=self.state.position,
+                drawdown_pct=dd,
+                num_trades=len(self.state.trades),
+                drift_detected=self.drift_detector.drift_detected if self.drift_detector else False,
+                alerts_fired=len(self.alerter.alert_history) if self.alerter else 0,
+            )
 
     def _log_final_report(self, report: Dict[str, Any]) -> None:
         try:
