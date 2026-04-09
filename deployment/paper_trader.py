@@ -269,6 +269,7 @@ class PaperTrader:
                 "win_rate": 0.0,
                 "avg_trade_pnl": 0.0,
                 "total_fees": 0.0,
+                "avg_fill_slippage": 0.0,
             }
 
         values = np.array(history, dtype=float)
