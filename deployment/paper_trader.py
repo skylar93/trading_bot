@@ -31,6 +31,7 @@ from deployment.execution.order_manager import OrderManager
 from deployment.execution.position_tracker import PositionTracker
 from deployment.monitoring.alerter import TradingAlerter
 from deployment.monitoring.metrics_exporter import MetricsExporter
+from deployment.persistence.state_store import StateStore
 from training.monitoring.drift_detector import DriftDetector
 
 logger = logging.getLogger(__name__)
@@ -119,6 +120,80 @@ class TradingState:
     def portfolio_value(self) -> float:
         return self.pos.portfolio_value
 
+    # ------------------------------------------------------------------
+    # Serialisation (Phase 6 Week 56 — S5)
+    # ------------------------------------------------------------------
+
+    def to_dict(self, symbol: str = "DEFAULT") -> Dict[str, Any]:
+        """Serialise to a JSON-safe dict for StateStore.
+
+        datetime → ISO string. NaN/inf is rejected at the StateStore layer.
+        """
+        import math as _math
+        snap = self.pos.snapshot()
+        for k, v in snap.items():
+            if isinstance(v, float) and not _math.isfinite(v):
+                raise ValueError(f"TradingState contains non-finite value '{k}': {v}")
+        return {
+            "symbol": symbol,
+            "position": snap["position"],
+            "entry_price": snap["entry_price"],
+            "cash": snap["cash"],
+            "current_price": snap["current_price"],
+            "peak_value": snap["peak_value"],
+            "equity": snap["cash"] + snap["position"] * snap["current_price"],
+            "step": self.step,
+            "shutdown_triggered": self.shutdown_triggered,
+            "shutdown_reason": self.shutdown_reason,
+            "portfolio_history": list(self.portfolio_history),
+            "trades": [
+                {
+                    "timestamp": t.timestamp.isoformat(),
+                    "side": t.side,
+                    "price": t.price,
+                    "quantity": t.quantity,
+                    "fee": t.fee,
+                    "pnl": t.pnl,
+                }
+                for t in self.trades
+            ],
+            "orders": [],
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "TradingState":
+        """Reconstruct from a dict produced by ``to_dict``."""
+        pos = PositionTracker(initial_cash=float(data.get("cash", 0.0)))
+        pos.restore(
+            {
+                "position": float(data.get("position", 0.0)),
+                "entry_price": float(data.get("entry_price", 0.0)),
+                "cash": float(data.get("cash", 0.0)),
+                "current_price": float(data.get("current_price", 0.0)),
+                "peak_value": float(data.get("peak_value", data.get("cash", 0.0))),
+            }
+        )
+        st = cls(pos=pos)
+        st.step = int(data.get("step", 0))
+        st.shutdown_triggered = bool(data.get("shutdown_triggered", False))
+        st.shutdown_reason = str(data.get("shutdown_reason", ""))
+        st.portfolio_history = deque(
+            [float(v) for v in data.get("portfolio_history", [])],
+            maxlen=100_000,
+        )
+        st.trades = [
+            Trade(
+                timestamp=datetime.fromisoformat(t["timestamp"]),
+                side=t["side"],
+                price=float(t["price"]),
+                quantity=float(t["quantity"]),
+                fee=float(t["fee"]),
+                pnl=float(t.get("pnl", 0.0)),
+            )
+            for t in data.get("trades", [])
+        ]
+        return st
+
 
 # ---------------------------------------------------------------------------
 # PaperTrader
@@ -153,6 +228,7 @@ class PaperTrader:
         drift_detector: Optional[DriftDetector] = None,
         order_manager: Optional[OrderManager] = None,
         risk_manager=None,
+        state_store: Optional[StateStore] = None,
     ) -> None:
         self.agent = agent
         self.config = config
@@ -185,6 +261,18 @@ class PaperTrader:
         self.state = TradingState(
             pos=PositionTracker(initial_cash=self.initial_balance),
         )
+
+        # Phase 6 Week 56 (S2/S6): optional state persistence.
+        # Either pass a StateStore directly, or include a `persistence` block
+        # in config: {enabled: bool, db_path: str, checkpoint_every_n_steps: int}.
+        self.state_store = state_store
+        persist_cfg = config.get("persistence", {}) or {}
+        self._checkpoint_every_n_steps: int = int(
+            persist_cfg.get("checkpoint_every_n_steps", 1)
+        )
+        if self.state_store is None and persist_cfg.get("enabled", False):
+            db_path = persist_cfg.get("db_path", "./state/paper_trader.db")
+            self.state_store = StateStore(db_path)
 
         if not simulation_mode:
             self._exchange = self._init_exchange(pt)
@@ -224,7 +312,8 @@ class PaperTrader:
         Final performance report dict.
         """
         start_time = time.time()
-        step = 0
+        step = self.state.step
+        _restored_log_pending = getattr(self, "_restored_from_checkpoint", False)
 
         for price in self._price_iterator(price_stream):
             if self.state.shutdown_triggered:
@@ -233,6 +322,14 @@ class PaperTrader:
                 break
 
             self._update_price(price)
+
+            if _restored_log_pending:
+                logger.info(
+                    "restored: resuming PaperTrader at step=%d price=%.4f",
+                    self.state.step, price,
+                )
+                _restored_log_pending = False
+                self._restored_from_checkpoint = False
 
             obs = self._build_observation()
             if obs is None:
@@ -250,6 +347,13 @@ class PaperTrader:
 
             if self.mlflow_manager:
                 self._log_step_metrics(price)
+
+            # Phase 6 Week 56 (S2): crash-recovery checkpoint.
+            if self.state_store is not None and (
+                self._checkpoint_every_n_steps <= 1
+                or step % self._checkpoint_every_n_steps == 0
+            ):
+                self._checkpoint()
 
         return self.generate_report()
 
@@ -311,6 +415,61 @@ class PaperTrader:
             self._log_final_report(report)
 
         return report
+
+    # ------------------------------------------------------------------
+    # Phase 6 Week 56: StateStore-backed checkpoint / restore
+    # ------------------------------------------------------------------
+
+    def _checkpoint(self) -> None:
+        """Persist current TradingState to the configured StateStore.
+
+        Runs under the PositionTracker lock so the snapshot is consistent
+        with concurrent price-feed mutations.
+        """
+        if self.state_store is None:
+            return
+        try:
+            with self.state.pos._lock:
+                snap = self.state.to_dict(symbol=self.symbol)
+            self.state_store.save_snapshot(snap)
+        except Exception as e:
+            logger.warning("State checkpoint failed: %s", e)
+
+    @classmethod
+    def restore(
+        cls,
+        state_store: StateStore,
+        agent,
+        config: Dict[str, Any],
+        **kwargs: Any,
+    ) -> "PaperTrader":
+        """Construct a PaperTrader and restore TradingState from ``state_store``.
+
+        Any kwargs are forwarded to ``__init__``. If no snapshot is found, a
+        fresh trader is returned (caller can detect via ``trader.state.step == 0``).
+        """
+        kwargs.pop("state_store", None)
+        trader = cls(agent, config, state_store=state_store, **kwargs)
+        snap = state_store.load_latest()
+        if snap is None:
+            logger.info("StateStore empty; starting fresh PaperTrader")
+            return trader
+        trader.state = TradingState.from_dict(snap)
+        trader._restored_from_checkpoint = True
+        # Rebuild auxiliary buffers used by _build_observation. We do not have
+        # the raw price stream from before the crash, so we seed the price
+        # history window with the last known price so the trader can resume.
+        last_price = trader.state._current_price
+        if last_price > 0:
+            trader._price_history = [last_price] * trader.window_size
+        logger.info(
+            "PaperTrader restored from %s | step=%d cash=%.2f position=%.6f",
+            state_store.db_path,
+            trader.state.step,
+            trader.state.balance,
+            trader.state.position,
+        )
+        return trader
 
     def save_checkpoint(self, path: str) -> None:
         """Save current trading state to disk."""
