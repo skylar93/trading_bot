@@ -816,7 +816,8 @@ class BaseBacktester:
                     'final_balance': self.cash,
                     'final_portfolio_value': self.cash,
                     'successful_trades': 0,
-                    'total_trade_attempts': len(self.trades)
+                    'total_trade_attempts': len(self.trades),
+                    'total_fees': 0.0,
                 }
 
             returns = np.diff(values) / values[:-1]  # returns as decimals
@@ -921,7 +922,8 @@ class BaseBacktester:
                 'final_balance': self.cash,
                 'final_portfolio_value': values[-1],
                 'successful_trades': total_trades,
-                'total_trade_attempts': len(self.trades)
+                'total_trade_attempts': len(self.trades),
+                'total_fees': sum(float(t.get('fee', 0)) for t in self.trades),
             }
             
             # Log the metrics we're returning
@@ -944,7 +946,8 @@ class BaseBacktester:
                 'final_balance': self.cash,
                 'final_portfolio_value': self.cash,
                 'successful_trades': 0,
-                'total_trade_attempts': len(self.trades)
+                'total_trade_attempts': len(self.trades),
+                'total_fees': 0.0,
             }
 
     def get_returns(self) -> pd.Series:
