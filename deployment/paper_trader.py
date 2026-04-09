@@ -180,6 +180,7 @@ class PaperTrader:
 
         self._price_history: List[float] = []
         self._last_report_time: float = time.time()
+        self._slippage_records: List[float] = []  # |fill_price - expected_price| / expected_price
 
         self.state = TradingState(
             pos=PositionTracker(initial_cash=self.initial_balance),
@@ -297,6 +298,10 @@ class PaperTrader:
             "win_rate": float(win_rate),
             "avg_trade_pnl": float(avg_pnl),
             "total_fees": float(total_fees),
+            "avg_fill_slippage": (
+                sum(self._slippage_records) / len(self._slippage_records)
+                if self._slippage_records else 0.0
+            ),
             "steps": self.state.step,
             "generated_at": datetime.utcnow().isoformat(),
         }
@@ -426,6 +431,14 @@ class PaperTrader:
                 order_id = self.order_manager.submit_order("buy", quantity, current_price=price)
                 if self.alerter is not None:
                     self.alerter.notify_trade("buy", quantity, price, order_id=order_id)
+                # Record slippage (for reconciliation)
+                try:
+                    order = self.order_manager.check_order(order_id)
+                    if order and order.avg_fill_price and order.avg_fill_price > 0:
+                        slip = abs(order.avg_fill_price - price) / price
+                        self._slippage_records.append(slip)
+                except Exception:
+                    pass
             except Exception as e:
                 logger.warning("OrderManager buy submission failed: %s", e)
                 logger.error(
@@ -456,6 +469,14 @@ class PaperTrader:
                 order_id = self.order_manager.submit_order("sell", sell_qty, current_price=price)
                 if self.alerter is not None:
                     self.alerter.notify_trade("sell", sell_qty, price, order_id=order_id)
+                # Record slippage (for reconciliation)
+                try:
+                    order = self.order_manager.check_order(order_id)
+                    if order and order.avg_fill_price and order.avg_fill_price > 0:
+                        slip = abs(order.avg_fill_price - price) / price
+                        self._slippage_records.append(slip)
+                except Exception:
+                    pass
             except Exception as e:
                 logger.warning("OrderManager sell submission failed: %s", e)
                 logger.error(
