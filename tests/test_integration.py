@@ -88,6 +88,7 @@ def test_training_to_hyperopt_flow(test_config, sample_data):
     2. Use that as a baseline for hyperopt
     3. Get improved parameters
     """
+    pytest.importorskip("ray", reason="ray not installed")
     with tempfile.TemporaryDirectory() as temp_dir:
         # Update paths to use temp directory
         test_config["paths"]["checkpoint_dir"] = os.path.join(temp_dir, "checkpoints")
