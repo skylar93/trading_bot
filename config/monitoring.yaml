@@ -1,0 +1,20 @@
+# Monitoring configuration
+monitoring:
+  # MetricsExporter settings
+  max_history: 10000          # max snapshots in memory
+  use_prometheus: false        # set true if prometheus_client installed
+  prometheus_port: 9090
+
+  # Dashboard settings
+  dashboard_enabled: true
+  dashboard_port: 8080
+
+  # Alerter settings (already in paper_trading.yaml, duplicated for reference)
+  alert_channels: ["console"]
+  drawdown_alert_threshold: 0.10
+  daily_loss_alert: -500.0
+
+  # Drift detection
+  use_drift_detection: true
+  drift_method: "adwin"        # "adwin" or "page_hinkley"
+  drift_window_size: 500
