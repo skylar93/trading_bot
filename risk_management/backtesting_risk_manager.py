@@ -22,6 +22,7 @@ from typing import Dict, Optional, Any, Union, List, Tuple, Set
 from scipy.stats import norm
 
 from risk_management.risk_manager_base import RiskManagerBase, RiskConfigBase
+from risk_management.unified_risk_manager import UnifiedRiskManager
 
 
 @dataclass
@@ -133,9 +134,18 @@ class BacktestingRiskManager(RiskManagerBase):
         Args:
             config (BacktestingRiskConfig): Risk management configuration
         """
+        import warnings
+        warnings.warn(
+            "BacktestingRiskManager is deprecated and will be removed in a future phase. "
+            "Use UnifiedRiskManager directly or via the factory.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__(config)
         self.config = config
-        
+        # Composition: delegate core risk computations to UnifiedRiskManager
+        self._unified = UnifiedRiskManager(mode="backtest", var_method="historical")
+
         # Initialize tracking variables
         self.trade_counter = {}  # date -> count
         self.position_start_times = {}  # asset -> timestamp
@@ -186,19 +196,18 @@ class BacktestingRiskManager(RiskManagerBase):
         Returns:
             bool: True if max drawdown exceeded, False otherwise
         """
-        if peak_value <= 0:
-            return False
-            
-        drawdown = (peak_value - current_value) / peak_value
-        max_exceeded = drawdown > self.config.max_drawdown_pct
-        
+        # Delegate core computation to UnifiedRiskManager
+        max_exceeded = self._unified.check_drawdown(peak_value, current_value, self.config.max_drawdown_pct)
+
         # If using forced liquidation, also set the flag
         if max_exceeded and self.config.use_forced_liquidation:
             self.liquidation_triggered = True
-            self.logger.warning(
-                f"Max drawdown exceeded: {drawdown:.2%} > {self.config.max_drawdown_pct:.2%}"
-            )
-            
+            if peak_value > 0:
+                drawdown = (peak_value - current_value) / peak_value
+                self.logger.warning(
+                    f"Max drawdown exceeded: {drawdown:.2%} > {self.config.max_drawdown_pct:.2%}"
+                )
+
         return max_exceeded
 
     def calculate_stop_loss(
@@ -493,12 +502,13 @@ class BacktestingRiskManager(RiskManagerBase):
         """
         if self._correlation_matrix is None:
             return True
-            
+
         if asset1 not in self._correlation_matrix.index or asset2 not in self._correlation_matrix.columns:
             return True
-            
-        corr = abs(self._correlation_matrix.loc[asset1, asset2])
-        return bool(corr <= self.config.max_correlation)
+
+        corr = float(self._correlation_matrix.loc[asset1, asset2])
+        # Delegate: check_correlation returns True if limit EXCEEDED; we want True if within limit
+        return not self._unified.check_correlation(corr, self.config.max_correlation)
     
     def calculate_var(self, returns, confidence_level=None):
         """
@@ -513,19 +523,17 @@ class BacktestingRiskManager(RiskManagerBase):
         """
         if isinstance(returns, pd.Series):
             returns = returns.values
-        
-        # Convert returns to numpy array if not already
-        returns = np.array(returns)
-        
+        returns = np.asarray(returns, dtype=float)
+
         if len(returns) < 2:
             return 0.0
-            
+
         # Use provided confidence level or default from config
         cl = confidence_level if confidence_level is not None else self.config.var_confidence_level
-        
-        # Historical VaR: negate left-tail percentile → positive loss amount
-        var = -np.percentile(returns, (1 - cl) * 100)
-        return max(0.0, float(var))
+
+        # Delegate to UnifiedRiskManager (historical VaR for backtesting)
+        result = self._unified.compute_var(returns, confidence_level=cl, var_method="historical")
+        return result if result is not None else 0.0
     
     def get_portfolio_var(self, 
                      portfolio_value: float, 

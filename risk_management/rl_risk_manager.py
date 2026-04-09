@@ -37,6 +37,7 @@ from collections import deque
 from scipy.stats import norm
 
 from risk_management.risk_manager_base import RiskManagerBase, RiskConfigBase
+from risk_management.unified_risk_manager import UnifiedRiskManager
 
 from deployment.monitoring.alerter import TradingAlerter
 
@@ -102,11 +103,21 @@ class RLRiskManager(RiskManagerBase):
             alerter: Optional TradingAlerter for risk event notifications
             audit_logger: Optional AuditLogger for immutable risk event recording
         """
+        import warnings
+        warnings.warn(
+            "RLRiskManager is deprecated and will be removed in a future phase. "
+            "Use UnifiedRiskManager directly or via the factory.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__(config)
         self.config = config
         self.alerter = alerter
         self._audit_logger = audit_logger
         self._lock = threading.Lock()
+        # Composition: delegate core risk computations to UnifiedRiskManager
+        _var_method = "parametric" if config.use_parametric_var else "historical"
+        self._unified = UnifiedRiskManager(mode="live", var_method=_var_method)
         
         # Portfolio tracking
         self.peak_values = {}  # Dict[agent_id, peak_value]
@@ -270,17 +281,13 @@ class RLRiskManager(RiskManagerBase):
         # Check if we have enough data
         if len(returns) < 10:
             return None
-            
-        if self.config.use_parametric_var:
-            # Parametric VaR: -(mean + z_alpha * std), z_alpha < 0 for left tail
-            mean = np.mean(returns)
-            std = np.std(returns)
-            var = -(mean + norm.ppf(1 - self.config.var_confidence_level) * std)
-            return max(0.0, float(var))
-        else:
-            # Historical VaR: negate left-tail percentile → positive loss amount
-            var = -np.percentile(returns, 100 * (1 - self.config.var_confidence_level))
-            return max(0.0, float(var))
+
+        # Delegate VaR computation to UnifiedRiskManager
+        return self._unified.compute_var(
+            returns,
+            confidence_level=self.config.var_confidence_level,
+            var_method="parametric" if self.config.use_parametric_var else "historical",
+        )
     
     def _get_risk_metrics(self) -> Dict[str, Any]:
         """
@@ -484,9 +491,10 @@ class RLRiskManager(RiskManagerBase):
 
         if asset1 not in self.correlation_matrix.index or asset2 not in self.correlation_matrix.columns:
             return False
-            
-        correlation = abs(self.correlation_matrix.loc[asset1, asset2])
-        return correlation > self.config.correlation_threshold
+
+        correlation = float(self.correlation_matrix.loc[asset1, asset2])
+        # Delegate to UnifiedRiskManager
+        return self._unified.check_correlation(correlation, self.config.correlation_threshold)
     
     def _check_portfolio_stop_loss(self) -> bool:
         """
@@ -744,13 +752,12 @@ class RLRiskManager(RiskManagerBase):
         if isinstance(agent_id_or_peak, (int, float)):
             peak = agent_id_or_peak
             current = peak_value  # second positional arg
-            if peak <= 0:
-                return False
-            drawdown = (peak - current) / peak
-            if drawdown > self.config.max_drawdown_pct:
+            breached = self._unified.check_drawdown(peak, current, self.config.max_drawdown_pct)
+            if breached:
                 if self.alerter is not None:
                     self.alerter.check_drawdown(current=current, peak=peak)
                 if self._audit_logger is not None:
+                    drawdown = (peak - current) / peak if peak > 0 else 0.0
                     self._audit_logger.log_risk_event({
                         "event": "drawdown_breach",
                         "agent_id": None,
@@ -759,17 +766,15 @@ class RLRiskManager(RiskManagerBase):
                         "drawdown_pct": drawdown,
                         "threshold_pct": self.config.max_drawdown_pct,
                     })
-            return drawdown > self.config.max_drawdown_pct
+            return breached
 
         # Pattern 2 & 3: string agent_id
         agent_id = agent_id_or_peak
         if peak_value is not None and current_value is not None:
-            if peak_value <= 0:
-                return False
-            drawdown = (peak_value - current_value) / peak_value
-            if drawdown > self.config.max_drawdown_pct and self.alerter is not None:
+            breached = self._unified.check_drawdown(peak_value, current_value, self.config.max_drawdown_pct)
+            if breached and self.alerter is not None:
                 self.alerter.check_drawdown(current=current_value, peak=peak_value)
-            return drawdown > self.config.max_drawdown_pct
+            return breached
 
         # Pattern 3: lookup from stored values
         with self._lock:
@@ -782,22 +787,22 @@ class RLRiskManager(RiskManagerBase):
             if peak <= 0:
                 return False
 
-            drawdown = (peak - current) / peak
+            # Delegate core drawdown check to UnifiedRiskManager
+            breached = self._unified.check_drawdown(peak, current, self.config.max_drawdown_pct)
 
-            if drawdown > self.config.max_drawdown_pct:
-                fired_liquidation = False
+            if breached:
                 if self.config.use_forced_liquidation:
                     if agent_id not in self.liquidation_triggered:
                         self.liquidation_triggered[agent_id] = False
                     if not self.liquidation_triggered[agent_id]:
                         self.liquidation_triggered[agent_id] = True
                         self.forced_liquidation_events += 1
-                        fired_liquidation = True
 
-        if drawdown > self.config.max_drawdown_pct:
+        if breached:
             if self.alerter is not None:
                 self.alerter.check_drawdown(current=current, peak=peak)
             if self._audit_logger is not None:
+                drawdown = (peak - current) / peak if peak > 0 else 0.0
                 self._audit_logger.log_risk_event({
                     "event": "drawdown_breach",
                     "agent_id": agent_id if not isinstance(agent_id_or_peak, (int, float)) else None,
