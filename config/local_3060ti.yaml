@@ -7,6 +7,11 @@ persistence:
   db_path: ./state/paper_trader.db
   checkpoint_every_n_steps: 1
 
+secrets:
+  # Backend: "env" | "keychain" | "file"
+  # Overridable via TRADING_BOT_SECRET_BACKEND env var.
+  backend: "env"
+
 env:
   type: "single_asset_rl"
   window_size: 20
