@@ -93,17 +93,19 @@ class RLRiskManager(RiskManagerBase):
     Also includes correlation-based risk management and portfolio-level controls.
     """
     
-    def __init__(self, config: RLRiskConfig, alerter: Optional[TradingAlerter] = None):
+    def __init__(self, config: RLRiskConfig, alerter: Optional[TradingAlerter] = None, audit_logger=None):
         """
         Initialize the risk manager with the given configuration.
 
         Args:
             config: Risk management configuration
             alerter: Optional TradingAlerter for risk event notifications
+            audit_logger: Optional AuditLogger for immutable risk event recording
         """
         super().__init__(config)
         self.config = config
         self.alerter = alerter
+        self._audit_logger = audit_logger
         self._lock = threading.Lock()
         
         # Portfolio tracking
@@ -213,6 +215,14 @@ class RLRiskManager(RiskManagerBase):
                     f"loss={abs(pct_change):.1%}",
                     level="WARNING",
                 )
+            if self._audit_logger is not None:
+                self._audit_logger.log_risk_event({
+                    "event": "stop_loss",
+                    "agent_id": agent_id,
+                    "entry_price": entry_price,
+                    "current_price": current_price,
+                    "pct_loss": abs(pct_change),
+                })
             return True
 
         return False
@@ -495,10 +505,18 @@ class RLRiskManager(RiskManagerBase):
         
         if drawdown > self.config.portfolio_stop_loss_threshold:
             self.portfolio_stop_loss_events += 1
+            if self._audit_logger is not None:
+                self._audit_logger.log_risk_event({
+                    "event": "portfolio_stop_loss",
+                    "portfolio_peak": self.portfolio_peak_value,
+                    "portfolio_current": self.portfolio_current_value,
+                    "drawdown_pct": drawdown,
+                    "threshold_pct": self.config.portfolio_stop_loss_threshold,
+                })
             return True
-            
+
         return False
-    
+
     def _check_portfolio_trailing_stop(self) -> bool:
         """
         Check if portfolio-wide trailing stop has been triggered.
@@ -655,6 +673,16 @@ class RLRiskManager(RiskManagerBase):
                         f"drop={price_drop:.1%}",
                         level="WARNING",
                     )
+                if self._audit_logger is not None:
+                    self._audit_logger.log_risk_event({
+                        "event": "trailing_stop",
+                        "agent_id": agent_id,
+                        "asset": asset,
+                        "highest_price": highest_price,
+                        "current_price": current_price,
+                        "pct_drop": price_drop,
+                        "direction": "long",
+                    })
                 return True
         else:  # Short position
             price_rise = (current_price - highest_price) / highest_price
@@ -668,6 +696,16 @@ class RLRiskManager(RiskManagerBase):
                         f"rise={price_rise:.1%}",
                         level="WARNING",
                     )
+                if self._audit_logger is not None:
+                    self._audit_logger.log_risk_event({
+                        "event": "trailing_stop",
+                        "agent_id": agent_id,
+                        "asset": asset,
+                        "highest_price": highest_price,
+                        "current_price": current_price,
+                        "pct_rise": price_rise,
+                        "direction": "short",
+                    })
                 return True
 
         return False
@@ -709,8 +747,18 @@ class RLRiskManager(RiskManagerBase):
             if peak <= 0:
                 return False
             drawdown = (peak - current) / peak
-            if drawdown > self.config.max_drawdown_pct and self.alerter is not None:
-                self.alerter.check_drawdown(current=current, peak=peak)
+            if drawdown > self.config.max_drawdown_pct:
+                if self.alerter is not None:
+                    self.alerter.check_drawdown(current=current, peak=peak)
+                if self._audit_logger is not None:
+                    self._audit_logger.log_risk_event({
+                        "event": "drawdown_breach",
+                        "agent_id": None,
+                        "peak": peak,
+                        "current": current,
+                        "drawdown_pct": drawdown,
+                        "threshold_pct": self.config.max_drawdown_pct,
+                    })
             return drawdown > self.config.max_drawdown_pct
 
         # Pattern 2 & 3: string agent_id
@@ -749,10 +797,19 @@ class RLRiskManager(RiskManagerBase):
         if drawdown > self.config.max_drawdown_pct:
             if self.alerter is not None:
                 self.alerter.check_drawdown(current=current, peak=peak)
+            if self._audit_logger is not None:
+                self._audit_logger.log_risk_event({
+                    "event": "drawdown_breach",
+                    "agent_id": agent_id if not isinstance(agent_id_or_peak, (int, float)) else None,
+                    "peak": peak,
+                    "current": current,
+                    "drawdown_pct": drawdown,
+                    "threshold_pct": self.config.max_drawdown_pct,
+                })
             return True
 
         return False
-    
+
     def adjust_for_regime(self, action: float, regime_probs: np.ndarray) -> float:
         """
         Regime 확률에 따라 position sizing을 조정한다.
