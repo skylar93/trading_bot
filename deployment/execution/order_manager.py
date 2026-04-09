@@ -120,6 +120,7 @@ class OrderManager:
             period=float(exchange_config.get("rate_limit_period", 1.0)),
         )
 
+        self._lock = threading.RLock()
         self._orders: Dict[str, Order] = {}
         self._daily_pnl: float = 0.0
         self._last_reset_date: date = date.today()
@@ -180,7 +181,8 @@ class OrderManager:
                         order_type=order_type, limit_price=limit_price,
                         status="failed",
                     )
-                    self._orders[order_id] = order
+                    with self._lock:
+                        self._orders[order_id] = order
                     logger.warning("Order %s rejected: max drawdown exceeded", order_id)
                     return order_id
 
@@ -204,7 +206,8 @@ class OrderManager:
             limit_price=limit_price,
             status="pending",
         )
-        self._orders[order_id] = order
+        with self._lock:
+            self._orders[order_id] = order
 
         try:
             if self.paper_mode:
@@ -220,26 +223,28 @@ class OrderManager:
 
     def check_order(self, order_id: str) -> str:
         """Return current status of an order."""
-        if order_id not in self._orders:
-            logger.warning("check_order: unknown order_id %s", order_id)
-            return "unknown"
-        order = self._orders[order_id]
+        with self._lock:
+            if order_id not in self._orders:
+                logger.warning("check_order: unknown order_id %s", order_id)
+                return "unknown"
+            order = self._orders[order_id]
         if not self.paper_mode and order.status in ("pending", "partial"):
             self._refresh_live_order_status(order)
         return order.status
 
     def cancel_order(self, order_id: str) -> bool:
         """Cancel a pending order. Returns True if successful."""
-        if order_id not in self._orders:
-            logger.warning("cancel_order: unknown order_id %s", order_id)
-            return False
-        order = self._orders[order_id]
-        if order.status in ("filled", "cancelled", "failed"):
-            return False
-        if self.paper_mode:
-            order.status = "cancelled"
-            order.updated_at = datetime.utcnow()
-            return True
+        with self._lock:
+            if order_id not in self._orders:
+                logger.warning("cancel_order: unknown order_id %s", order_id)
+                return False
+            order = self._orders[order_id]
+            if order.status in ("filled", "cancelled", "failed"):
+                return False
+            if self.paper_mode:
+                order.status = "cancelled"
+                order.updated_at = datetime.utcnow()
+                return True
         try:
             self.rate_limiter.acquire()
             self._exchange.cancel_order(order.exchange_order_id, self.symbol)
@@ -345,7 +350,8 @@ class OrderManager:
             order.avg_fill_price = price
             order.fee = fee
             pnl = (price - entry_price) * sell_qty if entry_price > 0 else 0.0
-            self._daily_pnl += (pnl - fee)
+            with self._lock:
+                self._daily_pnl += (pnl - fee)
             self._check_daily_loss_limit()
 
         order.status = "filled"
@@ -417,19 +423,21 @@ class OrderManager:
     # ------------------------------------------------------------------
 
     def _check_daily_loss_limit(self) -> None:
-        if self._daily_pnl <= self.daily_loss_limit:
-            self._halted = True
-            logger.warning(
-                "Daily loss limit reached: pnl=%.2f limit=%.2f. Trading halted.",
-                self._daily_pnl, self.daily_loss_limit,
-            )
+        with self._lock:
+            if self._daily_pnl <= self.daily_loss_limit:
+                self._halted = True
+                logger.warning(
+                    "Daily loss limit reached: pnl=%.2f limit=%.2f. Trading halted.",
+                    self._daily_pnl, self.daily_loss_limit,
+                )
 
     def _reset_daily_pnl_if_needed(self) -> None:
         today = date.today()
-        if today != self._last_reset_date:
-            self._daily_pnl = 0.0
-            self._halted = False
-            self._last_reset_date = today
+        with self._lock:
+            if today != self._last_reset_date:
+                self._daily_pnl = 0.0
+                self._halted = False
+                self._last_reset_date = today
 
     # ------------------------------------------------------------------
     # Exchange init

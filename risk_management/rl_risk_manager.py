@@ -32,6 +32,7 @@ import pandas as pd
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Optional, Any, Union, Set
 import logging
+import threading
 from collections import deque
 from scipy.stats import norm
 
@@ -103,6 +104,7 @@ class RLRiskManager(RiskManagerBase):
         super().__init__(config)
         self.config = config
         self.alerter = alerter
+        self._lock = threading.Lock()
         
         # Portfolio tracking
         self.peak_values = {}  # Dict[agent_id, peak_value]
@@ -134,27 +136,28 @@ class RLRiskManager(RiskManagerBase):
     
     def reset(self):
         """Reset all risk manager state."""
-        self.peak_values = {}
-        self.current_values = {}
-        self.position_highest_values = {}
-        self.liquidation_triggered = {}
-        self.returns_history = {}
-        
-        self.portfolio_peak_value = 0.0
-        self.portfolio_current_value = 0.0
-        
-        self.asset_returns_history = {}
-        self.asset_prices_history = {}
-        self.correlation_matrix = None
-        self.covariance_matrix = None
-        
-        self.stop_loss_events = 0
-        self.trailing_stop_events = 0
-        self.var_exceed_events = 0
-        self.forced_liquidation_events = 0
-        self.correlation_adjustment_events = 0
-        self.portfolio_stop_loss_events = 0
-        self.portfolio_var_exceed_events = 0
+        with self._lock:
+            self.peak_values = {}
+            self.current_values = {}
+            self.position_highest_values = {}
+            self.liquidation_triggered = {}
+            self.returns_history = {}
+
+            self.portfolio_peak_value = 0.0
+            self.portfolio_current_value = 0.0
+
+            self.asset_returns_history = {}
+            self.asset_prices_history = {}
+            self.correlation_matrix = None
+            self.covariance_matrix = None
+
+            self.stop_loss_events = 0
+            self.trailing_stop_events = 0
+            self.var_exceed_events = 0
+            self.forced_liquidation_events = 0
+            self.correlation_adjustment_events = 0
+            self.portfolio_stop_loss_events = 0
+            self.portfolio_var_exceed_events = 0
     
     def calculate_stop_loss(self, entry_price: float, position_size: float, is_long: bool = True) -> float:
         """
@@ -201,7 +204,8 @@ class RLRiskManager(RiskManagerBase):
             loss_exceeded = abs(pct_change) > self.config.stop_loss_threshold
         
         if is_loss and loss_exceeded:
-            self.stop_loss_events += 1
+            with self._lock:
+                self.stop_loss_events += 1
             if self.alerter is not None:
                 self.alerter.send_alert(
                     f"Stop loss triggered for agent '{agent_id}': "
@@ -212,7 +216,7 @@ class RLRiskManager(RiskManagerBase):
             return True
 
         return False
-    
+
     def update_trailing_stop(self, symbol: str, current_price: float) -> None:
         """Update trailing stop high-water-mark for a symbol.
 
@@ -220,8 +224,9 @@ class RLRiskManager(RiskManagerBase):
         When called without agent_id context, uses "_default_{symbol}" as key.
         """
         key = f"_default_{symbol}"
-        if key not in self.position_highest_values or current_price > self.position_highest_values[key]:
-            self.position_highest_values[key] = current_price
+        with self._lock:
+            if key not in self.position_highest_values or current_price > self.position_highest_values[key]:
+                self.position_highest_values[key] = current_price
     
     def calculate_var(self, agent_id_or_returns: Union[str, np.ndarray]) -> Optional[float]:
         """
@@ -287,27 +292,28 @@ class RLRiskManager(RiskManagerBase):
     def update_portfolio_values(self, portfolio_values: Dict[str, float]):
         """
         Update portfolio values for each agent and track peak values.
-        
+
         Args:
             portfolio_values: Dictionary mapping agent_id to portfolio value
         """
-        for agent_id, value in portfolio_values.items():
-            self.current_values[agent_id] = value
-            
-            # Initialize or update peak value
-            if agent_id not in self.peak_values or value > self.peak_values[agent_id]:
-                self.peak_values[agent_id] = value
-                
-            # Initialize liquidation flag if not exists
-            if agent_id not in self.liquidation_triggered:
-                self.liquidation_triggered[agent_id] = False
-        
-        # Update portfolio total value
-        self.portfolio_current_value = sum(portfolio_values.values())
-        
-        # Update portfolio peak value
-        if self.portfolio_peak_value == 0 or self.portfolio_current_value > self.portfolio_peak_value:
-            self.portfolio_peak_value = self.portfolio_current_value
+        with self._lock:
+            for agent_id, value in portfolio_values.items():
+                self.current_values[agent_id] = value
+
+                # Initialize or update peak value
+                if agent_id not in self.peak_values or value > self.peak_values[agent_id]:
+                    self.peak_values[agent_id] = value
+
+                # Initialize liquidation flag if not exists
+                if agent_id not in self.liquidation_triggered:
+                    self.liquidation_triggered[agent_id] = False
+
+            # Update portfolio total value
+            self.portfolio_current_value = sum(portfolio_values.values())
+
+            # Update portfolio peak value
+            if self.portfolio_peak_value == 0 or self.portfolio_current_value > self.portfolio_peak_value:
+                self.portfolio_peak_value = self.portfolio_current_value
     
     # Add other RL-specific risk management methods below
     # (These are methods from the original RiskManager class in envs/risk_manager.py)
@@ -315,41 +321,43 @@ class RLRiskManager(RiskManagerBase):
     def record_returns(self, returns: Dict[str, float]):
         """
         Record returns for VaR calculation.
-        
+
         Args:
             returns: Dictionary mapping agent_id to return value
         """
         if not self.config.use_var:
             return
-            
-        for agent_id, ret in returns.items():
-            if agent_id not in self.returns_history:
-                self.returns_history[agent_id] = deque(maxlen=self.config.rolling_var_window)
-            self.returns_history[agent_id].append(ret)
+
+        with self._lock:
+            for agent_id, ret in returns.items():
+                if agent_id not in self.returns_history:
+                    self.returns_history[agent_id] = deque(maxlen=self.config.rolling_var_window)
+                self.returns_history[agent_id].append(ret)
     
     def _record_asset_data(self, asset_prices: Dict[str, float], asset_returns: Dict[str, float]):
         """
         Record asset prices and returns for correlation and portfolio VaR calculation.
-        
+
         Args:
             asset_prices: Dictionary mapping asset to current price
             asset_returns: Dictionary mapping asset to current return
         """
         if not (self.config.use_correlation or self.config.use_portfolio_var):
             return
-            
-        # Record prices
-        for asset, price in asset_prices.items():
-            if asset not in self.asset_prices_history:
-                self.asset_prices_history[asset] = deque(maxlen=self.config.correlation_window)
-            self.asset_prices_history[asset].append(price)
-            
-        # Record returns
-        for asset, ret in asset_returns.items():
-            if asset not in self.asset_returns_history:
-                self.asset_returns_history[asset] = deque(maxlen=self.config.correlation_window)
-            self.asset_returns_history[asset].append(ret)
-            
+
+        with self._lock:
+            # Record prices
+            for asset, price in asset_prices.items():
+                if asset not in self.asset_prices_history:
+                    self.asset_prices_history[asset] = deque(maxlen=self.config.correlation_window)
+                self.asset_prices_history[asset].append(price)
+
+            # Record returns
+            for asset, ret in asset_returns.items():
+                if asset not in self.asset_returns_history:
+                    self.asset_returns_history[asset] = deque(maxlen=self.config.correlation_window)
+                self.asset_returns_history[asset].append(ret)
+
         # Update correlation and covariance matrices if we have enough data
         self._update_correlation_matrix()
     
@@ -357,35 +365,35 @@ class RLRiskManager(RiskManagerBase):
         """Update correlation and covariance matrices based on asset return histories."""
         if not self.config.use_correlation:
             return
-            
-        # Check if we have enough assets with enough data
-        assets_with_data = [
-            asset for asset, returns in self.asset_returns_history.items()
-            if len(returns) >= 10  # Need at least 10 data points for meaningful correlation
-        ]
-        
-        if len(assets_with_data) < 2:
-            return  # Need at least 2 assets for correlation
-            
-        # Create DataFrame from return histories
-        returns_data = {}
-        
-        # Find minimum length across all assets to ensure equal length arrays
-        min_length = min(len(self.asset_returns_history[asset]) for asset in assets_with_data)
-        
-        for asset in assets_with_data:
-            # Take only the last min_length elements to ensure all arrays have the same length
-            returns_data[asset] = list(self.asset_returns_history[asset])[-min_length:]
-            
-        # Create DataFrame and calculate correlation/covariance matrices
+
+        with self._lock:
+            # Check if we have enough assets with enough data
+            assets_with_data = [
+                asset for asset, returns in self.asset_returns_history.items()
+                if len(returns) >= 10  # Need at least 10 data points for meaningful correlation
+            ]
+
+            if len(assets_with_data) < 2:
+                return  # Need at least 2 assets for correlation
+
+            # Create DataFrame from return histories
+            returns_data = {}
+
+            # Find minimum length across all assets to ensure equal length arrays
+            min_length = min(len(self.asset_returns_history[asset]) for asset in assets_with_data)
+
+            for asset in assets_with_data:
+                # Take only the last min_length elements to ensure all arrays have the same length
+                returns_data[asset] = list(self.asset_returns_history[asset])[-min_length:]
+
+        # Create DataFrame and calculate correlation/covariance matrices (outside lock — CPU-bound)
         try:
             df = pd.DataFrame(returns_data)
-            
-            # Calculate correlation matrix
-            self.correlation_matrix = df.corr()
-            
-            # Calculate covariance matrix for VaR calculation
-            self.covariance_matrix = df.cov()
+            corr = df.corr()
+            cov = df.cov()
+            with self._lock:
+                self.correlation_matrix = corr
+                self.covariance_matrix = cov
         except Exception as e:
             self.logger.error(f"Error calculating correlation matrix: {e}")
             # Keep existing matrices if calculation fails
@@ -538,7 +546,7 @@ class RLRiskManager(RiskManagerBase):
             return max(0.0, float(var))
 
         if len(available) < 2:
-            return 0.02  # not enough history
+            return getattr(self.config, 'portfolio_var_threshold', 0.02)  # not enough history
 
         min_len = min(len(self.asset_returns_history[a]) for a in available)
         returns_matrix = np.column_stack([
@@ -549,7 +557,7 @@ class RLRiskManager(RiskManagerBase):
         pos_values = np.array([abs(position_sizes[a]) * prices.get(a, 1.0) for a in available])
         total_value = pos_values.sum()
         if total_value < 1e-8:
-            return 0.02
+            return getattr(self.config, 'portfolio_var_threshold', 0.02)
         w = pos_values / total_value
 
         if self.config.use_parametric_var:
@@ -617,27 +625,29 @@ class RLRiskManager(RiskManagerBase):
         """
         if not self.config.use_trailing_stop:
             return False
-            
+
         position_key = f"{agent_id}_{asset}"
-        if position_key not in self.position_highest_values:
-            self.position_highest_values[position_key] = current_price
-            return False
-            
-        highest_price = self.position_highest_values[position_key]
-        
-        # Update highest price if current price is higher (for long) or lower (for short)
-        if position_size > 0 and current_price > highest_price:
-            self.position_highest_values[position_key] = current_price
-            return False
-        elif position_size < 0 and current_price < highest_price:
-            self.position_highest_values[position_key] = current_price
-            return False
-            
+        with self._lock:
+            if position_key not in self.position_highest_values:
+                self.position_highest_values[position_key] = current_price
+                return False
+
+            highest_price = self.position_highest_values[position_key]
+
+            # Update highest price if current price is higher (for long) or lower (for short)
+            if position_size > 0 and current_price > highest_price:
+                self.position_highest_values[position_key] = current_price
+                return False
+            elif position_size < 0 and current_price < highest_price:
+                self.position_highest_values[position_key] = current_price
+                return False
+
         # Check if price has moved against position by more than trailing_stop_buffer
         if position_size > 0:  # Long position
             price_drop = (highest_price - current_price) / highest_price
             if price_drop > self.config.trailing_stop_buffer:
-                self.trailing_stop_events += 1
+                with self._lock:
+                    self.trailing_stop_events += 1
                 if self.alerter is not None:
                     self.alerter.send_alert(
                         f"Trailing stop triggered for agent '{agent_id}' asset '{asset}': "
@@ -649,7 +659,8 @@ class RLRiskManager(RiskManagerBase):
         else:  # Short position
             price_rise = (current_price - highest_price) / highest_price
             if price_rise > self.config.trailing_stop_buffer:
-                self.trailing_stop_events += 1
+                with self._lock:
+                    self.trailing_stop_events += 1
                 if self.alerter is not None:
                     self.alerter.send_alert(
                         f"Trailing stop triggered for agent '{agent_id}' asset '{asset}': "
@@ -664,19 +675,20 @@ class RLRiskManager(RiskManagerBase):
     def _get_risk_events_info(self) -> Dict[str, int]:
         """
         Get information about risk events that have occurred.
-        
+
         Returns:
             dict: Dictionary with risk event counts
         """
-        return {
-            "stop_loss_events": self.stop_loss_events,
-            "trailing_stop_events": self.trailing_stop_events,
-            "var_exceed_events": self.var_exceed_events,
-            "forced_liquidation_events": self.forced_liquidation_events,
-            "correlation_adjustment_events": self.correlation_adjustment_events,
-            "portfolio_stop_loss_events": self.portfolio_stop_loss_events,
-            "portfolio_var_exceed_events": self.portfolio_var_exceed_events,
-        }
+        with self._lock:
+            return {
+                "stop_loss_events": self.stop_loss_events,
+                "trailing_stop_events": self.trailing_stop_events,
+                "var_exceed_events": self.var_exceed_events,
+                "forced_liquidation_events": self.forced_liquidation_events,
+                "correlation_adjustment_events": self.correlation_adjustment_events,
+                "portfolio_stop_loss_events": self.portfolio_stop_loss_events,
+                "portfolio_var_exceed_events": self.portfolio_var_exceed_events,
+            }
     
     def check_max_drawdown(self, agent_id_or_peak, peak_value=None, current_value=None) -> bool:
         """
@@ -712,26 +724,31 @@ class RLRiskManager(RiskManagerBase):
             return drawdown > self.config.max_drawdown_pct
 
         # Pattern 3: lookup from stored values
-        if agent_id not in self.peak_values or agent_id not in self.current_values:
-            return False
+        with self._lock:
+            if agent_id not in self.peak_values or agent_id not in self.current_values:
+                return False
 
-        peak = self.peak_values[agent_id]
-        current = self.current_values[agent_id]
+            peak = self.peak_values[agent_id]
+            current = self.current_values[agent_id]
 
-        if peak <= 0:
-            return False
+            if peak <= 0:
+                return False
 
-        drawdown = (peak - current) / peak
+            drawdown = (peak - current) / peak
+
+            if drawdown > self.config.max_drawdown_pct:
+                fired_liquidation = False
+                if self.config.use_forced_liquidation:
+                    if agent_id not in self.liquidation_triggered:
+                        self.liquidation_triggered[agent_id] = False
+                    if not self.liquidation_triggered[agent_id]:
+                        self.liquidation_triggered[agent_id] = True
+                        self.forced_liquidation_events += 1
+                        fired_liquidation = True
 
         if drawdown > self.config.max_drawdown_pct:
             if self.alerter is not None:
                 self.alerter.check_drawdown(current=current, peak=peak)
-            if self.config.use_forced_liquidation:
-                if agent_id not in self.liquidation_triggered:
-                    self.liquidation_triggered[agent_id] = False
-                if not self.liquidation_triggered[agent_id]:
-                    self.liquidation_triggered[agent_id] = True
-                    self.forced_liquidation_events += 1
             return True
 
         return False

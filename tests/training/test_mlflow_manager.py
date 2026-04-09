@@ -91,10 +91,12 @@ def test_model_logging(mlflow_test_context):
     # Start run and log model
     with mlflow_test_context:
         mlflow_test_context.log_model(model, "model")
+        run_id = mlflow_test_context.active_run.info.run_id
 
-        # Verify model artifact exists
-        artifact_uri = mlflow_test_context.get_artifact_uri("model")
-        assert os.path.exists(artifact_uri.replace("file://", ""))
+    # Verify model artifact exists via mlflow client
+    client = mlflow.tracking.MlflowClient()
+    artifacts = client.list_artifacts(run_id, "model")
+    assert len(artifacts) > 0, "No model artifacts found"
 
 
 def test_dataframe_logging(mlflow_test_context):

@@ -300,6 +300,7 @@ def test_delete_run(mlflow_manager):
 
 def test_log_figure(mlflow_manager):
     """Test figure logging for both matplotlib and plotly"""
+    pytest.importorskip("kaleido", reason="kaleido required for plotly figure export")
     import matplotlib.pyplot as plt
     import plotly.graph_objects as go
     
