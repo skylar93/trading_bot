@@ -31,6 +31,12 @@ from deployment.execution.position_tracker import PositionTracker
 
 logger = logging.getLogger(__name__)
 
+# AuditLogger is optional — imported lazily to avoid hard dep at module level.
+try:
+    from deployment.audit.audit_logger import AuditLogger as _AuditLogger
+except ImportError:  # pragma: no cover
+    _AuditLogger = None  # type: ignore[assignment,misc]
+
 # ---------------------------------------------------------------------------
 # Data structures
 # ---------------------------------------------------------------------------
@@ -106,7 +112,7 @@ class OrderManager:
         connection is established.
     """
 
-    def __init__(self, exchange_config: Optional[Dict[str, Any]] = None, paper_mode: bool = True, risk_manager=None) -> None:
+    def __init__(self, exchange_config: Optional[Dict[str, Any]] = None, paper_mode: bool = True, risk_manager=None, audit_logger=None) -> None:
         exchange_config = exchange_config or {}
         self.paper_mode = paper_mode
         self._config = exchange_config
@@ -114,6 +120,7 @@ class OrderManager:
         self.max_order_size: float = float(exchange_config.get("max_order_size", 1.0))
         self.daily_loss_limit: float = float(exchange_config.get("daily_loss_limit", -500.0))
         self._risk_manager = risk_manager
+        self._audit_logger = audit_logger
 
         self.rate_limiter = RateLimiter(
             max_calls=int(exchange_config.get("rate_limit_calls", 10)),
@@ -209,6 +216,10 @@ class OrderManager:
         with self._lock:
             self._orders[order_id] = order
 
+        # Audit: order submitted
+        if self._audit_logger is not None:
+            self._audit_logger.log_order(order)
+
         try:
             if self.paper_mode:
                 self._execute_paper_order(order, current_price)
@@ -218,6 +229,10 @@ class OrderManager:
             order.status = "failed"
             order.updated_at = datetime.utcnow()
             logger.error("Order %s failed: %s", order_id, e)
+
+        # Audit: fill (or failure) recorded after execution
+        if self._audit_logger is not None:
+            self._audit_logger.log_fill(order)
 
         return order_id
 
