@@ -44,17 +44,31 @@ jobs:
       run: |
         pytest tests/ \
           --ignore=tests/test_full_integration.py \
-          -v --tb=short -x \
-          --cov=agents --cov=training --cov=envs \
+          -v --tb=short \
+          --cov=agents --cov=training --cov=envs --cov=risk_management --cov=deployment \
           --cov-report=term-missing \
-          --cov-report=xml:coverage.xml \
-          -q
+          --cov-report=xml:coverage.xml
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v4
       with:
         files: coverage.xml
         fail_ci_if_error: false
+
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-results-${{ matrix.python-version }}
+        path: |
+          coverage.xml
+        retention-days: 14
+
+    - name: Test Summary
+      if: always()
+      uses: test-summary/action@v2
+      with:
+        paths: "coverage.xml"
 
   # ──────────────────────────────────────────────────────────────────────────
   # Job 2: Full end-to-end integration test (Week 24)
@@ -143,34 +157,7 @@ jobs:
         pip install pytest
 
     - name: Paper trading smoke test (100 steps)
-      run: |
-        python - <<'EOF'
-        import sys
-        sys.path.insert(0, ".")
-        import numpy as np
-        import pandas as pd
-        from envs.single_asset_rl_env import SingleAssetRLTradingEnv
-        from stable_baselines3 import PPO
-
-        rng = np.random.default_rng(0)
-        n = 200
-        price = 100 + np.cumsum(rng.normal(0, 0.5, n))
-        df = pd.DataFrame({
-            "$open": price, "$high": price * 1.01,
-            "$low": price * 0.99, "$close": price,
-            "$volume": rng.uniform(1e5, 1e6, n),
-        })
-        env = SingleAssetRLTradingEnv(data=df, window_size=20)
-        agent = PPO("MlpPolicy", env, n_steps=64, batch_size=32, verbose=0)
-        agent.learn(total_timesteps=512, progress_bar=False)
-        obs, _ = env.reset()
-        for _ in range(100):
-            action, _ = agent.predict(obs, deterministic=True)
-            obs, _, terminated, truncated, _ = env.step(action)
-            if terminated or truncated:
-                obs, _ = env.reset()
-        print("Smoke test passed: 100 paper-trading steps OK")
-        EOF
+      run: python scripts/smoke_test.py --steps 100 --timesteps 512
 
     - name: Upload model artifact to staging
       env:
@@ -220,37 +207,7 @@ jobs:
         pytest tests/test_full_integration.py -v --tb=short
 
     - name: Paper trading smoke test (pre-deploy verification)
-      run: |
-        python - <<'EOF'
-        import sys
-        sys.path.insert(0, ".")
-        import numpy as np
-        import pandas as pd
-        from envs.single_asset_rl_env import SingleAssetRLTradingEnv
-        from stable_baselines3 import PPO
-
-        rng = np.random.default_rng(42)
-        n = 200
-        price = 100 + np.cumsum(rng.normal(0, 0.5, n))
-        df = pd.DataFrame({
-            "$open": price, "$high": price * 1.01,
-            "$low": price * 0.99, "$close": price,
-            "$volume": rng.uniform(1e5, 1e6, n),
-        })
-        env = SingleAssetRLTradingEnv(data=df, window_size=20)
-        agent = PPO("MlpPolicy", env, n_steps=64, batch_size=32, verbose=0)
-        agent.learn(total_timesteps=512, progress_bar=False)
-        obs, _ = env.reset()
-        steps = 0
-        for _ in range(100):
-            action, _ = agent.predict(obs, deterministic=True)
-            obs, _, terminated, truncated, _ = env.step(action)
-            steps += 1
-            if terminated or truncated:
-                obs, _ = env.reset()
-        assert steps == 100, f"Expected 100 steps, got {steps}"
-        print(f"Pre-deploy smoke test passed: {steps} steps OK")
-        EOF
+      run: python scripts/smoke_test.py --steps 100 --timesteps 512
 
     - name: Upload model artifact to production
       env:
