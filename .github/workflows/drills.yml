@@ -1,0 +1,58 @@
+name: Disaster-Recovery Drills (nightly)
+
+# Phase 6 Week 59 (S18)
+# Nightly drill job — NOT PR-blocking.
+# Runs all three disaster-recovery scenarios:
+#   1. crash_mid_episode  — SIGKILL simulation + restore
+#   2. data_gap           — 1-hour price gap injection
+#   3. risk_breach        — drawdown kill-switch
+
+on:
+  schedule:
+    # 03:00 UTC every day
+    - cron: "0 3 * * *"
+  workflow_dispatch:  # allow manual trigger
+
+jobs:
+  drill:
+    name: Run disaster-recovery drills
+    runs-on: ubuntu-latest
+    # This job is informational only — failures are visible in Actions but do
+    # NOT block PRs (continue-on-error: true at the job level would silence
+    # the red badge; we leave it false so the nightly failure is visible).
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+
+      - name: Run drill tests (pytest)
+        run: |
+          python -m pytest tests/deployment/test_drills.py -v \
+            --tb=short \
+            --no-header \
+            -q
+
+      - name: Run CLI drill runner (all scenarios)
+        run: |
+          python scripts/drills/run_drill.py --scenario all
+
+      - name: Upload drill logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: drill-failure-logs
+          path: |
+            logs/
+            audit_log/
+          retention-days: 7
