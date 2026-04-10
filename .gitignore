@@ -12,6 +12,10 @@ venv/
 logs/
 *.log
 data/
+# Week 61: DataSource abstraction code lives in data/sources/ — track as code
+!data/__init__.py
+!data/sources/
+!data/sources/**
 
 # Docker
 docker/

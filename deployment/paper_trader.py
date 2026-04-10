@@ -33,6 +33,7 @@ from deployment.monitoring.alerter import TradingAlerter
 from deployment.monitoring.metrics_exporter import MetricsExporter
 from deployment.persistence.state_store import StateStore
 from training.monitoring.drift_detector import DriftDetector
+from risk_management.risk_manager_base import RiskManagerBase
 
 logger = logging.getLogger(__name__)
 
@@ -227,7 +228,7 @@ class PaperTrader:
         alerter: Optional[TradingAlerter] = None,
         drift_detector: Optional[DriftDetector] = None,
         order_manager: Optional[OrderManager] = None,
-        risk_manager=None,
+        risk_manager: Optional[RiskManagerBase] = None,
         state_store: Optional[StateStore] = None,
     ) -> None:
         self.agent = agent

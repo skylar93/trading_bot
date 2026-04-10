@@ -512,7 +512,24 @@ def run_pipeline(
         _header(9, "Paper Trading Start")
         pt_cfg = cfg.get("paper_trading", {})
         if pt_cfg.get("enabled", False):
-            logger.info("Paper trading configured — start manually or via web UI.")
+            try:
+                from training.factories.build_system import build_system  # noqa: PLC0415
+                components = build_system(cfg, data=df)
+                if components.trader is not None:
+                    logger.info(
+                        "build_system: system assembled — "
+                        "env=%s risk_manager=%s trader=%s",
+                        type(components.env).__name__,
+                        type(components.risk_manager).__name__,
+                        type(components.trader).__name__,
+                    )
+                else:
+                    logger.info(
+                        "Paper trading configured — start manually "
+                        "(no trained agent found; set model_path in config)."
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("build_system failed (%s) — start paper trading manually.", exc)
         else:
             logger.info("paper_trading.enabled=false in config. Set to true to auto-start.")
 

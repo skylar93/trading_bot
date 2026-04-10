@@ -6,6 +6,7 @@ import logging
 import collections
 
 from envs.market_impact import AlmgrenChrissImpact
+from data.sources.base import DataSource, StaticDataSource
 
 if TYPE_CHECKING:
     from agents.offline.dt_forecaster import DTForecaster
@@ -80,6 +81,8 @@ class SingleAssetRLTradingEnv(gym.Env):
         risk_manager=None,
         # Week 37: data frequency for correct Sharpe annualization
         data_frequency: str = "daily",
+        # Week 61 (S27): DataSource injection — takes priority over `data` kwarg
+        data_source: Optional[DataSource] = None,
     ):
         """Initialize environment
 
@@ -111,7 +114,11 @@ class SingleAssetRLTradingEnv(gym.Env):
         self.logger = logging.getLogger(self.__class__.__name__)
 
         # Initialize data
-        if data is not None:
+        # S27 (Week 61): data_source takes priority; legacy `data=` is wrapped.
+        if data_source is not None:
+            self.data_source: Optional[DataSource] = data_source
+            self.data = data_source.df if isinstance(data_source, StaticDataSource) else None
+        elif data is not None:
             # Convert column names if needed
             rename_map = {
                 "open": "$open",
@@ -120,7 +127,7 @@ class SingleAssetRLTradingEnv(gym.Env):
                 "close": "$close",
                 "volume": "$volume",
             }
-            self.data = data.rename(
+            _df = data.rename(
                 columns={
                     k: v for k, v in rename_map.items() if k in data.columns
                 }
@@ -129,14 +136,17 @@ class SingleAssetRLTradingEnv(gym.Env):
             # Verify required columns
             required_columns = ["$open", "$high", "$low", "$close", "$volume"]
             missing_cols = [
-                col for col in required_columns if col not in self.data.columns
+                col for col in required_columns if col not in _df.columns
             ]
             if missing_cols:
                 raise ValueError(
                     f"Missing required columns: {missing_cols}"
                 )
+            self.data = _df
+            self.data_source = StaticDataSource(_df)
         else:
             self.data = None
+            self.data_source = None
 
         # Store parameters
         self.initial_capital = initial_capital
