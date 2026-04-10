@@ -32,6 +32,7 @@ Coverage:
 from __future__ import annotations
 
 import random
+from pathlib import Path
 from typing import List
 
 import pytest
@@ -423,33 +424,34 @@ class TestMockEvaluate:
 # ---------------------------------------------------------------------------
 
 class TestAutoIterateYAML:
+    # Week 63: auto_iterate.yaml merged into config/base.yaml.
+    # Load base.yaml directly (auto_iterate section은 env override 불필요).
+
+    @staticmethod
+    def _load_base():
+        import yaml
+        base_path = Path(__file__).parents[1] / "config" / "base.yaml"
+        with open(base_path) as f:
+            return yaml.safe_load(f)
 
     def test_yaml_loadable(self):
-        import yaml
-        with open("config/auto_iterate.yaml") as f:
-            cfg = yaml.safe_load(f)
+        cfg = self._load_base()
         assert cfg is not None
 
     def test_yaml_top_level_keys(self):
-        import yaml
-        with open("config/auto_iterate.yaml") as f:
-            cfg = yaml.safe_load(f)
+        cfg = self._load_base()
         assert "auto_iterate" in cfg
         assert "seed_strategy" in cfg
 
     def test_yaml_auto_iterate_keys(self):
-        import yaml
-        with open("config/auto_iterate.yaml") as f:
-            cfg = yaml.safe_load(f)
+        cfg = self._load_base()
         ai = cfg["auto_iterate"]
         for key in ("max_iterations", "stagnation_window", "stagnation_threshold",
                     "use_claude", "dry_run", "seed"):
             assert key in ai, f"Missing key: {key}"
 
     def test_yaml_seed_strategy_keys(self):
-        import yaml
-        with open("config/auto_iterate.yaml") as f:
-            cfg = yaml.safe_load(f)
+        cfg = self._load_base()
         ss = cfg["seed_strategy"]
         assert "agent_type" in ss
         assert "window_size" in ss
@@ -457,15 +459,11 @@ class TestAutoIterateYAML:
         assert "feature_set" in ss
 
     def test_yaml_max_iterations_guard(self):
-        import yaml
-        with open("config/auto_iterate.yaml") as f:
-            cfg = yaml.safe_load(f)
+        cfg = self._load_base()
         assert cfg["auto_iterate"]["max_iterations"] <= 20
 
     def test_yaml_reward_weights_sum_to_one(self):
-        import yaml
-        with open("config/auto_iterate.yaml") as f:
-            cfg = yaml.safe_load(f)
+        cfg = self._load_base()
         rw = cfg["seed_strategy"]["reward_weights"]
         assert abs(sum(rw.values()) - 1.0) < 1e-6
 

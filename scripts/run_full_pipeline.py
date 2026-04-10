@@ -423,23 +423,18 @@ def run_pipeline(
     resume: bool = True,
     dry_run: bool = False,
     paper_trading: bool = False,
+    env: str | None = None,
 ) -> None:
     t0 = time.time()
 
-    # Load config
-    with open(config_path) as f:
-        cfg = yaml.safe_load(f)
-
-    # Week 30: validate config schema
-    try:
-        from config.schema import FullConfig
-        FullConfig(**cfg)
-        logger.info("Config validation passed.")
-    except Exception as e:
-        logger.error("Config validation failed: %s", e)
-        raise
-
-    logger.info("Config loaded: %s", config_path)
+    # Load config — new loader (Week 63) preferred; raw YAML fallback for legacy paths.
+    from config.loader import load, load_raw  # noqa: PLC0415
+    if env is not None:
+        cfg = load(env)
+        logger.info("Config loaded via loader: env=%s", env)
+    else:
+        cfg = load_raw(config_path)
+        logger.info("Config loaded: %s", config_path)
 
     # Pipeline state
     state = PipelineState()
@@ -552,8 +547,11 @@ def main() -> None:
         description="Full Pipeline Runner — fetch → train → validate → report",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
+    parser.add_argument("--env", default=None,
+                        help="Environment name (config/env/{env}.yaml). "
+                             "When set, uses new consolidated loader.")
     parser.add_argument("--config", default="config/local_3060ti.yaml",
-                        help="Config YAML path")
+                        help="Legacy: direct YAML path (overridden by --env)")
     parser.add_argument("--skip-data", action="store_true",
                         help="Skip data fetch (use existing CSV)")
     parser.add_argument("--no-resume", action="store_true",
@@ -571,6 +569,7 @@ def main() -> None:
         resume=not args.no_resume,
         dry_run=args.dry_run,
         paper_trading=args.paper_trading,
+        env=args.env,
     )
 
 

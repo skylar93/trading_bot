@@ -1,0 +1,49 @@
+# ============================================================
+# config/deployment.yaml — 배포 & 운영 설정
+# Week 63: Config Consolidation
+#
+# base.yaml 위에 deep_merge됨.
+# 상태 지속성, 시크릿 관리, paper trading 운영 설정.
+# ============================================================
+
+# ── 상태 지속성 (Week 56, S1-S6) ──────────────────────────────
+persistence:
+  enabled: true
+  db_path: "./state/paper_trader.db"
+  checkpoint_every_n_steps: 1
+
+# ── 시크릿 관리 (Week 58, S12-S15) ───────────────────────────
+secrets:
+  # backend: "env" | "keychain" | "file"
+  # TRADING_BOT_SECRET_BACKEND 환경변수로 오버라이드 가능
+  backend: "env"
+
+# ── Paper Trading ─────────────────────────────────────────────
+paper_trading:
+  enabled: false
+  exchange: "binance"
+  symbol: "BTC/USDT"
+  initial_capital: 100000.0
+  risk_per_trade: 0.02
+  max_drawdown_threshold: 0.20
+  window_size: 20
+  poll_interval_seconds: 5.0
+  daily_report_interval: 86400   # 1 day in seconds
+
+  # API credentials — SecretProvider로 런타임에 resolve됨.
+  # 평문 API key는 절대 여기에 쓰지 말 것.
+  api_key_ref: "EXCHANGE_BINANCE_KEY"
+  api_secret_ref: "EXCHANGE_BINANCE_SECRET"
+
+# ── LLM Review Panel ──────────────────────────────────────────
+llm_review:
+  enabled: false
+  model: "claude-opus-4-6"
+  dry_run: false
+  max_weight_change: 0.05
+  reward_weights:
+    pnl: 0.35
+    sharpe: 0.25
+    downside_risk: 0.15
+    drawdown: 0.15
+    transaction_cost: 0.10

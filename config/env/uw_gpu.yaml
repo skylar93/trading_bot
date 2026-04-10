@@ -1,0 +1,87 @@
+# ============================================================
+# config/env/uw_gpu.yaml — UW Hyak HPC GPU 오버라이드
+# Week 63: Config Consolidation
+#
+# UW GPU 클러스터 (A100 40GB+ VRAM) 설정.
+# 대용량 배치, 풀 앙상블, 긴 timesteps.
+# ============================================================
+
+agent:
+  feature_extractor: "gtrxl"   # 충분한 VRAM에서 GTrXL 사용
+  feature_extractor_kwargs:
+    features_dim: 512
+  sb3_params:
+    ppo:
+      n_steps: 4096
+      batch_size: 512
+    sac:
+      buffer_size: 2000000
+    td3:
+      buffer_size: 2000000
+
+ensemble:
+  enabled: true
+  agents:
+    - type: "sb3_cvar_ppo"
+      role: "conservative"
+      weight_init: 0.30
+      params:
+        ent_coef: 0.005
+        clip_range: 0.1
+    - type: "sb3_sac"
+      role: "moderate"
+      weight_init: 0.25
+      params:
+        buffer_size: 2000000
+    - type: "sb3_td3"
+      role: "aggressive"
+      weight_init: 0.20
+      params:
+        buffer_size: 2000000
+    - type: "flag_trader"
+      role: "llm_guided"
+      weight_init: 0.25
+      params:
+        base_model: "HuggingFaceTB/SmolLM2-135M"
+        lora_rank: 16
+        max_length: 512
+
+training:
+  total_timesteps: 2000000
+  eval_interval: 20000
+  checkpoint_interval: 100000
+  use_gpu: true
+  device: "cuda:0"
+  ensemble_training: "parallel"   # A100에서 병렬 학습
+
+validation:
+  n_folds: 12
+  train_window: 504              # 2년
+  val_window: 126                # 6개월
+  test_window: 63                # 3개월
+
+walk_forward:
+  n_folds: 12
+  train_window: 16000
+  val_window: 4000
+  min_train_size: 4000
+
+hyperopt:
+  n_trials: 200
+  max_concurrent: 4
+
+flag_trader:
+  dry_run: false
+  device: "cuda"
+  batch_size: 32
+  gradient_accumulation: 1
+
+dt_forecaster:
+  enabled: true
+  device: "cuda"
+  hidden_size: 256
+  n_layer: 8
+
+mlflow:
+  experiment_name: "uw_gpu_production"
+  tracking_uri: "mlruns"
