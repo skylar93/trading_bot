@@ -27,15 +27,9 @@ logger = logging.getLogger("test_training")
 
 def main():
     """Run test training with minimal configuration."""
-    # Load configuration
-    config_path = os.path.join(project_root, "config", "test_config.yaml")
-    
-    if not os.path.exists(config_path):
-        logger.error(f"Config file not found: {config_path}")
-        sys.exit(1)
-        
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
+    # Load configuration — Week 63: use new consolidated loader
+    from config.loader import load  # noqa: PLC0415
+    config = load("test")
     
     # Load or fetch data
     try:

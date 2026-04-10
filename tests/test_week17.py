@@ -595,64 +595,50 @@ class TestComputeGAE:
 
 class TestYAMLConfig:
     def test_flag_trader_yaml_loads(self):
-        import yaml
+        # Week 63: flag_trader.yaml merged into config/base.yaml.
+        # Use consolidated loader instead of direct file read.
+        from config.loader import load
 
-        yaml_path = os.path.join(
-            os.path.dirname(__file__), "..", "config", "flag_trader.yaml"
-        )
-        with open(yaml_path) as f:
-            cfg = yaml.safe_load(f)
+        cfg = load("local_3060ti")
 
         assert "flag_trader" in cfg
         assert "ensemble" in cfg
         ft = cfg["flag_trader"]
-        assert ft["lora_rank"] == 16
+        assert ft["lora_rank"] == 8  # 3060ti env overrides base 16 → 8
         assert ft["ppo_lr"] == pytest.approx(1e-5)
         assert ft["gamma"] == pytest.approx(0.99)
 
     def test_ensemble_has_four_agents(self):
-        import yaml
+        from config.loader import load
 
-        yaml_path = os.path.join(
-            os.path.dirname(__file__), "..", "config", "flag_trader.yaml"
-        )
-        with open(yaml_path) as f:
-            cfg = yaml.safe_load(f)
+        cfg = load("local_3060ti")
 
         agents = cfg["ensemble"]["agents"]
         assert len(agents) == 4
         types = [a["type"] for a in agents]
-        assert "sb3_ppo" in types
+        assert "sb3_cvar_ppo" in types or "sb3_ppo" in types
         assert "sb3_sac" in types
         assert "sb3_td3" in types
         assert "flag_trader" in types
 
     def test_ensemble_weights_sum_to_one(self):
-        import yaml
+        from config.loader import load
 
-        yaml_path = os.path.join(
-            os.path.dirname(__file__), "..", "config", "flag_trader.yaml"
-        )
-        with open(yaml_path) as f:
-            cfg = yaml.safe_load(f)
+        cfg = load("local_3060ti")
 
         total_weight = sum(a["weight_init"] for a in cfg["ensemble"]["agents"])
         assert abs(total_weight - 1.0) < 1e-6
 
     def test_from_config_uses_yaml(self):
-        """FLAGTrader.from_config() should parse the YAML config correctly."""
-        import yaml
+        """FLAGTrader.from_config() should parse the consolidated config correctly."""
         from agents.llm_rl.flag_trader import FLAGTrader
+        from config.loader import load
 
-        yaml_path = os.path.join(
-            os.path.dirname(__file__), "..", "config", "flag_trader.yaml"
-        )
-        with open(yaml_path) as f:
-            cfg = yaml.safe_load(f)
+        cfg = load("local_3060ti")
 
         # Override dry_run for the test
         cfg["flag_trader"]["dry_run"] = True
         cfg["flag_trader"]["obs_dim"] = OBS_DIM
         agent = FLAGTrader.from_config(cfg)
-        assert agent.config.lora_rank == 16
+        assert agent.config.lora_rank == 8  # 3060ti override
         assert agent.config.gamma == pytest.approx(0.99)

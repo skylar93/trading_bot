@@ -1,0 +1,57 @@
+# ============================================================
+# config/trading.yaml — 거래 환경 & 실행 설정
+# Week 63: Config Consolidation
+#
+# base.yaml 위에 deep_merge됨.
+# 거래소 실행 경로, 주문 관리, 포지션 관련 설정.
+# ============================================================
+
+# ── 거래 환경 세부 설정 ────────────────────────────────────────
+trading:
+  initial_balance: 100000.0
+  window_size: 20
+  features:
+    - "close"
+    - "open"
+    - "high"
+    - "low"
+    - "volume"
+  observation_space:
+    type: "box"
+    normalize: true
+  action_space:
+    type: "discrete"
+    positions: [-1, 0, 1]  # short, flat, long
+
+# ── 주문 실행 ─────────────────────────────────────────────────
+execution:
+  paper_mode: true
+  exchange_id: "binance"
+  symbol: "BTC/USDT"
+  max_order_size: 0.1
+  daily_loss_limit: -500.0
+  initial_cash: 100000.0
+  rate_limit_calls: 10
+  rate_limit_period: 1.0
+
+# ── 리워드 & 마찰 ──────────────────────────────────────────────
+reward:
+  sharpe_weight: 1.0
+  drawdown_penalty: 0.5
+  friction:
+    slippage: 0.001
+    partial_fills: false
+
+# ── 멀티에이전트 설정 ─────────────────────────────────────────
+# (multi-agent / multi-asset 실행 시 이 섹션 오버라이드)
+multi_agent:
+  enabled: false
+  use_manager: false
+  ensemble_method: "weighted_vote"
+  assets: ["BTC/USDT"]
+  shared_experience:
+    enabled: false
+    buffer_size: 100000
+  portfolio_constraints:
+    max_concentration: 0.5
+    min_cash_reserve: 0.05

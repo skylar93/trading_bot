@@ -1,0 +1,91 @@
+# ============================================================
+# config/risk.yaml — 리스크 관리 전체 설정
+# Week 63: Config Consolidation
+#
+# base.yaml 위에 deep_merge됨.
+# BacktestingRiskManager / UnifiedRiskManager 파라미터.
+# ============================================================
+
+risk_management:
+  # ─ 주요 임계값 (schema.py RiskConfig 검증 대상) ──────────────
+  stop_loss_threshold: 0.05       # 5% 손실 시 stop loss
+  trailing_stop_buffer: 0.03      # 최고점에서 3% 하락 시 trailing stop
+  max_drawdown_pct: 0.20          # 20% max drawdown 허용
+  portfolio_stop_loss_threshold: 0.15
+
+  # ─ Stop Loss ─────────────────────────────────────────────────
+  stop_loss:
+    use_stop_loss: true
+    apply_to_agents: true
+    apply_to_portfolio: false
+
+  # ─ Trailing Stop ─────────────────────────────────────────────
+  trailing_stop:
+    use_trailing_stop: true
+    apply_to_agents: true
+    apply_to_portfolio: false
+
+  # ─ Value at Risk ─────────────────────────────────────────────
+  var:
+    use_var: true
+    var_confidence_level: 0.95
+    rolling_var_window: 100
+    action_on_var_exceed: "reduce_position"
+    position_reduction_pct: 0.5
+    apply_to_agents: true
+    apply_to_portfolio: true
+
+  # ─ Conditional VaR ───────────────────────────────────────────
+  cvar:
+    use_cvar: false
+    cvar_confidence_level: 0.95
+    action_on_cvar_exceed: "close_position"
+
+  # ─ Drawdown ──────────────────────────────────────────────────
+  drawdown:
+    use_forced_liquidation: true
+    apply_to_agents: true
+    apply_to_portfolio: true
+
+  # ─ 리스크 체크 주기 ─────────────────────────────────────────
+  check_frequency: 1
+
+  # ─ 로깅 ─────────────────────────────────────────────────────
+  logging:
+    log_risk_events: true
+    log_level: "INFO"
+    include_in_mlflow: true
+
+  # ─ 상관관계 리스크 ───────────────────────────────────────────
+  correlation:
+    use_correlation: true
+    correlation_window: 50
+    correlation_threshold: 0.7
+    correlation_risk_reduction: 0.5
+    apply_to_all_assets: true
+
+  # ─ 포트폴리오 Stop Loss ──────────────────────────────────────
+  portfolio_stop_loss:
+    use_portfolio_stop_loss: true
+    action_on_trigger: "close_all"
+
+  # ─ 포트폴리오 Trailing Stop ──────────────────────────────────
+  portfolio_trailing_stop:
+    use_portfolio_trailing_stop: true
+    portfolio_trailing_stop_buffer: 0.08
+    action_on_trigger: "close_all"
+
+  # ─ 포트폴리오 VaR ────────────────────────────────────────────
+  portfolio_var:
+    use_portfolio_var: true
+    portfolio_var_threshold: 0.02
+    use_parametric_var: true
+    var_confidence_level: 0.95
+    action_on_exceed: "reduce_all"
+    reduction_pct: 0.3
+
+  # ─ UnifiedRiskManager 모드 ───────────────────────────────────
+  # Week 60 통합: var_method는 mode와 독립적으로 파라미터화
+  unified:
+    var_method: "parametric"   # "parametric" | "historical"
+    thread_safe: true

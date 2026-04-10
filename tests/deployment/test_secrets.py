@@ -276,16 +276,17 @@ class TestNoPlaintextCredentialsInConfigs:
         )
 
     def test_paper_trading_yaml_uses_secret_ref(self):
+        # Week 63: paper_trading.yaml merged into config/deployment.yaml
         config_dir = self._get_config_dir()
-        content = (config_dir / "paper_trading.yaml").read_text()
-        assert "api_key_ref" in content, "paper_trading.yaml should use api_key_ref"
-        assert "api_secret_ref" in content, "paper_trading.yaml should use api_secret_ref"
-        assert "api_key:" not in content or "api_key_ref:" in content
+        content = (config_dir / "deployment.yaml").read_text()
+        assert "api_key_ref" in content, "deployment.yaml should use api_key_ref"
+        assert "api_secret_ref" in content, "deployment.yaml should use api_secret_ref"
 
     def test_paper_trading_yaml_no_bare_api_key(self):
         import re
+        # Week 63: paper_trading.yaml merged into config/deployment.yaml
         config_dir = self._get_config_dir()
-        content = (config_dir / "paper_trading.yaml").read_text()
-        # Lines like `  api_key: "something"` or `  api_key: ''` with non-empty value
+        content = (config_dir / "deployment.yaml").read_text()
+        # Checks for bare credentials — e.g. non-empty api_key / api_secret values
         bad = re.findall(r'^\s*api_(key|secret)\s*:\s*["\'][^"\']+["\']', content, re.MULTILINE)
         assert bad == [], f"Plaintext credentials found: {bad}"

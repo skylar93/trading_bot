@@ -1,0 +1,59 @@
+# ============================================================
+# config/env/local_m2.yaml — M2 MacBook 오버라이드
+# Week 63: Config Consolidation
+#
+# 가벼운 작업 전용: backtesting / monitoring / quick test.
+# 실제 학습은 RTX 3060 Ti에서 수행.
+# ============================================================
+
+agent:
+  algo_type: "sb3_ppo"          # CVaRPPO 대신 기본 PPO (MPS 호환성)
+  feature_extractor: "mlp"      # Conv1D/GTrXL 대신 MLP (가벼움)
+  feature_extractor_kwargs:
+    features_dim: 64
+  sb3_params:
+    ppo:
+      n_steps: 512
+      batch_size: 32
+      n_epochs: 5
+
+ensemble:
+  enabled: false                # 단일 agent만 (M2에서 ensemble은 느림)
+
+training:
+  total_timesteps: 100000       # quick test용
+  eval_interval: 2000
+  checkpoint_interval: 10000
+  device: "mps"                 # Apple Silicon MPS
+  ensemble_training: "sequential"
+
+validation:
+  n_folds: 3
+  train_window: 126
+  val_window: 30
+  test_window: 10
+
+hyperopt:
+  n_trials: 5                   # smoke test용
+  max_concurrent: 1
+
+cvar:
+  mode: "callback"              # Lagrangian 대신 callback (MPS 안정성)
+
+flag_trader:
+  dry_run: true                 # 모델 다운로드 없이 테스트
+  device: "mps"
+  batch_size: 2
+  gradient_accumulation: 8
+
+cross_asset:
+  enabled: false                # 빠른 테스트 시 비활성화
+
+drift_detection:
+  method: "page_hinkley"        # ADWIN보다 가벼운 방법
+
+regime:
+  method: "threshold"           # HMM 대신 rule-based (빠름)
+
+mlflow:
+  experiment_name: "local_m2_test"

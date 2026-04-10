@@ -1,0 +1,289 @@
+# ============================================================
+# config/base.yaml — 공통 defaults (모든 환경 공유)
+# Week 63: Config Consolidation
+#
+# 사용: config/loader.py가 이 파일을 base로 로드한 뒤
+#       trading.yaml / risk.yaml / monitoring.yaml / deployment.yaml 를
+#       순서대로 deep_merge하고, 마지막에 env/ 오버라이드를 적용한다.
+# ============================================================
+
+# ── 환경 ─────────────────────────────────────────────────────
+env:
+  type: "single_asset_rl"
+  window_size: 20
+  initial_balance: 100000.0
+  trading_fee: 0.001
+  normalize: true
+  max_position_size: 1.0
+  sharpe_lookback: 60
+  reward_function: "sharpe_ratio"
+  action_type: "continuous"
+  include_technical_indicators: true
+  risk_adjusted: true
+  realistic_slippage: true
+  indicators:
+    - name: "RSI"
+      window: 14
+    - name: "MACD"
+      fast_window: 12
+      slow_window: 26
+      signal_window: 9
+    - name: "Bollinger"
+      window: 20
+      dev: 2
+
+# ── 에이전트 ─────────────────────────────────────────────────
+agent:
+  algo_type: "sb3_cvar_ppo"
+  feature_extractor: "conv1d"
+  learning_rate: 3.0e-4
+  sb3_params:
+    ppo:
+      n_steps: 2048
+      batch_size: 128
+      n_epochs: 10
+      learning_rate: 3.0e-4
+      gamma: 0.99
+      ent_coef: 0.01
+      clip_range: 0.2
+      gae_lambda: 0.95
+      vf_coef: 0.5
+      max_grad_norm: 0.5
+    sac:
+      buffer_size: 1000000
+      learning_starts: 10000
+      batch_size: 256
+      learning_rate: 3.0e-4
+      tau: 0.005
+      ent_coef: "auto"
+    td3:
+      buffer_size: 1000000
+      learning_starts: 10000
+      batch_size: 256
+      learning_rate: 3.0e-4
+      tau: 0.005
+      policy_delay: 2
+      target_policy_noise: 0.2
+  feature_extractor_kwargs:
+    features_dim: 256
+
+# ── 앙상블 ───────────────────────────────────────────────────
+ensemble:
+  enabled: true
+  agents:
+    - type: "sb3_cvar_ppo"
+      role: "conservative"
+      weight_init: 0.30
+      params:
+        ent_coef: 0.005
+        clip_range: 0.1
+    - type: "sb3_sac"
+      role: "moderate"
+      weight_init: 0.25
+      params:
+        buffer_size: 1000000
+    - type: "sb3_td3"
+      role: "aggressive"
+      weight_init: 0.20
+      params:
+        buffer_size: 1000000
+    - type: "flag_trader"
+      role: "llm_guided"
+      weight_init: 0.25
+      params:
+        base_model: "HuggingFaceTB/SmolLM2-135M"
+        lora_rank: 16
+        max_length: 512
+  meta_controller:
+    n_regimes: 3
+    n_market_features: 4
+    hidden_dim: 64
+    lr: 3.0e-4
+    rebalance_interval: 20
+    min_weight: 0.05
+    emergency_window: 5
+  ood_detector:
+    latent_dim: 16
+    hidden_dim: 128
+    threshold_percentile: 95.0
+
+# ── 학습 ─────────────────────────────────────────────────────
+training:
+  total_timesteps: 1000000
+  eval_interval: 10000
+  checkpoint_interval: 50000
+  log_interval: 100
+  n_eval_episodes: 5
+  random_seed: 42
+  use_gpu: true
+  device: "cuda"
+  ensemble_training: "sequential"
+  tensorboard_log: "./logs/tensorboard/"
+
+# ── 데이터 ───────────────────────────────────────────────────
+data:
+  exchange: "binance"
+  symbols: ["BTC/USDT"]
+  timeframe: "1h"
+  cache_dir: "data/raw"
+  data_path: "test_data.csv"
+  column_map:
+    open: "$open"
+    high: "$high"
+    low: "$low"
+    close: "$close"
+    volume: "$volume"
+  train_test_split: 0.8
+
+# ── 검증 / Walk-forward ──────────────────────────────────────
+validation:
+  method: "walk_forward"
+  n_folds: 12
+  train_window: 252
+  val_window: 63
+  test_window: 21
+
+walk_forward:
+  n_folds: 12
+  n_splits: 12
+  train_ratio: 0.5
+  gap_days: 5
+  mode: "expanding"
+  train_window: 8000
+  val_window: 2000
+  min_train_size: 2000
+
+# ── CVaR ─────────────────────────────────────────────────────
+cvar:
+  mode: "lagrangian"
+  alpha: 0.05
+  threshold: -0.02
+  lr_nu: 0.01
+
+# ── Hyperopt ─────────────────────────────────────────────────
+hyperopt:
+  n_trials: 100
+  search_alg: "optuna_tpe"
+  scheduler: "asha"
+  max_concurrent: 3
+
+# ── FLAG-Trader ───────────────────────────────────────────────
+flag_trader:
+  base_model: "HuggingFaceTB/SmolLM2-135M"
+  dry_run: false
+  device: "cuda"
+  batch_size: 16
+  gradient_accumulation: 4
+  # LoRA
+  lora_rank: 16
+  lora_alpha: 32.0
+  lora_dropout: 0.1
+  lora_target_modules: ["q_proj", "v_proj"]
+  # Market state
+  window_size: 20
+  obs_dim: 22
+  price_decimals: 4
+  hidden_size: 576
+  max_new_tokens: 5
+  # Supervised pre-training
+  pretrain_lr: 1.0e-4
+  pretrain_weight_decay: 1.0e-4
+  pretrain_batch_size: 32
+  pretrain_max_grad_norm: 1.0
+  # PPO fine-tuning
+  ppo_lr: 1.0e-5
+  ppo_epochs: 4
+  ppo_mini_batch_size: 16
+  ppo_batch_size: 256
+  gamma: 0.99
+  lam: 0.95
+  clip_range: 0.2
+  vf_coef: 0.5
+  ent_coef: 0.01
+  max_grad_norm: 0.5
+
+# ── Decision Transformer ──────────────────────────────────────
+dt_forecaster:
+  enabled: false
+  device: "cuda"
+  hidden_size: 128
+  n_layer: 4
+
+# ── Cross-Asset ───────────────────────────────────────────────
+cross_asset:
+  enabled: true
+  assets: ["SPY", "DXY", "GC=F"]
+  vix_asset: "^VIX"
+  correlation_window: 20
+
+# ── Drift Detection ───────────────────────────────────────────
+drift_detection:
+  enabled: true
+  method: "adwin"
+  confidence: 0.01
+
+# ── Regime ───────────────────────────────────────────────────
+regime:
+  method: "hmm"
+  n_regimes: 3
+  lookback: 100
+  vol_window: 20
+
+# ── MLflow ───────────────────────────────────────────────────
+mlflow:
+  enabled: true
+  experiment_name: "trading_bot"
+  tracking_uri: "mlruns"
+
+# ── 리포트 ───────────────────────────────────────────────────
+report:
+  output_dir: "results"
+  include_equity_curve: true
+  include_feature_importance: true
+  include_regime_timeline: true
+  include_correlation_heatmap: true
+
+# ── 자동 반복 학습 (Week 18: AutoStrategyIterator) ────────────
+auto_iterate:
+  max_iterations: 20
+  max_training_minutes: 30
+  stagnation_window: 3
+  stagnation_threshold: 0.05
+  use_claude: false
+  claude_model: "claude-haiku-4-5-20251001"
+  mlflow_experiment: "auto_strategy_iteration"
+  dry_run: false
+  seed: 42
+  log_interval: 5
+
+seed_strategy:
+  agent_type: "ppo"
+  window_size: 20
+  training_timesteps: 50000
+  reward_weights:
+    pnl: 0.6
+    risk: 0.3
+    holding: 0.1
+  feature_set:
+    - "returns"
+    - "volume"
+    - "rsi"
+    - "macd"
+
+evaluation:
+  initial_capital: 10000.0
+  trading_fee: 0.001
+  walk_forward_folds: 5
+  min_bars: 500
+
+output:
+  save_ranked_results: true
+  output_dir: "artifacts/strategy_lab"
+  top_k: 5
+
+# ── 경로 ─────────────────────────────────────────────────────
+paths:
+  checkpoint_dir: "checkpoints"
+  log_dir: "logs"
+  data_dir: "data"
+  model_dir: "models"

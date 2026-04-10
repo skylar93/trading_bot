@@ -125,40 +125,41 @@ class TestDockerFiles:
 
 class TestConfigValidation:
     def test_training_config_exists(self):
-        assert (PROJECT_ROOT / "config" / "training_config.yaml").exists()
+        # Week 63: training_config.yaml → config/base.yaml (consolidated)
+        assert (PROJECT_ROOT / "config" / "base.yaml").exists()
 
     def test_training_config_valid_yaml(self):
-        p = PROJECT_ROOT / "config" / "training_config.yaml"
+        # Week 63: use base.yaml as the canonical training config
+        p = PROJECT_ROOT / "config" / "base.yaml"
         with open(p) as f:
             data = yaml.safe_load(f)
-        assert isinstance(data, dict), "training_config.yaml must be a dict"
+        assert isinstance(data, dict), "base.yaml must be a dict"
         assert "env" in data
         assert "training" in data
 
     def test_local_3060ti_config_exists(self):
-        assert (PROJECT_ROOT / "config" / "local_3060ti.yaml").exists(), (
-            "config/local_3060ti.yaml missing"
+        # Week 63: local_3060ti.yaml moved to config/env/local_3060ti.yaml
+        assert (PROJECT_ROOT / "config" / "env" / "local_3060ti.yaml").exists(), (
+            "config/env/local_3060ti.yaml missing"
         )
 
     def test_local_3060ti_config_valid_yaml(self):
-        p = PROJECT_ROOT / "config" / "local_3060ti.yaml"
-        with open(p) as f:
-            data = yaml.safe_load(f)
+        # Week 63: full merged config via loader
+        from config.loader import load
+        data = load("local_3060ti")
         assert isinstance(data, dict)
 
     def test_local_3060ti_has_gpu_settings(self):
-        p = PROJECT_ROOT / "config" / "local_3060ti.yaml"
-        with open(p) as f:
-            data = yaml.safe_load(f)
+        from config.loader import load
+        data = load("local_3060ti")
         training = data.get("training", {})
-        assert training.get("use_gpu") is True, "local_3060ti.yaml should have use_gpu=true"
+        assert training.get("use_gpu") is True, "local_3060ti config should have use_gpu=true"
         assert training.get("device", "").startswith("cuda"), "device should be cuda:x"
 
     def test_local_3060ti_has_walk_forward(self):
-        p = PROJECT_ROOT / "config" / "local_3060ti.yaml"
-        with open(p) as f:
-            data = yaml.safe_load(f)
-        assert "walk_forward" in data, "local_3060ti.yaml should have walk_forward section"
+        from config.loader import load
+        data = load("local_3060ti")
+        assert "walk_forward" in data, "local_3060ti config should have walk_forward section"
         assert data["walk_forward"]["n_folds"] >= 3
 
     def test_all_yaml_configs_parseable(self):
@@ -283,10 +284,11 @@ class TestRunFullPipeline:
         assert (PROJECT_ROOT / "scripts" / "run_full_pipeline.py").exists()
 
     def test_pipeline_dry_run(self):
+        # Week 63: use --env flag (new loader) instead of --config with old path
         result = subprocess.run(
             [sys.executable,
              str(PROJECT_ROOT / "scripts" / "run_full_pipeline.py"),
-             "--config", "config/local_3060ti.yaml",
+             "--env", "local_3060ti",
              "--dry-run",
              "--no-resume"],
             capture_output=True,

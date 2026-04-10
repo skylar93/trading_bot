@@ -1,0 +1,91 @@
+# ============================================================
+# config/env/local_3060ti.yaml — RTX 3060 Ti (8GB VRAM) 오버라이드
+# Week 63: Config Consolidation
+#
+# base + trading + risk + monitoring + deployment 위에 적용되는
+# diff만 포함. 공통 값은 base.yaml에 있음.
+# ============================================================
+
+agent:
+  feature_extractor: "conv1d"   # GTrXL은 VRAM 많이 먹으니 기본은 conv1d
+  feature_extractor_kwargs:
+    features_dim: 128
+  sb3_params:
+    ppo:
+      n_steps: 1024             # 2048 → 1024 (VRAM 절약)
+      batch_size: 64
+    sac:
+      buffer_size: 500000       # 1M → 500K (RAM 절약)
+    td3:
+      buffer_size: 500000
+
+ensemble:
+  agents:
+    - type: "sb3_cvar_ppo"
+      role: "conservative"
+      weight_init: 0.30
+      params:
+        ent_coef: 0.005
+        clip_range: 0.1
+    - type: "sb3_sac"
+      role: "moderate"
+      weight_init: 0.25
+      params:
+        buffer_size: 500000
+    - type: "sb3_td3"
+      role: "aggressive"
+      weight_init: 0.20
+      params:
+        buffer_size: 500000
+    - type: "flag_trader"
+      role: "llm_guided"
+      weight_init: 0.25
+      params:
+        base_model: "HuggingFaceTB/SmolLM2-135M"
+        lora_rank: 8            # 16 → 8 (VRAM 절약)
+        max_length: 256         # 512 → 256
+
+training:
+  total_timesteps: 500000       # 1M → 500K (로컬 적정)
+  eval_interval: 5000
+  checkpoint_interval: 25000
+  use_gpu: true
+  device: "cuda:0"              # RTX 3060 Ti CUDA
+  ensemble_training: "sequential"
+
+validation:
+  n_folds: 5                    # 12 → 5 (시간 절약)
+  train_window: 252
+  val_window: 63
+  test_window: 21
+
+walk_forward:
+  n_folds: 5
+  train_window: 8000
+  val_window: 2000
+  min_train_size: 2000
+
+hyperopt:
+  n_trials: 20                  # 100 → 20 (로컬 적정)
+  max_concurrent: 1             # 3060 Ti에서는 1개씩
+
+flag_trader:
+  dry_run: false
+  device: "cuda"
+  batch_size: 4                 # 16 → 4 (VRAM 절약)
+  gradient_accumulation: 4      # effective batch = 16
+  lora_rank: 8                  # 16 → 8 (VRAM 절약)
+  max_length: 256               # 512 → 256
+
+dt_forecaster:
+  enabled: false
+  device: "cuda"
+  hidden_size: 64               # 128 → 64
+  n_layer: 2
+
+mlflow:
+  experiment_name: "local_3060ti"
+
+monitoring:
+  telegram_token: "${TELEGRAM_BOT_TOKEN}"
+  telegram_chat_id: "${TELEGRAM_CHAT_ID}"

@@ -1,20 +1,40 @@
-# Monitoring configuration
+# ============================================================
+# config/monitoring.yaml — 모니터링 & 알림 설정
+# Week 63: Config Consolidation
+#
+# base.yaml 위에 deep_merge됨.
+# MetricsExporter, Alerter, Dashboard, Prometheus 설정.
+# ============================================================
+
 monitoring:
-  # MetricsExporter settings
-  max_history: 10000          # max snapshots in memory
-  use_prometheus: false        # set true if prometheus_client installed
+  enabled: true
+
+  # ─ MetricsExporter ──────────────────────────────────────────
+  max_history: 10000            # 메모리 내 최대 스냅샷 수
+
+  # ─ Prometheus ───────────────────────────────────────────────
+  use_prometheus: false
   prometheus_port: 9090
 
-  # Dashboard settings
+  # ─ Dashboard ────────────────────────────────────────────────
   dashboard_enabled: true
   dashboard_port: 8080
 
-  # Alerter settings (already in paper_trading.yaml, duplicated for reference)
-  alert_channels: ["console"]
+  # ─ 알림 채널 ────────────────────────────────────────────────
+  alert_channels: ["console"]   # "console" | "telegram" | "webhook"
   drawdown_alert_threshold: 0.10
   daily_loss_alert: -500.0
+  connection_timeout_seconds: 60.0
+  verbose: false
 
-  # Drift detection
-  use_drift_detection: true
-  drift_method: "adwin"        # "adwin" or "page_hinkley"
+  # ─ Telegram (비워두면 비활성) ────────────────────────────────
+  telegram_token: ""
+  telegram_chat_id: ""
+
+  # ─ Webhook ──────────────────────────────────────────────────
+  webhook_url: ""
+
+  # ─ Drift 감지 (모니터링 레이어) ──────────────────────────────
+  use_drift_detection: false
+  drift_method: "adwin"         # "adwin" | "page_hinkley"
   drift_window_size: 500

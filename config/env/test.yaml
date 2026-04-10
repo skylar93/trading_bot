@@ -1,0 +1,72 @@
+# ============================================================
+# config/env/test.yaml — CI / 테스트 오버라이드
+# Week 63: Config Consolidation
+#
+# 테스트용 최소 설정. total_timesteps를 극소로 줄여 CI에서 빠르게 실행.
+# ============================================================
+
+env:
+  window_size: 10
+  initial_balance: 10000.0
+
+agent:
+  algo_type: "sb3_ppo"
+  feature_extractor: "mlp"
+  feature_extractor_kwargs:
+    features_dim: 32
+  sb3_params:
+    ppo:
+      n_steps: 64
+      batch_size: 32
+      n_epochs: 2
+
+ensemble:
+  enabled: false
+
+training:
+  total_timesteps: 10000
+  eval_interval: 500
+  checkpoint_interval: 1000
+  device: "cpu"
+  use_gpu: false
+  ensemble_training: "sequential"
+
+validation:
+  n_folds: 2
+  train_window: 50
+  val_window: 20
+  test_window: 10
+
+walk_forward:
+  n_folds: 2
+  train_window: 500
+  val_window: 200
+  min_train_size: 200
+
+hyperopt:
+  n_trials: 2
+  max_concurrent: 1
+
+flag_trader:
+  dry_run: true
+  device: "cpu"
+  batch_size: 2
+
+dt_forecaster:
+  enabled: false
+
+cross_asset:
+  enabled: false
+
+drift_detection:
+  enabled: false
+
+mlflow:
+  enabled: false
+  experiment_name: "ci_test"
+
+persistence:
+  enabled: false
+
+monitoring:
+  enabled: false
