@@ -115,6 +115,9 @@ class SingleAssetRLTradingEnv(gym.Env):
 
         # Initialize data
         # S27 (Week 61): data_source takes priority; legacy `data=` is wrapped.
+        # S34 (Week 62): env accesses data exclusively via self.data_source interface.
+        # self.data is kept as a backward-compat attribute for callers that read it
+        # directly, but all internal logic routes through self.data_source.
         if data_source is not None:
             self.data_source: Optional[DataSource] = data_source
             self.data = data_source.df if isinstance(data_source, StaticDataSource) else None
@@ -202,10 +205,11 @@ class SingleAssetRLTradingEnv(gym.Env):
         self.sentiment_data = None
         self._n_sentiment = 0
         if sentiment_data is not None:
-            if self.data is not None and len(sentiment_data) != len(self.data):
+            _ds_len = self._ds_len()
+            if _ds_len > 0 and len(sentiment_data) != _ds_len:
                 raise ValueError(
                     f"sentiment_data length ({len(sentiment_data)}) must match "
-                    f"data length ({len(self.data)})"
+                    f"data length ({_ds_len})"
                 )
             self.sentiment_data = sentiment_data.reset_index(drop=True)
             self._n_sentiment = 4
@@ -256,12 +260,40 @@ class SingleAssetRLTradingEnv(gym.Env):
         )
         
         # STEP 1-A: Check if data is long enough
+        _len = self._ds_len()
+        if _len > 0 and _len < self.window_size + 1:
+            raise ValueError(
+                f"Data too short ({_len}) for window_size={self.window_size}. "
+                f"Need at least window_size+1 rows."
+            )
+
+    # ------------------------------------------------------------------
+    # DataSource access helpers (S34, Week 62)
+    # ------------------------------------------------------------------
+
+    def _ds_len(self) -> int:
+        """Return total number of bars via DataSource interface."""
+        if self.data_source is not None:
+            return len(self.data_source)
         if self.data is not None:
-            if len(self.data) < self.window_size + 1:
-                raise ValueError(
-                    f"Data too short ({len(self.data)}) for window_size={self.window_size}. "
-                    f"Need at least window_size+1 rows."
-                )
+            return len(self.data)
+        return 0
+
+    def _row_at(self, step: int) -> "pd.Series":
+        """Return a single bar (row) by index via DataSource interface."""
+        if self.data_source is not None:
+            window = self.data_source.get_window(step, step + 1)
+            if len(window) == 0:
+                raise IndexError(f"DataSource has no row at step={step}")
+            return window.iloc[0]
+        # Fallback for legacy self.data path (should not be reached after S34)
+        return self.data.iloc[step]
+
+    def _window_at(self, start: int, end: int) -> "pd.DataFrame":
+        """Return rows [start, end) via DataSource interface."""
+        if self.data_source is not None:
+            return self.data_source.get_window(start, end)
+        return self.data.iloc[start:end]
 
     def set_regime_probs(self, regime_probs) -> None:
         """Week 30: 외부에서 HMM regime 확률을 주입한다. step()에서 position sizing에 반영."""
@@ -273,7 +305,7 @@ class SingleAssetRLTradingEnv(gym.Env):
         """Reset environment to initial state"""
         super().reset(seed=seed)
 
-        if self.data is None:
+        if self.data_source is None and self.data is None:
             raise ValueError("No data provided to environment")
 
         # Reset state variables
@@ -311,9 +343,10 @@ class SingleAssetRLTradingEnv(gym.Env):
         # Store the portfolio value before taking action
         self.previous_portfolio_value = self._calculate_portfolio_value(self.current_step)
 
-        # Get current price data
-        current_price = self.data.iloc[self.current_step]["$close"]
-        current_volume = self.data.iloc[self.current_step]["$volume"]
+        # Get current price data via DataSource interface (S34, Week 62)
+        _current_row = self._row_at(self.current_step)
+        current_price = _current_row["$close"]
+        current_volume = _current_row["$volume"]
         
         # DEBUG: Check for extreme price values
         if current_price <= 0 or np.isnan(current_price) or np.isinf(current_price):
@@ -547,11 +580,11 @@ class SingleAssetRLTradingEnv(gym.Env):
 
         # Move to next step
         self.current_step += 1
-        self.done = self.done or (self.current_step >= len(self.data))
-        
+        self.done = self.done or (self.current_step >= self._ds_len())
+
         # Calculate new portfolio value after action and step
         # --- START: Added Portfolio Calc Logging ---
-        portfolio_calc_price = self.data.iloc[self.current_step - 1]["$close"]
+        portfolio_calc_price = self._row_at(self.current_step - 1)["$close"]
         # Handle potential invalid price during calculation
         if portfolio_calc_price <= 0 or np.isnan(portfolio_calc_price) or np.isinf(portfolio_calc_price):
              self.logger.warning(f"❌ Invalid price used in portfolio calculation at step {self.current_step}: {portfolio_calc_price}. Using 1.0 as fallback.")
@@ -703,7 +736,7 @@ class SingleAssetRLTradingEnv(gym.Env):
         info.update(_risk_limit_info)
 
         # If we decided self.done = True above, we can forcibly end now
-        if self.done and self.current_step < len(self.data):  # Only early termination, not normal end
+        if self.done and self.current_step < self._ds_len():  # Only early termination, not normal end
             # Smaller penalty for capital <= 1.0
             if self.current_capital <= 1.0:
                 reward = -1.0  # Reduced from -10.0 to -1.0 for stability
@@ -1030,24 +1063,25 @@ class SingleAssetRLTradingEnv(gym.Env):
         start_idx = self.current_step - self.window_size
         end_idx = self.current_step
         
-        # Handle negative start index with padding
+        # Handle negative start index with padding (via DataSource interface, S34)
         if start_idx < 0:
             pad_size = abs(start_idx)
-            # Get available data up to current step
-            partial_data = self.data.iloc[:end_idx]
-            
+            # Get available data up to current step via DataSource
+            partial_data = self._window_at(0, end_idx)
+
             # If no data available yet, pad with first row
             if len(partial_data) == 0:
-                pad_data = pd.DataFrame([self.data.iloc[0]] * self.window_size)
+                first_row = self._row_at(0)
+                pad_data = pd.DataFrame([first_row] * self.window_size)
                 window_data = pad_data
             else:
                 # Pad with first available row
                 pad_data = pd.DataFrame([partial_data.iloc[0]] * pad_size)
                 window_data = pd.concat([pad_data, partial_data], axis=0)
         else:
-            # Normal case: slice the window
-            window_data = self.data.iloc[start_idx:end_idx]
-        
+            # Normal case: slice the window via DataSource
+            window_data = self._window_at(start_idx, end_idx)
+
         # Verify we have exactly window_size rows
         if len(window_data) != self.window_size:
             self.logger.warning(
@@ -1059,7 +1093,7 @@ class SingleAssetRLTradingEnv(gym.Env):
             if len(window_data) < self.window_size:
                 # Pad with first row if we don't have enough data
                 pad_size = self.window_size - len(window_data)
-                pad_row = window_data.iloc[0] if len(window_data) > 0 else self.data.iloc[0]
+                pad_row = window_data.iloc[0] if len(window_data) > 0 else self._row_at(0)
                 pad_data = pd.DataFrame([pad_row] * pad_size)
                 window_data = pd.concat([pad_data, window_data], axis=0)
             else:
@@ -1200,10 +1234,10 @@ class SingleAssetRLTradingEnv(gym.Env):
 
     def _calculate_portfolio_value(self, step: int) -> float:
         """Calculate total portfolio value at current step"""
-        if step >= len(self.data):
+        if step >= self._ds_len():
             return self.portfolio_value
-            
-        current_price = self.data.iloc[step]["$close"]
+
+        current_price = self._row_at(step)["$close"]
         position_value = self.current_position * current_price
         return self.current_capital + position_value
 
