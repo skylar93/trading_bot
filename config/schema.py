@@ -313,6 +313,44 @@ class DriftDetectionConfig(BaseModel):
         return v
 
 
+class DataPipelineSafetyConfig(BaseModel):
+    """Week 65 (S47-S49): data pipeline safety guards."""
+    model_config = ConfigDict(extra="allow")
+
+    # S47 — feed staleness
+    max_staleness_sec: float = 60.0   # 0 = disabled
+    staleness_enabled: bool = True
+
+    # S48 — NaN/inf in computed features
+    nan_halt_after_n: int = 5         # halt after N consecutive bad steps; 0 = never
+    nan_check_enabled: bool = True
+
+    # S49 — survivorship bias warning
+    survivorship_warn: bool = True
+    survivorship_min_lookback_bars: int = 0   # 0 = no minimum
+
+    @field_validator("max_staleness_sec")
+    @classmethod
+    def staleness_nonneg(cls, v: float) -> float:
+        if v < 0:
+            raise ValueError(f"max_staleness_sec must be >= 0, got {v}")
+        return v
+
+    @field_validator("nan_halt_after_n")
+    @classmethod
+    def nan_halt_nonneg(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError(f"nan_halt_after_n must be >= 0, got {v}")
+        return v
+
+    @field_validator("survivorship_min_lookback_bars")
+    @classmethod
+    def lookback_nonneg(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError(f"survivorship_min_lookback_bars must be >= 0, got {v}")
+        return v
+
+
 class FullConfig(BaseModel):
     """
     최상위 config validation 모델.
@@ -337,3 +375,4 @@ class FullConfig(BaseModel):
     drift_detection: DriftDetectionConfig = DriftDetectionConfig()
     regime: RegimeConfig = RegimeConfig()
     validation: ValidationConfig = ValidationConfig()
+    data_pipeline_safety: DataPipelineSafetyConfig = DataPipelineSafetyConfig()

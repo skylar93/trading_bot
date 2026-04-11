@@ -27,6 +27,7 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
 
+from deployment.audit.audit_logger import AuditLogger
 from deployment.execution.order_manager import OrderManager
 from deployment.execution.position_tracker import PositionTracker
 from deployment.monitoring.alerter import TradingAlerter
@@ -230,6 +231,8 @@ class PaperTrader:
         order_manager: Optional[OrderManager] = None,
         risk_manager: Optional[RiskManagerBase] = None,
         state_store: Optional[StateStore] = None,
+        audit_logger: Optional[AuditLogger] = None,
+        data_source=None,
     ) -> None:
         self.agent = agent
         self.config = config
@@ -274,6 +277,17 @@ class PaperTrader:
         if self.state_store is None and persist_cfg.get("enabled", False):
             db_path = persist_cfg.get("db_path", "./state/paper_trader.db")
             self.state_store = StateStore(db_path)
+
+        # Phase 6 Week 65 (S47-S48): data pipeline safety.
+        self.audit_logger = audit_logger
+        self.data_source = data_source
+
+        pipeline_cfg = config.get("data_pipeline_safety", {}) or {}
+        self._staleness_enabled: bool = bool(pipeline_cfg.get("staleness_enabled", True))
+        self._max_staleness_sec: float = float(pipeline_cfg.get("max_staleness_sec", 60.0))
+        self._nan_check_enabled: bool = bool(pipeline_cfg.get("nan_check_enabled", True))
+        self._nan_halt_after_n: int = int(pipeline_cfg.get("nan_halt_after_n", 5))
+        self._consecutive_nan_steps: int = 0
 
         if not simulation_mode:
             self._exchange = self._init_exchange(pt)
@@ -332,11 +346,21 @@ class PaperTrader:
                 _restored_log_pending = False
                 self._restored_from_checkpoint = False
 
+            # Phase 6 Week 65 (S47): feed staleness check.
+            if self._check_feed_staleness():
+                break
+
             obs = self._build_observation()
             if obs is None:
                 step += 1
                 continue
 
+            # Phase 6 Week 65 (S48): NaN/inf in computed features.
+            if self._check_obs_nan(obs, step):
+                step += 1
+                continue
+
+            self._consecutive_nan_steps = 0  # reset on clean observation
             action, _ = self.agent.predict(obs, deterministic=True)
             self._execute_action(action, price)
             self._check_risk(price)
@@ -698,6 +722,84 @@ class PaperTrader:
             self._execute_sell(1.0, self.state._current_price)
         self.state.shutdown_triggered = True
         self.state.shutdown_reason = reason
+
+    # ------------------------------------------------------------------
+    # Phase 6 Week 65 helpers
+    # ------------------------------------------------------------------
+
+    def _check_feed_staleness(self) -> bool:
+        """S47: Return True (and trigger shutdown) if the data source is stale.
+
+        Only runs when *staleness_enabled* is True, *max_staleness_sec* > 0,
+        and a live data_source has been attached to this trader.
+        """
+        if (
+            not self._staleness_enabled
+            or self._max_staleness_sec <= 0
+            or self.data_source is None
+        ):
+            return False
+
+        if self.data_source.is_stale(self._max_staleness_sec):
+            reason = (
+                f"data_feed_stale: no update for >{self._max_staleness_sec}s "
+                f"(max_staleness_sec={self._max_staleness_sec})"
+            )
+            if self.audit_logger is not None:
+                self.audit_logger.log_risk_event(
+                    {
+                        "type": "feed_staleness_halt",
+                        "reason": reason,
+                        "max_staleness_sec": self._max_staleness_sec,
+                    }
+                )
+            self._trigger_shutdown(reason)
+            return True
+        return False
+
+    def _check_obs_nan(self, obs: np.ndarray, step: int) -> bool:
+        """S48: Check observation for NaN/inf; skip step and possibly halt.
+
+        Returns True if the step should be skipped.
+        """
+        if not self._nan_check_enabled:
+            return False
+
+        if not np.all(np.isfinite(obs)):
+            self._consecutive_nan_steps += 1
+            nan_count = int(np.sum(~np.isfinite(obs)))
+            logger.warning(
+                "NaN/inf in observation at step=%d: %d bad feature(s), "
+                "consecutive=%d",
+                step,
+                nan_count,
+                self._consecutive_nan_steps,
+            )
+            if self.audit_logger is not None:
+                self.audit_logger.log_risk_event(
+                    {
+                        "type": "nan_in_features",
+                        "step": step,
+                        "nan_count": nan_count,
+                        "consecutive": self._consecutive_nan_steps,
+                    }
+                )
+
+            if (
+                self._nan_halt_after_n > 0
+                and self._consecutive_nan_steps >= self._nan_halt_after_n
+            ):
+                reason = (
+                    f"nan_in_features: {self._consecutive_nan_steps} consecutive "
+                    f"steps with NaN/inf observations (threshold={self._nan_halt_after_n})"
+                )
+                if self.audit_logger is not None:
+                    self.audit_logger.log_risk_event(
+                        {"type": "nan_halt", "reason": reason, "step": step}
+                    )
+                self._trigger_shutdown(reason)
+            return True
+        return False
 
     def _maybe_daily_report(self) -> None:
         now = time.time()

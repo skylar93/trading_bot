@@ -103,3 +103,17 @@ risk_management:
     vol_threshold: 0.05   # rolling std(returns) > this → halt new orders
     window: 20            # price observation window for vol calculation
     cooldown: 300         # seconds before re-evaluation after tripping
+
+# ─ Data Pipeline Safety (Week 65, S47-S49) ─────────────────────
+data_pipeline_safety:
+  # S47 — feed staleness halt
+  max_staleness_sec: 60.0    # 0 = disabled; halt trader if feed silent > N sec
+  staleness_enabled: true
+
+  # S48 — NaN/inf in computed features
+  nan_check_enabled: true
+  nan_halt_after_n: 5        # halt after N consecutive steps with NaN/inf obs; 0 = never
+
+  # S49 — survivorship bias warning (backtest only, no halt)
+  survivorship_warn: true
+  survivorship_min_lookback_bars: 0  # 0 = no minimum bar requirement
