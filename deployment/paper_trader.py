@@ -27,6 +27,7 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
 
+from deployment.analysis.pnl_attribution import PnLAttributor
 from deployment.audit.audit_logger import AuditLogger
 from deployment.execution.order_manager import OrderManager
 from deployment.execution.position_tracker import PositionTracker
@@ -828,6 +829,29 @@ class PaperTrader:
             pv = self.state.portfolio_history[-1] if self.state.portfolio_history else self.initial_balance
             peak = self.state.peak_portfolio_value
             dd = (peak - pv) / peak if peak > 0 else 0.0
+
+            # S52: latency percentiles from order_manager
+            latency_kwargs: dict = {}
+            if self.order_manager is not None:
+                lp = self.order_manager.compute_latency_percentiles()
+                latency_kwargs = {
+                    "latency_p50_ms": lp["p50"],
+                    "latency_p95_ms": lp["p95"],
+                    "latency_p99_ms": lp["p99"],
+                }
+
+            # S51: P&L attribution
+            pnl_kwargs: dict = {}
+            closing_trades = [t for t in self.state.trades if t.side == "sell"]
+            if closing_trades:
+                attributor = PnLAttributor()
+                attributions = attributor.attribute(
+                    self.state.trades,
+                    slippage_records=self._slippage_records,
+                )
+                summary = attributor.summarise(attributions)
+                pnl_kwargs = attributor.to_exporter_fields(summary)
+
             self.metrics_exporter.update(
                 portfolio_value=pv,
                 cash=self.state.balance,
@@ -836,7 +860,18 @@ class PaperTrader:
                 num_trades=len(self.state.trades),
                 drift_detected=self.drift_detector.drift_detected if self.drift_detector else False,
                 alerts_fired=len(self.alerter.alert_history) if self.alerter else 0,
+                **latency_kwargs,
+                **pnl_kwargs,
             )
+
+            # S53: rolling Sharpe/Sortino (computed from accumulated history)
+            r_sharpe = self.metrics_exporter.rolling_sharpe(window=20)
+            r_sortino = self.metrics_exporter.rolling_sortino(window=20)
+            if r_sharpe != 0.0 or r_sortino != 0.0:
+                self.metrics_exporter.update(
+                    rolling_sharpe=r_sharpe,
+                    rolling_sortino=r_sortino,
+                )
 
     def _log_final_report(self, report: Dict[str, Any]) -> None:
         try:

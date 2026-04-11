@@ -13,6 +13,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+import numpy as np
+
 logger = logging.getLogger(__name__)
 
 # Try prometheus_client, fallback to in-memory
@@ -43,6 +45,18 @@ class MetricSnapshot:
     current_var: float = 0.0
     daily_pnl: float = 0.0
     is_halted: bool = False
+    # S52: order latency (ms)
+    latency_p50_ms: float = 0.0
+    latency_p95_ms: float = 0.0
+    latency_p99_ms: float = 0.0
+    # S53: rolling performance
+    rolling_sharpe: float = 0.0
+    rolling_sortino: float = 0.0
+    # S51: P&L attribution totals
+    pnl_market_move: float = 0.0
+    pnl_slippage_cost: float = 0.0
+    pnl_fees: float = 0.0
+    pnl_net: float = 0.0
 
 
 class MetricsExporter:
@@ -129,6 +143,57 @@ class MetricsExporter:
 
         return snap
 
+    def update_latency(self, p50: float, p95: float, p99: float) -> MetricSnapshot:
+        """Record order latency percentiles (ms) as a metric update.
+
+        Convenience wrapper so callers don't need to know the field names.
+        """
+        return self.update(
+            latency_p50_ms=float(p50),
+            latency_p95_ms=float(p95),
+            latency_p99_ms=float(p99),
+        )
+
+    def rolling_sharpe(self, window: int = 20, annualize: int = 252) -> float:
+        """Compute rolling Sharpe ratio from the last *window* portfolio-value snapshots.
+
+        Returns 0.0 if insufficient history.
+        """
+        snaps = self.history(last_n=window + 1)
+        if len(snaps) < 2:
+            return 0.0
+        values = np.array([s.portfolio_value for s in snaps], dtype=float)
+        prev = np.where(values[:-1] != 0, values[:-1], 1e-8)
+        returns = np.diff(values) / prev
+        std = np.std(returns)
+        if std < 1e-10:
+            return 0.0
+        return float(np.mean(returns) / std * np.sqrt(annualize))
+
+    def rolling_sortino(
+        self,
+        window: int = 20,
+        annualize: int = 252,
+        mar: float = 0.0,
+    ) -> float:
+        """Compute rolling Sortino ratio from the last *window* portfolio-value snapshots.
+
+        Returns 0.0 if insufficient history.
+        """
+        snaps = self.history(last_n=window + 1)
+        if len(snaps) < 2:
+            return 0.0
+        values = np.array([s.portfolio_value for s in snaps], dtype=float)
+        prev = np.where(values[:-1] != 0, values[:-1], 1e-8)
+        returns = np.diff(values) / prev
+        downside = returns[returns < mar]
+        if len(downside) == 0:
+            return float(np.mean(returns) * np.sqrt(annualize))  # no downside
+        downside_std = float(np.std(downside))
+        if downside_std < 1e-10:
+            return 0.0
+        return float(np.mean(returns) / downside_std * np.sqrt(annualize))
+
     def snapshot(self) -> Optional[MetricSnapshot]:
         """Return latest metric snapshot."""
         return self._latest
@@ -161,4 +226,16 @@ class MetricsExporter:
             "current_var": snap.current_var,
             "daily_pnl": snap.daily_pnl,
             "is_halted": snap.is_halted,
+            # S52
+            "latency_p50_ms": snap.latency_p50_ms,
+            "latency_p95_ms": snap.latency_p95_ms,
+            "latency_p99_ms": snap.latency_p99_ms,
+            # S53
+            "rolling_sharpe": snap.rolling_sharpe,
+            "rolling_sortino": snap.rolling_sortino,
+            # S51
+            "pnl_market_move": snap.pnl_market_move,
+            "pnl_slippage_cost": snap.pnl_slippage_cost,
+            "pnl_fees": snap.pnl_fees,
+            "pnl_net": snap.pnl_net,
         }
