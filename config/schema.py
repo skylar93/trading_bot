@@ -98,6 +98,66 @@ class TrainingConfig(BaseModel):
         return v
 
 
+class FatFingerConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    enabled: bool = True
+    size_multiplier_limit: float = 5.0
+    hard_cap: float = 0.0
+    lookback: int = 20
+
+    @field_validator("size_multiplier_limit")
+    @classmethod
+    def multiplier_nonneg(cls, v: float) -> float:
+        if v < 0:
+            raise ValueError(f"size_multiplier_limit must be >= 0, got {v}")
+        return v
+
+    @field_validator("hard_cap")
+    @classmethod
+    def hard_cap_nonneg(cls, v: float) -> float:
+        if v < 0:
+            raise ValueError(f"hard_cap must be >= 0, got {v}")
+        return v
+
+    @field_validator("lookback")
+    @classmethod
+    def lookback_positive(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError(f"lookback must be >= 1, got {v}")
+        return v
+
+
+class CircuitBreakerConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    enabled: bool = True
+    vol_threshold: float = 0.05
+    window: int = 20
+    cooldown: float = 300.0
+
+    @field_validator("vol_threshold")
+    @classmethod
+    def vol_threshold_positive(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError(f"vol_threshold must be > 0, got {v}")
+        return v
+
+    @field_validator("window")
+    @classmethod
+    def window_ge2(cls, v: int) -> int:
+        if v < 2:
+            raise ValueError(f"window must be >= 2, got {v}")
+        return v
+
+    @field_validator("cooldown")
+    @classmethod
+    def cooldown_nonneg(cls, v: float) -> float:
+        if v < 0:
+            raise ValueError(f"cooldown must be >= 0, got {v}")
+        return v
+
+
 class RiskConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
