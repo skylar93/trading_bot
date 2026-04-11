@@ -4,11 +4,16 @@ DataSource abstraction layer (Week 61 — S27 skeleton, Week 62 — full expansi
 Provides a uniform interface for data access so that
 SingleAssetRLTradingEnv and other consumers are decoupled from the
 concrete data backend (in-memory DataFrame, CSV file, live feed, etc.).
+
+Week 65 (S47): added optional staleness interface — ``last_updated_at()`` and
+``is_stale()``.  Live sources override these; static sources are never stale.
 """
 
 from __future__ import annotations
 
+import time
 from abc import ABC, abstractmethod
+from typing import Optional
 
 import pandas as pd
 
@@ -31,6 +36,30 @@ class DataSource(ABC):
     @abstractmethod
     def is_live(self) -> bool:
         """Return True for streaming / live data sources."""
+
+    # ------------------------------------------------------------------
+    # Week 65 (S47) — optional staleness interface
+    # ------------------------------------------------------------------
+
+    def last_updated_at(self) -> Optional[float]:
+        """Return the wall-clock time (``time.monotonic()``) of the most recent
+        data update, or ``None`` if the source has never been updated.
+
+        Static (non-live) sources return ``None`` by default; live sources
+        should override this to expose their actual update timestamp.
+        """
+        return None
+
+    def is_stale(self, max_staleness_sec: float) -> bool:
+        """Return True if the feed has not been updated within
+        *max_staleness_sec* seconds.
+
+        Always returns False for static sources (``last_updated_at() is None``).
+        """
+        ts = self.last_updated_at()
+        if ts is None:
+            return False
+        return (time.monotonic() - ts) > max_staleness_sec
 
 
 class StaticDataSource(DataSource):
