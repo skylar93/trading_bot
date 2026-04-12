@@ -34,6 +34,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, date
 from typing import Any, Dict, List, Optional
 
+import numpy as np
+
 from deployment.execution.position_tracker import PositionTracker
 from deployment.execution.rate_limiter import RateLimiter
 from deployment.execution.fat_finger_guard import FatFingerGuard
@@ -71,6 +73,10 @@ class Order:
     updated_at: datetime = field(default_factory=datetime.utcnow)
     exchange_order_id: Optional[str] = None
     idempotency_key: Optional[str] = None   # S44: duplicate-order prevention
+    # S52: latency timestamps (submit → ack → fill)
+    submitted_at: Optional[datetime] = None   # set in submit_order before execution
+    acked_at: Optional[datetime] = None       # exchange ack (live) or immediate (paper)
+    filled_at: Optional[datetime] = None      # fill completion
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +175,8 @@ class OrderManager:
         self._daily_pnl: float = 0.0
         self._last_reset_date: date = date.today()
         self._halted: bool = False
+        # S52: latency tracking (submit-to-fill, ms)
+        self._latency_samples: List[float] = []
         self._position_tracker = PositionTracker(
             initial_cash=float(exchange_config.get("initial_cash", 10_000.0))
         )
@@ -289,6 +297,7 @@ class OrderManager:
             current_price = price
 
         order_id = str(uuid.uuid4())[:8]
+        _now = datetime.utcnow()
         order = Order(
             order_id=order_id,
             side=side,
@@ -297,6 +306,7 @@ class OrderManager:
             limit_price=limit_price,
             status="pending",
             idempotency_key=idempotency_key,
+            submitted_at=_now,   # S52: latency start
         )
         with self._lock:
             self._orders[order_id] = order
@@ -316,6 +326,14 @@ class OrderManager:
             order.status = "failed"
             order.updated_at = datetime.utcnow()
             logger.error("Order %s failed: %s", order_id, e)
+
+        # S52: record fill latency (submit → fill)
+        if order.filled_at is not None and order.submitted_at is not None:
+            latency_ms = (
+                (order.filled_at - order.submitted_at).total_seconds() * 1000.0
+            )
+            with self._lock:
+                self._latency_samples.append(latency_ms)
 
         # Audit: fill (or failure) recorded after execution
         if self._audit_logger is not None:
@@ -426,6 +444,23 @@ class OrderManager:
     def is_halted(self) -> bool:
         return self._halted
 
+    def compute_latency_percentiles(self) -> Dict[str, float]:
+        """Return latency percentiles (p50/p95/p99) in milliseconds.
+
+        Computed from all submit-to-fill samples collected since init.
+        Returns zero values if no samples yet.
+        """
+        with self._lock:
+            samples = list(self._latency_samples)
+        if not samples:
+            return {"p50": 0.0, "p95": 0.0, "p99": 0.0, "count": 0.0}
+        return {
+            "p50": float(np.percentile(samples, 50)),
+            "p95": float(np.percentile(samples, 95)),
+            "p99": float(np.percentile(samples, 99)),
+            "count": float(len(samples)),
+        }
+
     @property
     def fat_finger_guard(self) -> FatFingerGuard:
         return self._fat_finger
@@ -518,6 +553,9 @@ class OrderManager:
         if price <= 0:
             price = 1.0
 
+        # S52: paper orders are instant — ack and fill happen together
+        order.acked_at = datetime.utcnow()
+
         if order.side == "buy":
             fee = order.amount * price * 0.001
             self._position_tracker.apply_buy(
@@ -531,6 +569,7 @@ class OrderManager:
             if sell_qty < 1e-9:
                 order.status = "failed"
                 order.updated_at = datetime.utcnow()
+                order.filled_at = order.updated_at
                 return
             proceeds = sell_qty * price
             fee = proceeds * 0.001
@@ -549,6 +588,7 @@ class OrderManager:
 
         order.status = "filled"
         order.updated_at = datetime.utcnow()
+        order.filled_at = order.updated_at   # S52
 
     # ------------------------------------------------------------------
     # Live order execution — S44: idempotency key + improved backoff
@@ -574,12 +614,15 @@ class OrderManager:
                         params=params,
                     )
                 order.exchange_order_id = result.get("id")
+                order.acked_at = datetime.utcnow()   # S52: exchange has the order
                 order.status = "filled" if result.get("status") == "closed" else "pending"
                 order.filled_amount = float(result.get("filled", 0.0))
                 order.avg_fill_price = float(result.get("average") or result.get("price") or 0.0)
                 fee_info = result.get("fee") or {}
                 order.fee = float(fee_info.get("cost", 0.0))
                 order.updated_at = datetime.utcnow()
+                if order.status == "filled":
+                    order.filled_at = order.updated_at   # S52
                 # Update position tracker on successful fill
                 if order.status == "filled" and self._position_tracker is not None:
                     if order.side == "buy":

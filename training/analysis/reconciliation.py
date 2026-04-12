@@ -17,10 +17,26 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field, asdict
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Sequence
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class OrderDivergence:
+    """Per-order slippage decomposition (S54).
+
+    Represents the difference between the expected execution price
+    (the market price at decision time) and the actual fill price.
+    """
+    order_id: str
+    expected_price: float       # market price when order was submitted
+    fill_price: float           # actual avg fill price
+    quantity: float
+    slippage: float             # |fill_price - expected_price| / expected_price
+    slippage_cost: float        # slippage * quantity * expected_price (sign: negative = cost)
+    side: str = ""              # "buy" | "sell"
 
 
 @dataclass
@@ -48,12 +64,15 @@ class ReconciliationReport:
     live: NormalisedMetrics
     deltas: Dict[str, float] = field(default_factory=dict)
     warnings: list = field(default_factory=list)
+    by_order: List[OrderDivergence] = field(default_factory=list)  # S54
 
     @classmethod
     def from_reports(
         cls,
         backtest_report: Dict[str, Any],
         live_report: Dict[str, Any],
+        orders: Optional[Sequence] = None,      # S54: list of Order objects
+        expected_prices: Optional[Sequence[float]] = None,  # S54: paired with orders
     ) -> "ReconciliationReport":
         """Create reconciliation from two report dicts.
 
@@ -103,7 +122,41 @@ class ReconciliationReport:
                 f"High live slippage: {lv.avg_fill_slippage:.4%}"
             )
 
-        return cls(backtest=bt, live=lv, deltas=deltas, warnings=warnings)
+        # S54: order-level slippage decomposition
+        by_order: List[OrderDivergence] = []
+        if orders is not None:
+            prices = list(expected_prices) if expected_prices is not None else []
+            for i, order in enumerate(orders):
+                fill_price = float(getattr(order, "avg_fill_price", 0.0))
+                expected = prices[i] if i < len(prices) else fill_price
+                qty = float(getattr(order, "filled_amount", getattr(order, "amount", 0.0)))
+                if expected <= 0 or qty <= 0:
+                    continue
+                slip_frac = abs(fill_price - expected) / expected
+                # positive = unfavourable (overpaid on buy, underpaid on sell)
+                side = getattr(order, "side", "")
+                if side == "buy":
+                    slip_cost = (fill_price - expected) * qty
+                else:
+                    slip_cost = (expected - fill_price) * qty
+                by_order.append(OrderDivergence(
+                    order_id=str(getattr(order, "order_id", i)),
+                    expected_price=expected,
+                    fill_price=fill_price,
+                    quantity=qty,
+                    slippage=slip_frac,
+                    slippage_cost=slip_cost,
+                    side=side,
+                ))
+            if by_order:
+                avg_order_slip = sum(d.slippage for d in by_order) / len(by_order)
+                deltas["order_avg_slippage"] = avg_order_slip
+                if avg_order_slip > 0.002:
+                    warnings.append(
+                        f"Order-level avg slippage > 0.2%: {avg_order_slip:.4%}"
+                    )
+
+        return cls(backtest=bt, live=lv, deltas=deltas, warnings=warnings, by_order=by_order)
 
     @staticmethod
     def _normalise(report: Dict[str, Any], source: str) -> NormalisedMetrics:
@@ -164,6 +217,7 @@ class ReconciliationReport:
             "live": asdict(self.live),
             "deltas": self.deltas,
             "warnings": self.warnings,
+            "by_order": [asdict(d) for d in self.by_order],  # S54
         }
         if path:
             Path(path).write_text(json.dumps(data, indent=2))
