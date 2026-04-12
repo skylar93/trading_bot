@@ -234,9 +234,12 @@ class PaperTrader:
         state_store: Optional[StateStore] = None,
         audit_logger: Optional[AuditLogger] = None,
         data_source=None,
+        shadow_agent=None,
     ) -> None:
         self.agent = agent
         self.config = config
+        # Phase 6 Week 68 (S61): optional shadow agent — observes only, no orders.
+        self.shadow_agent = shadow_agent
         self.mlflow_manager = mlflow_manager
         self.simulation_mode = simulation_mode
         self.alerter = alerter
@@ -366,6 +369,7 @@ class PaperTrader:
             self._execute_action(action, price)
             self._check_risk(price)
             self._check_drift()
+            self._run_shadow_agent(obs, step)
             self._maybe_daily_report()
 
             step += 1
@@ -723,6 +727,49 @@ class PaperTrader:
             self._execute_sell(1.0, self.state._current_price)
         self.state.shutdown_triggered = True
         self.state.shutdown_reason = reason
+
+    # ------------------------------------------------------------------
+    # Phase 6 Week 68 (S61): Shadow agent
+    # ------------------------------------------------------------------
+
+    def _run_shadow_agent(self, obs: np.ndarray, step: int) -> None:
+        """S61: Run shadow_agent prediction without executing any orders.
+
+        The shadow agent observes the same state as the main agent but its
+        decisions are only recorded to the audit log for post-hoc comparison.
+        """
+        if self.shadow_agent is None:
+            return
+        try:
+            shadow_action, _ = self.shadow_agent.predict(obs, deterministic=True)
+            if isinstance(shadow_action, np.ndarray):
+                shadow_action_val = float(shadow_action.flat[0])
+            else:
+                shadow_action_val = float(shadow_action)
+            main_action, _ = self.agent.predict(obs, deterministic=True)
+            if isinstance(main_action, np.ndarray):
+                main_action_val = float(main_action.flat[0])
+            else:
+                main_action_val = float(main_action)
+            logger.debug(
+                "shadow step=%d main_action=%.4f shadow_action=%.4f",
+                step, main_action_val, shadow_action_val,
+            )
+            if self.audit_logger is not None:
+                import hashlib
+                obs_hash = hashlib.sha256(obs.tobytes()).hexdigest()
+                self.audit_logger.log_model_decision(
+                    action=shadow_action_val,
+                    obs_hash=obs_hash,
+                    extra={
+                        "source": "shadow",
+                        "step": step,
+                        "main_action": main_action_val,
+                        "shadow_action": shadow_action_val,
+                    },
+                )
+        except Exception as e:
+            logger.warning("Shadow agent step failed at step=%d: %s", step, e)
 
     # ------------------------------------------------------------------
     # Phase 6 Week 65 helpers

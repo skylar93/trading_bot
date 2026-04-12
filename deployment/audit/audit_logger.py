@@ -84,7 +84,12 @@ class AuditLogger:
         """Record a risk management event (kill-switch, drawdown breach, etc.)."""
         self._write("risk_event", dict(event))
 
-    def log_model_decision(self, action: Any, obs_hash: str) -> None:
+    def log_model_decision(
+        self,
+        action: Any,
+        obs_hash: str,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """Record a model decision.
 
         Parameters
@@ -93,11 +98,16 @@ class AuditLogger:
             The action chosen by the model.
         obs_hash : str
             sha256 hex digest of the observation (use sha256(obs.tobytes())).
+        extra : dict, optional
+            Additional metadata (e.g. shadow comparison fields). Keys must be
+            JSON-serialisable.
         """
-        payload = {
+        payload: Dict[str, Any] = {
             "action": action if isinstance(action, (int, float, str)) else list(action),
             "obs_hash": obs_hash,
         }
+        if extra:
+            payload.update(extra)
         self._write("model_decision", payload)
 
     def close(self) -> None:
