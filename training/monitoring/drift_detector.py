@@ -26,7 +26,7 @@ Usage
 from __future__ import annotations
 
 import math
-from typing import Literal
+from typing import Dict, List, Literal, Optional, Union
 
 
 # ---------------------------------------------------------------------------
@@ -305,3 +305,166 @@ class DriftDetector:
     def reset(self) -> None:
         """Reset internal state (e.g. after a retraining cycle)."""
         self._detector.reset()
+
+
+# ---------------------------------------------------------------------------
+# Feature-level drift detector (S56)
+# ---------------------------------------------------------------------------
+
+class FeatureDriftDetector:
+    """Per-feature drift detection: one DriftDetector per named feature.
+
+    Enables detection of distribution shift in individual input features
+    (not just aggregate returns), which is important for early warning
+    before model performance degrades.
+
+    Parameters
+    ----------
+    feature_names : list of str
+        Names of features to monitor.  Must match the keys in each
+        ``update()`` call.
+    method : {"adwin", "page_hinkley"}
+        Detection algorithm applied to every feature.
+    confidence : float
+        ADWIN δ parameter.  Ignored for page_hinkley.
+    ph_delta : float
+        Page-Hinkley δ (allowed fluctuation).
+    ph_threshold : float
+        Page-Hinkley detection threshold λ.
+
+    Usage
+    -----
+    >>> fdd = FeatureDriftDetector(["rsi", "macd", "vol"])
+    >>> for step_features in stream:          # dict or array
+    ...     alarms = fdd.update(step_features)
+    ...     if fdd.any_drift:
+    ...         handle_drift(fdd.drift_features)
+    """
+
+    def __init__(
+        self,
+        feature_names: List[str],
+        method: Literal["adwin", "page_hinkley"] = "adwin",
+        confidence: float = 0.002,
+        ph_delta: float = 0.005,
+        ph_threshold: float = 50.0,
+    ) -> None:
+        if not feature_names:
+            raise ValueError("feature_names must not be empty")
+        self.feature_names: List[str] = list(feature_names)
+        self._method = method
+        self._detectors: Dict[str, DriftDetector] = {
+            name: DriftDetector(
+                method=method,
+                confidence=confidence,
+                ph_delta=ph_delta,
+                ph_threshold=ph_threshold,
+            )
+            for name in feature_names
+        }
+        # Per-feature drift flags from the most recent update call
+        self._last_alarms: Dict[str, bool] = {name: False for name in feature_names}
+
+    # ------------------------------------------------------------------ #
+    # Core API
+    # ------------------------------------------------------------------ #
+
+    def update(
+        self,
+        features: Union[Dict[str, float], "np.ndarray", List[float]],
+        feature_names: Optional[List[str]] = None,
+    ) -> Dict[str, bool]:
+        """Feed one step of feature values and return per-feature drift flags.
+
+        Parameters
+        ----------
+        features : dict[str, float] | array-like
+            Feature values for this step.
+            * dict  — keys must be a superset of ``self.feature_names``.
+            * array — must match ``self.feature_names`` in length (or use
+              ``feature_names`` to provide a custom name mapping).
+        feature_names : list of str, optional
+            Override name mapping when ``features`` is an array.  Ignored
+            when ``features`` is a dict.
+
+        Returns
+        -------
+        dict[str, bool]
+            ``{feature_name: drift_detected}`` for each tracked feature.
+        """
+        import numpy as _np  # local import to avoid top-level numpy dep
+
+        if isinstance(features, dict):
+            values: Dict[str, float] = {
+                name: float(features[name]) for name in self.feature_names
+            }
+        else:
+            arr = _np.asarray(features, dtype=float).ravel()
+            names = feature_names if feature_names is not None else self.feature_names
+            if len(arr) < len(names):
+                raise ValueError(
+                    f"features length {len(arr)} < feature_names length {len(names)}"
+                )
+            values = {name: float(arr[i]) for i, name in enumerate(names)}
+
+        alarms: Dict[str, bool] = {}
+        for name in self.feature_names:
+            val = values[name]
+            if not math.isfinite(val):
+                # Skip non-finite values; do not update the detector state
+                alarms[name] = False
+                continue
+            alarms[name] = self._detectors[name].update(val)
+
+        self._last_alarms = alarms
+        return alarms
+
+    # ------------------------------------------------------------------ #
+    # Aggregate views
+    # ------------------------------------------------------------------ #
+
+    @property
+    def any_drift(self) -> bool:
+        """True if at least one feature had drift on the last ``update()``."""
+        return any(self._last_alarms.values())
+
+    @property
+    def drift_features(self) -> List[str]:
+        """Names of features that triggered drift on the last ``update()``."""
+        return [name for name, flag in self._last_alarms.items() if flag]
+
+    @property
+    def n_detections(self) -> Dict[str, int]:
+        """Total drift detection count per feature (cumulative since creation)."""
+        return {name: det.n_detections for name, det in self._detectors.items()}
+
+    @property
+    def total_detections(self) -> int:
+        """Sum of all per-feature detection counts."""
+        return sum(self._detectors[n].n_detections for n in self.feature_names)
+
+    def last_alarms(self) -> Dict[str, bool]:
+        """Return a copy of the alarm flags from the most recent ``update()``."""
+        return dict(self._last_alarms)
+
+    # ------------------------------------------------------------------ #
+    # Reset
+    # ------------------------------------------------------------------ #
+
+    def reset(self, feature_name: Optional[str] = None) -> None:
+        """Reset detector state.
+
+        Parameters
+        ----------
+        feature_name : str, optional
+            If given, reset only that feature's detector.  If None, reset all.
+        """
+        if feature_name is not None:
+            if feature_name not in self._detectors:
+                raise KeyError(f"Unknown feature: {feature_name!r}")
+            self._detectors[feature_name].reset()
+            self._last_alarms[feature_name] = False
+        else:
+            for name in self.feature_names:
+                self._detectors[name].reset()
+                self._last_alarms[name] = False
