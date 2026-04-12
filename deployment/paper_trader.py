@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from collections import deque
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
 
@@ -34,7 +34,8 @@ from deployment.execution.position_tracker import PositionTracker
 from deployment.monitoring.alerter import TradingAlerter
 from deployment.monitoring.metrics_exporter import MetricsExporter
 from deployment.persistence.state_store import StateStore
-from training.monitoring.drift_detector import DriftDetector
+from training.monitoring.drift_detector import DriftDetector, FeatureDriftDetector
+from training.regime.regime_detector import RegimeDetector
 from risk_management.risk_manager_base import RiskManagerBase
 
 logger = logging.getLogger(__name__)
@@ -234,6 +235,9 @@ class PaperTrader:
         state_store: Optional[StateStore] = None,
         audit_logger: Optional[AuditLogger] = None,
         data_source=None,
+        regime_detector: Optional[RegimeDetector] = None,
+        feature_drift_detector: Optional[FeatureDriftDetector] = None,
+        on_regime_change: Optional[Callable[[int, int, np.ndarray], None]] = None,
     ) -> None:
         self.agent = agent
         self.config = config
@@ -282,6 +286,12 @@ class PaperTrader:
         # Phase 6 Week 65 (S47-S48): data pipeline safety.
         self.audit_logger = audit_logger
         self.data_source = data_source
+
+        # Phase 6 Week 67 (S56-S57): drift & regime.
+        self.feature_drift_detector = feature_drift_detector
+        self.regime_detector = regime_detector
+        self.on_regime_change = on_regime_change
+        self._current_regime: int = -1
 
         pipeline_cfg = config.get("data_pipeline_safety", {}) or {}
         self._staleness_enabled: bool = bool(pipeline_cfg.get("staleness_enabled", True))
@@ -366,13 +376,13 @@ class PaperTrader:
             self._execute_action(action, price)
             self._check_risk(price)
             self._check_drift()
+            self._check_regime()
             self._maybe_daily_report()
 
             step += 1
             self.state.step = step
 
-            if self.mlflow_manager:
-                self._log_step_metrics(price)
+            self._log_step_metrics(price)
 
             # Phase 6 Week 56 (S2): crash-recovery checkpoint.
             if self.state_store is not None and (
@@ -700,21 +710,91 @@ class PaperTrader:
                 )
 
     def _check_drift(self) -> None:
-        """Feed latest portfolio return into drift detector; alert if drift found."""
-        if self.drift_detector is None:
-            return
+        """Feed latest portfolio return into drift detector; alert if drift found.
+
+        Also updates the FeatureDriftDetector (S56) when an observation is
+        available, logging each per-feature alarm to the audit trail.
+        """
         history = self.state.portfolio_history
-        if len(history) < 2:
+        if len(history) >= 2:
+            prev_pv = history[-2]
+            if prev_pv > 0 and self.drift_detector is not None:
+                step_return = (history[-1] - prev_pv) / prev_pv
+                if self.drift_detector.update(step_return) and self.alerter is not None:
+                    self.alerter.notify_drift(
+                        detector=self.drift_detector.method,
+                        signal_name="portfolio_return",
+                    )
+
+        # S56: per-feature drift check using latest raw observation
+        if self.feature_drift_detector is not None:
+            obs = self._build_observation()
+            if obs is not None and np.all(np.isfinite(obs)):
+                # Map obs array to detector's feature_names (positional)
+                n = len(self.feature_drift_detector.feature_names)
+                alarms = self.feature_drift_detector.update(obs[:n])
+                fired = [name for name, flag in alarms.items() if flag]
+                if fired:
+                    if self.alerter is not None:
+                        for name in fired:
+                            self.alerter.notify_drift(
+                                detector=self.feature_drift_detector._method,
+                                signal_name=name,
+                            )
+                    if self.audit_logger is not None:
+                        self.audit_logger.log_risk_event({
+                            "type": "feature_drift_alarm",
+                            "features": fired,
+                            "step": self.state.step,
+                            "total_detections": self.feature_drift_detector.total_detections,
+                        })
+
+    def _check_regime(self) -> None:
+        """S57: Evaluate market regime at each step when regime_detector is set.
+
+        Calls ``regime_detector.predict()`` on the current price history
+        window.  When the argmax regime index changes from the previous step,
+        the ``on_regime_change`` hook is invoked (default: log only) and the
+        event is written to the audit trail.
+        """
+        if self.regime_detector is None:
             return
-        prev_pv = history[-2]
-        if prev_pv <= 0:
+        if len(self._price_history) < 5:
             return
-        step_return = (history[-1] - prev_pv) / prev_pv
-        if self.drift_detector.update(step_return) and self.alerter is not None:
-            self.alerter.notify_drift(
-                detector=self.drift_detector.method,
-                signal_name="portfolio_return",
+
+        window = np.array(self._price_history, dtype=float)
+        try:
+            probs = self.regime_detector.predict(window)
+        except Exception as exc:
+            logger.warning("RegimeDetector.predict failed: %s", exc)
+            return
+
+        new_regime = int(np.argmax(probs))
+
+        if new_regime != self._current_regime:
+            prev = self._current_regime
+            self._current_regime = new_regime
+            logger.info(
+                "Regime change: %d → %d at step=%d (probs=%s)",
+                prev,
+                new_regime,
+                self.state.step,
+                np.round(probs, 3).tolist(),
             )
+            if self.audit_logger is not None:
+                self.audit_logger.log_risk_event({
+                    "type": "regime_change",
+                    "prev_regime": prev,
+                    "new_regime": new_regime,
+                    "probs": probs.tolist(),
+                    "step": self.state.step,
+                })
+            # Invoke user-supplied hook (or default no-op)
+            if self.on_regime_change is not None:
+                try:
+                    self.on_regime_change(prev, new_regime, probs)
+                except Exception as exc:
+                    logger.warning("on_regime_change hook raised: %s", exc)
 
     def _trigger_shutdown(self, reason: str) -> None:
         logger.warning("SHUTDOWN triggered: %s", reason)
@@ -860,6 +940,13 @@ class PaperTrader:
                 num_trades=len(self.state.trades),
                 drift_detected=self.drift_detector.drift_detected if self.drift_detector else False,
                 alerts_fired=len(self.alerter.alert_history) if self.alerter else 0,
+                # S57: current market regime
+                current_regime=self._current_regime,
+                # S56: cumulative feature drift alarms
+                feature_drift_alarms=(
+                    self.feature_drift_detector.total_detections
+                    if self.feature_drift_detector else 0
+                ),
                 **latency_kwargs,
                 **pnl_kwargs,
             )
