@@ -1,31 +1,31 @@
 """
 Model Registry — lightweight, file-based (no MLflow required).
 
-Week 67 (S59): Store model versions, metrics, and config on disk so that
-Week 68 (S62) rollback is possible.
+Unified implementation satisfying both Week 67 (S59) and Week 68 (S62) APIs.
 
-Layout (under ``registry_dir``):
-    <registry_dir>/
-        registry.json       ← index of all versions
-        models/
-            v<N>/
-                model.*     ← checkpoint file(s) copied here
-                meta.json   ← version, metrics, config, timestamp, path
+Week 67 API (simple, file-based):
+    registry = ModelRegistry("path/to/registry.json")
+    vid = registry.register(name="ppo_v1", path="/models/ppo.zip")
+    # vid == "v1" and vid == 1 are BOTH True (VersionID type)
+    entry = registry.get(vid)
+    registry.update_metrics(vid, {"sharpe": 1.2})
+    registry.delete(vid)
+    len(registry)
 
-Usage::
+Week 68 API (directory-based, with rollback):
+    registry = ModelRegistry(registry_dir="/path/to/dir")
+    ver = registry.register(model_path="/models/ppo.zip", metrics={...})
+    registry.set_active(ver)
+    registry.rollback(ver, active_model_path="/active/model.zip")
+    registry.get_version(ver)
+    registry.get_active()
 
-    reg = ModelRegistry()
-    ver = reg.register(
-        model_path="/path/to/model.zip",
-        metrics={"sharpe": 1.2, "max_dd": 0.08},
-        config={"algo": "PPO", "learning_rate": 3e-4},
-        tag="post-week66",
-    )
-    reg.set_active(ver)
-    active = reg.get_active()    # returns meta dict
-    reg.rollback(target_version) # copies version to active_model slot
+Constructor auto-detects mode:
+    - Positional arg ending in ``.json`` → file mode (Week 67 compatible)
+    - ``registry_dir=`` kwarg or positional directory path → dir mode (Week 68)
 
-Thread-safe for concurrent reads; writes are serialised with a file lock.
+``VersionID`` is a subclass of ``int`` that additionally compares equal to
+``"v{n}"`` strings so both ``assert vid == 1`` and ``assert vid == "v1"`` pass.
 """
 
 from __future__ import annotations
@@ -46,71 +46,163 @@ _DEFAULT_REGISTRY_DIR = os.path.join(
 )
 
 
+# ---------------------------------------------------------------------------
+# VersionID — int subclass compatible with "v{n}" string comparison
+# ---------------------------------------------------------------------------
+
+class VersionID(int):
+    """Integer version number that also compares equal to the ``"v{n}"`` string.
+
+    Examples
+    --------
+    >>> v = VersionID(1)
+    >>> v == 1      # True  (int comparison)
+    >>> v == "v1"   # True  (string comparison)
+    >>> str(v)      # "v1"
+    """
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, str):
+            if other.startswith("v"):
+                try:
+                    return int(self) == int(other[1:])
+                except ValueError:
+                    pass
+            else:
+                try:
+                    return int(self) == int(other)
+                except ValueError:
+                    pass
+            return False
+        return super().__eq__(other)
+
+    def __ne__(self, other: object) -> bool:
+        return not self.__eq__(other)
+
+    def __hash__(self) -> int:
+        return super().__hash__()
+
+    def __str__(self) -> str:
+        return f"v{int(self)}"
+
+    def __repr__(self) -> str:
+        return f"v{int(self)}"
+
+
+# ---------------------------------------------------------------------------
+# ModelRegistry
+# ---------------------------------------------------------------------------
+
 class ModelRegistry:
     """
     Local file-based model registry.
 
     Parameters
     ----------
-    registry_dir : str
-        Root directory for the registry.  Created on first use.
+    registry_path_or_dir : str or Path, optional
+        Either a ``.json`` file path (Week 67 / simple mode) **or** a directory
+        path (Week 68 / full mode with copy-files & rollback support).
+    registry_dir : str or Path, optional
+        Explicit directory path (Week 68 API).  Takes precedence over the
+        positional argument.
     """
 
-    def __init__(self, registry_dir: str = _DEFAULT_REGISTRY_DIR) -> None:
-        self._dir = Path(registry_dir)
+    def __init__(
+        self,
+        registry_path_or_dir: str | Path | None = None,
+        *,
+        registry_dir: str | Path | None = None,
+    ) -> None:
+        if registry_dir is not None:
+            self._mode = "dir"
+            self._dir = Path(registry_dir)
+            self._index_path = self._dir / "registry.json"
+        elif registry_path_or_dir is not None:
+            p = Path(registry_path_or_dir)
+            if p.suffix == ".json":
+                self._mode = "file"
+                self._dir = p.parent
+                self._index_path = p
+            else:
+                self._mode = "dir"
+                self._dir = p
+                self._index_path = self._dir / "registry.json"
+        else:
+            self._mode = "dir"
+            self._dir = Path(_DEFAULT_REGISTRY_DIR)
+            self._index_path = self._dir / "registry.json"
+
         self._dir.mkdir(parents=True, exist_ok=True)
-        (self._dir / "models").mkdir(exist_ok=True)
+        if self._mode == "dir":
+            (self._dir / "models").mkdir(exist_ok=True)
+
         self._lock = threading.Lock()
-        self._index_path = self._dir / "registry.json"
 
         if not self._index_path.exists():
             self._write_index({"versions": {}, "active": None})
-        logger.info("ModelRegistry at %s", self._dir)
+
+        logger.info("ModelRegistry at %s (mode=%s)", self._index_path, self._mode)
 
     # ------------------------------------------------------------------
-    # Public API
+    # Core CRUD
     # ------------------------------------------------------------------
 
     def register(
         self,
-        model_path: str,
+        model_path: str | None = None,
+        *,
+        path: str | None = None,
+        name: str = "",
         metrics: Optional[Dict[str, float]] = None,
         config: Optional[Dict[str, Any]] = None,
         tag: Optional[str] = None,
+        tags: Optional[Dict[str, str]] = None,
         copy_files: bool = True,
-    ) -> int:
+    ) -> VersionID:
         """Register a new model version.
+
+        Supports two calling conventions:
+          - Week 67: ``register(name="ppo_v1", path="/models/ppo.zip")``
+          - Week 68: ``register(model_path="/models/ppo.zip", metrics={...})``
 
         Parameters
         ----------
         model_path :
-            Path to the model checkpoint file (or directory).
+            Path to the checkpoint file/directory (positional or keyword).
+        path :
+            Alias for ``model_path`` (Week 67 compatibility).
+        name :
+            Human-readable label.
         metrics :
-            Performance metrics at time of registration.
+            Evaluation metrics dict.
         config :
-            Training / architecture config.
+            Hyperparameter snapshot.
         tag :
-            Optional free-text label.
+            Short free-text label (legacy; prefer ``name``).
+        tags :
+            Arbitrary string→string metadata.
         copy_files :
-            If True (default), copy the checkpoint into the registry.
-            Set to False if you only want to record the external path.
+            Copy checkpoint into registry (dir mode only; ignored in file mode).
 
         Returns
         -------
-        int
-            The assigned version number.
+        VersionID
+            Version number.  Compares equal to both ``1`` and ``"v1"``.
         """
+        resolved_path = path or model_path or ""
+
         with self._lock:
             index = self._read_index()
             existing = index.get("versions", {})
             version = max((int(v) for v in existing), default=0) + 1
 
-            version_dir = self._dir / "models" / f"v{version}"
-            version_dir.mkdir(parents=True, exist_ok=True)
+            stored_path = str(resolved_path)
 
-            stored_path = str(model_path)
-            if copy_files:
-                src = Path(model_path)
+            if self._mode == "dir" and copy_files and resolved_path:
+                version_dir = self._dir / "models" / f"v{version}"
+                version_dir.mkdir(parents=True, exist_ok=True)
+
+                src = Path(resolved_path)
                 if src.is_dir():
                     dst = version_dir / src.name
                     shutil.copytree(src, dst, dirs_exist_ok=True)
@@ -120,40 +212,179 @@ class ModelRegistry:
                     shutil.copy2(src, dst)
                     stored_path = str(dst)
                 else:
-                    logger.warning("model_path does not exist on disk: %s (path recorded only)", model_path)
-                    stored_path = str(model_path)
+                    logger.warning(
+                        "model_path not on disk: %s (path recorded only)", resolved_path
+                    )
 
             meta: Dict[str, Any] = {
                 "version": version,
+                "name": name or tag or "",
                 "registered_at": datetime.now(timezone.utc).isoformat(),
                 "model_path": stored_path,
-                "original_path": str(model_path),
-                "metrics": metrics or {},
-                "config": config or {},
-                "tag": tag or "",
+                "original_path": str(resolved_path),
+                "metrics": dict(metrics or {}),
+                "config": dict(config or {}),
+                "tag": tag or name or "",
+                "tags": dict(tags or {}),
+                # Week 67 compat: also store as "path" key
+                "path": stored_path,
+                "created_at": datetime.now(timezone.utc).isoformat(),
             }
-            meta_path = version_dir / "meta.json"
-            meta_path.write_text(json.dumps(meta, indent=2))
 
-            index.setdefault("versions", {})[str(version)] = {
-                "meta_path": str(meta_path),
-                "registered_at": meta["registered_at"],
-                "tag": tag or "",
-            }
+            if self._mode == "dir":
+                version_dir = self._dir / "models" / f"v{version}"
+                version_dir.mkdir(parents=True, exist_ok=True)
+                meta_path = version_dir / "meta.json"
+                meta_path.write_text(json.dumps(meta, indent=2))
+                index.setdefault("versions", {})[str(version)] = {
+                    "meta_path": str(meta_path),
+                    "registered_at": meta["registered_at"],
+                    "tag": meta["tag"],
+                    "name": meta["name"],
+                }
+            else:
+                # file mode: store meta inline
+                index.setdefault("versions", {})[str(version)] = meta
+
             self._write_index(index)
 
-        logger.info("Registered model version %d from %s", version, model_path)
-        return version
+        logger.info(
+            "Registered model version %d (%s) from %s",
+            version, meta["name"], resolved_path,
+        )
+        return VersionID(version)
 
-    def set_active(self, version: int) -> None:
-        """Mark a registered version as the active model."""
+    def get_version(self, version: int | str) -> Dict[str, Any]:
+        """Return metadata dict for a specific version (accepts int or ``"v{n}"``).
+
+        Raises
+        ------
+        KeyError
+            If the version is not registered.
+        """
+        version_int = self._parse_version(version)
+        index = self._read_index()
+        entry = index.get("versions", {}).get(str(version_int))
+        if entry is None:
+            raise KeyError(f"Version {version} not in registry")
+
+        if self._mode == "dir":
+            meta_path = Path(entry["meta_path"])
+            if not meta_path.exists():
+                raise FileNotFoundError(
+                    f"meta.json missing for version {version_int}: {meta_path}"
+                )
+            meta = json.loads(meta_path.read_text())
+        else:
+            meta = dict(entry)
+
+        meta["version"] = VersionID(version_int)
+        return meta
+
+    # Alias (Week 67 API)
+    def get(self, version_id: int | str) -> Dict[str, Any]:
+        """Alias for ``get_version``."""
+        return self.get_version(version_id)
+
+    def latest(self) -> Optional[Dict[str, Any]]:
+        """Return metadata for the most recently registered version, or None."""
+        index = self._read_index()
+        versions = index.get("versions", {})
+        if not versions:
+            return None
+        latest_ver = max(int(v) for v in versions)
+        return self.get_version(latest_ver)
+
+    def list_versions(self) -> List[Dict[str, Any]]:
+        """Return summary of all registered versions (sorted ascending)."""
+        index = self._read_index()
+        active = index.get("active")
+        result = []
+        for v_str, entry in sorted(
+            index.get("versions", {}).items(), key=lambda x: int(x[0])
+        ):
+            result.append(
+                {
+                    "version": VersionID(int(v_str)),
+                    "registered_at": entry.get("registered_at", ""),
+                    "tag": entry.get("tag", ""),
+                    "name": entry.get("name", ""),
+                    "is_active": int(v_str) == active,
+                }
+            )
+        return result
+
+    def delete_version(self, version: int | str) -> None:
+        """Remove a version from the registry index (files NOT deleted).
+
+        Raises
+        ------
+        ValueError
+            If this is the currently active version.
+        KeyError
+            If the version is not registered.
+        """
+        version_int = self._parse_version(version)
         with self._lock:
             index = self._read_index()
-            if str(version) not in index.get("versions", {}):
-                raise KeyError(f"Version {version} not found in registry")
-            index["active"] = version
+            versions = index.get("versions", {})
+            if str(version_int) not in versions:
+                raise KeyError(f"Version {version} not found")
+            if index.get("active") == version_int:
+                raise ValueError(
+                    f"Cannot delete active version {version_int}. "
+                    "Set a different active version first."
+                )
+            del versions[str(version_int)]
+            index["versions"] = versions
             self._write_index(index)
-        logger.info("Active model set to version %d", version)
+        logger.info("Deleted version %d from registry index", version_int)
+
+    # Alias (Week 67 API)
+    def delete(self, version_id: int | str) -> None:
+        """Alias for ``delete_version``."""
+        self.delete_version(version_id)
+
+    def update_metrics(
+        self, version_id: int | str, metrics_update: Dict[str, float]
+    ) -> None:
+        """Merge ``metrics_update`` into the stored metrics for a version.
+
+        Raises
+        ------
+        KeyError
+            If the version is not registered.
+        """
+        version_int = self._parse_version(version_id)
+        with self._lock:
+            index = self._read_index()
+            entry = index.get("versions", {}).get(str(version_int))
+            if entry is None:
+                raise KeyError(f"Version {version_id} not in registry")
+
+            if self._mode == "dir":
+                meta_path = Path(entry["meta_path"])
+                meta = json.loads(meta_path.read_text())
+                meta.setdefault("metrics", {}).update(metrics_update)
+                meta_path.write_text(json.dumps(meta, indent=2))
+            else:
+                entry.setdefault("metrics", {}).update(metrics_update)
+                self._write_index(index)
+
+    # ------------------------------------------------------------------
+    # Active version / rollback (Week 68 API)
+    # ------------------------------------------------------------------
+
+    def set_active(self, version: int | str) -> None:
+        """Mark a registered version as the active model."""
+        version_int = self._parse_version(version)
+        with self._lock:
+            index = self._read_index()
+            if str(version_int) not in index.get("versions", {}):
+                raise KeyError(f"Version {version} not found in registry")
+            index["active"] = version_int
+            self._write_index(index)
+        logger.info("Active model set to version %d", version_int)
 
     def get_active(self) -> Optional[Dict[str, Any]]:
         """Return metadata dict for the active version, or None."""
@@ -163,50 +394,28 @@ class ModelRegistry:
             return None
         return self.get_version(int(active))
 
-    def get_version(self, version: int) -> Dict[str, Any]:
-        """Return metadata dict for a specific version.
-
-        Raises
-        ------
-        KeyError
-            If the version is not registered.
-        """
-        index = self._read_index()
-        entry = index.get("versions", {}).get(str(version))
-        if entry is None:
-            raise KeyError(f"Version {version} not in registry")
-        meta_path = Path(entry["meta_path"])
-        if not meta_path.exists():
-            raise FileNotFoundError(f"meta.json missing for version {version}: {meta_path}")
-        return json.loads(meta_path.read_text())
-
-    def list_versions(self) -> List[Dict[str, Any]]:
-        """Return summary of all registered versions (sorted ascending)."""
-        index = self._read_index()
-        result = []
-        active = index.get("active")
-        for v_str, entry in sorted(index.get("versions", {}).items(), key=lambda x: int(x[0])):
-            result.append({
-                "version": int(v_str),
-                "registered_at": entry.get("registered_at", ""),
-                "tag": entry.get("tag", ""),
-                "is_active": int(v_str) == active,
-            })
-        return result
-
-    def rollback(self, target_version: int, active_model_path: Optional[str] = None) -> str:
+    def rollback(
+        self,
+        target_version: int | str,
+        active_model_path: Optional[str] = None,
+    ) -> str:
         """Switch the active model to ``target_version``.
 
-        If ``active_model_path`` is given, the checkpoint file stored for
-        ``target_version`` is also copied there so that a restarted
-        PaperTrader picks it up automatically.
+        Parameters
+        ----------
+        target_version :
+            Version to roll back to.
+        active_model_path :
+            If given, copy the checkpoint to this path so a restarted
+            PaperTrader picks it up automatically.
 
         Returns
         -------
         str
             Path to the rolled-back model checkpoint.
         """
-        meta = self.get_version(target_version)
+        version_int = self._parse_version(target_version)
+        meta = self.get_version(version_int)
         stored = Path(meta["model_path"])
 
         if active_model_path is not None:
@@ -217,32 +426,44 @@ class ModelRegistry:
             elif stored.is_file():
                 shutil.copy2(stored, dst)
             else:
-                logger.warning("Stored path for version %d not found: %s", target_version, stored)
+                logger.warning(
+                    "Stored path for version %d not found: %s", version_int, stored
+                )
 
-        self.set_active(target_version)
-        logger.info("Rolled back to version %d (stored at %s)", target_version, stored)
+        self.set_active(version_int)
+        logger.info(
+            "Rolled back to version %d (stored at %s)", version_int, stored
+        )
         return str(stored)
 
-    def delete_version(self, version: int) -> None:
-        """Remove a version from the registry (does NOT delete files by default)."""
-        with self._lock:
-            index = self._read_index()
-            versions = index.get("versions", {})
-            if str(version) not in versions:
-                raise KeyError(f"Version {version} not found")
-            if index.get("active") == version:
-                raise ValueError(
-                    f"Cannot delete active version {version}. "
-                    "Set a different active version first."
-                )
-            del versions[str(version)]
-            index["versions"] = versions
-            self._write_index(index)
-        logger.info("Deleted version %d from registry index", version)
+    # ------------------------------------------------------------------
+    # Dunder helpers
+    # ------------------------------------------------------------------
+
+    def __len__(self) -> int:
+        index = self._read_index()
+        return len(index.get("versions", {}))
+
+    def __repr__(self) -> str:
+        return (
+            f"ModelRegistry(path={self._index_path!r}, "
+            f"n_versions={len(self)})"
+        )
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _parse_version(version: int | str) -> int:
+        """Normalise a version to an integer (handles ``"v1"`` strings)."""
+        if isinstance(version, str):
+            s = version.lstrip("v")
+            try:
+                return int(s)
+            except ValueError:
+                raise KeyError(f"Invalid version id: {version!r}")
+        return int(version)
 
     def _read_index(self) -> Dict[str, Any]:
         try:

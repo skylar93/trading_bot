@@ -68,8 +68,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "version",
         nargs="?",
-        type=int,
-        help="Target version number to roll back to.",
+        type=str,
+        help="Target version number to roll back to (e.g. 3 or v3).",
     )
     parser.add_argument(
         "--list",
@@ -112,20 +112,29 @@ def main(argv: list[str] | None = None) -> int:
     if args.version is None:
         parser.error("Provide a version number or use --list / --show.")
 
+    # Accept both "3" and "v3"
+    raw_version = str(args.version).lstrip("v")
+    try:
+        target_version = int(raw_version)
+    except ValueError:
+        print(f"ERROR: invalid version: {args.version!r}", file=sys.stderr)
+        return 1
+
     try:
         stored_path = registry.rollback(
-            target_version=args.version,
+            target_version=target_version,
             active_model_path=args.active_model_path,
         )
     except (KeyError, FileNotFoundError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 
-    print(f"Rolled back to version {args.version}.")
+    print(f"Rolled back to version {target_version}.")
     print(f"Checkpoint path: {stored_path}")
     if args.active_model_path:
         print(f"Copied to: {args.active_model_path}")
     print("\nRestart PaperTrader to apply the rollback.")
+    return 0
     return 0
 
 

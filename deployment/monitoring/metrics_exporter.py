@@ -57,6 +57,10 @@ class MetricSnapshot:
     pnl_slippage_cost: float = 0.0
     pnl_fees: float = 0.0
     pnl_net: float = 0.0
+    # S57: current market regime (0=low-vol, 1=medium-vol, 2=high-vol; -1=unknown)
+    current_regime: int = -1
+    # S56: number of feature drift alarms fired (cumulative)
+    feature_drift_alarms: int = 0
 
 
 class MetricsExporter:
@@ -238,4 +242,8 @@ class MetricsExporter:
             "pnl_slippage_cost": snap.pnl_slippage_cost,
             "pnl_fees": snap.pnl_fees,
             "pnl_net": snap.pnl_net,
+            # S57
+            "current_regime": snap.current_regime,
+            # S56
+            "feature_drift_alarms": snap.feature_drift_alarms,
         }

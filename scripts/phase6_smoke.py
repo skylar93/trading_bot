@@ -367,7 +367,7 @@ def smoke_model_registry(tmp_dir: str) -> None:
     )
     _check("rollback_model.py CLI exit 0", result.returncode == 0, result.stderr.strip())
     _check("rollback_model.py CLI output mentions version",
-           f"version {ver}" in result.stdout)
+           f"version {int(ver)}" in result.stdout)
 
 
 # --------------------------------------------------------------------------

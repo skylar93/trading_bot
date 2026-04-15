@@ -149,13 +149,15 @@ class TestRollbackScript:
 
     def test_rollback_via_cli(self, reg, dummy_model):
         ver = reg.register(dummy_model)
+        # str(VersionID(1)) == "v1"; CLI accepts both "1" and "v1"
         result = subprocess.run(
             [sys.executable, "scripts/rollback_model.py", str(ver),
              "--registry-dir", str(reg._dir)],
             capture_output=True, text=True,
         )
         assert result.returncode == 0
-        assert f"version {ver}" in result.stdout
+        # CLI prints "Rolled back to version {int(ver)}."
+        assert f"version {int(ver)}" in result.stdout
 
     def test_rollback_unknown_version_exits_nonzero(self, reg):
         result = subprocess.run(

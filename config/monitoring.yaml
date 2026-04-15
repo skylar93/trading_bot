@@ -38,3 +38,17 @@ monitoring:
   use_drift_detection: false
   drift_method: "adwin"         # "adwin" | "page_hinkley"
   drift_window_size: 500
+
+  # ─ Feature Drift (S56) ──────────────────────────────────────
+  # When enabled, each feature in the observation vector is monitored
+  # individually.  Alarm fires → audit log + alerter.
+  use_feature_drift_detection: false
+  feature_drift_method: "adwin"  # "adwin" | "page_hinkley"
+
+  # ─ Regime Detection (S57) ────────────────────────────────────
+  # When enabled, RegimeDetector.predict() is called every step using
+  # the current price history window.  Regime changes are logged and
+  # the on_regime_change hook is called.
+  use_regime_detection: false
+  regime_n_regimes: 3           # number of hidden states
+  regime_method: "threshold"    # "hmm" | "threshold" (hmm requires hmmlearn)
