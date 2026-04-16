@@ -791,7 +791,7 @@ class SingleAssetRLTradingEnv(gym.Env):
             return True, "trailing_stop"
 
         # 3. Max drawdown
-        if self._risk_manager.check_max_drawdown(
+        if self._risk_manager.check_drawdown(
             "env", self.peak_portfolio_value, self.portfolio_value
         ):
             self._force_close_position(current_price, "max_drawdown")

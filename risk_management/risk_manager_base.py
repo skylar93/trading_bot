@@ -79,19 +79,29 @@ class RiskManagerBase(ABC):
         pass
     
     @abstractmethod
-    def check_max_drawdown(self, *args, **kwargs) -> bool:
+    def check_drawdown(self, *args, **kwargs) -> bool:
         """
-        Check if maximum drawdown has been exceeded.
+        Check if drawdown limit has been exceeded.
 
         Implementations may accept different signatures:
         - BacktestingRiskManager: (peak_value: float, current_value: float)
         - RLRiskManager: (agent_id_or_peak, peak_value=None, current_value=None)
 
         Returns:
-            bool: True if max drawdown exceeded, False otherwise
+            bool: True if drawdown limit exceeded, False otherwise
         """
         pass
-    
+
+    def check_max_drawdown(self, *args, **kwargs) -> bool:
+        """Deprecated. Use check_drawdown() instead."""
+        import warnings
+        warnings.warn(
+            "check_max_drawdown() is deprecated; use check_drawdown()",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.check_drawdown(*args, **kwargs)
+
     @abstractmethod
     def calculate_stop_loss(
         self, entry_price: float, position_size: float, is_long: bool = True
@@ -110,20 +120,30 @@ class RiskManagerBase(ABC):
         pass
     
     @abstractmethod
-    def check_stop_loss(self, *args, **kwargs) -> bool:
+    def check_trailing_stop(self, *args, **kwargs) -> bool:
         """
-        Check if stop loss has been triggered.
+        Check if trailing stop (or stop loss) has been triggered.
 
         Implementations may accept different signatures:
         - BacktestingRiskManager: (symbol: str, current_price: float)
-        - RLRiskManager: (agent_id: str, position_size: float,
-                          entry_price: float, current_price: float)
+        - RLRiskManager: (agent_id: str, asset: str, position_size: float,
+                          current_price: float)
 
         Returns:
-            bool: True if stop loss triggered, False otherwise
+            bool: True if stop triggered, False otherwise
         """
         pass
-    
+
+    def check_stop_loss(self, *args, **kwargs) -> bool:
+        """Deprecated. Use check_trailing_stop() instead."""
+        import warnings
+        warnings.warn(
+            "check_stop_loss() is deprecated; use check_trailing_stop()",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.check_trailing_stop(*args, **kwargs)
+
     @abstractmethod
     def update_trailing_stop(self, symbol: str, current_price: float) -> None:
         """
@@ -136,15 +156,25 @@ class RiskManagerBase(ABC):
         pass
     
     @abstractmethod
-    def calculate_var(self, *args, **kwargs) -> Optional[float]:
+    def compute_var(self, *args, **kwargs) -> Optional[float]:
         """
-        Calculate Value at Risk (VaR).
+        Compute Value at Risk (VaR).
 
         Implementations:
         - BacktestingRiskManager: (returns: pd.Series, confidence: float) -> float
         - RLRiskManager: (agent_id_or_returns: Union[str, np.ndarray]) -> Optional[float]
         """
         pass
+
+    def calculate_var(self, *args, **kwargs) -> Optional[float]:
+        """Deprecated. Use compute_var() instead."""
+        import warnings
+        warnings.warn(
+            "calculate_var() is deprecated; use compute_var()",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.compute_var(*args, **kwargs)
     
     @abstractmethod
     def _get_risk_metrics(self) -> Dict[str, Any]:

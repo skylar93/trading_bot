@@ -339,7 +339,7 @@ class TestRLRiskManagerAuditIntegration:
         al = AuditLogger(log_file)
         rm = self._make_risk_manager(audit_logger=al)
         # peak=100, current=85 → 15% drawdown > 10% threshold
-        rm.check_max_drawdown(100.0, 85.0)
+        rm.check_drawdown(100.0, 85.0)
         al.close()
         records = _read_records(log_file)
         assert any(r["payload"].get("event") == "drawdown_breach" for r in records)

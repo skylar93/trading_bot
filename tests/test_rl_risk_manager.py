@@ -193,17 +193,17 @@ class TestRLRiskManager(unittest.TestCase):
         self.risk_manager.current_values[agent_id] = 10000.0
         
         # No drawdown
-        exceeded = self.risk_manager.check_max_drawdown(agent_id)
+        exceeded = self.risk_manager.check_drawdown(agent_id)
         self.assertFalse(exceeded)
         
         # Small drawdown
         self.risk_manager.current_values[agent_id] = 9000.0  # 10% drawdown
-        exceeded = self.risk_manager.check_max_drawdown(agent_id)
+        exceeded = self.risk_manager.check_drawdown(agent_id)
         self.assertFalse(exceeded)
         
         # Drawdown exceeding threshold
         self.risk_manager.current_values[agent_id] = 8000.0  # 20% drawdown
-        exceeded = self.risk_manager.check_max_drawdown(agent_id)
+        exceeded = self.risk_manager.check_drawdown(agent_id)
         self.assertTrue(exceeded)
         
     def test_update_portfolio_values(self):

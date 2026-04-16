@@ -268,7 +268,7 @@ class TestCircuitBreakerInOrderManager:
 class TestCorrelationLimit:
     def _make_risk_manager(self, check_result: bool):
         rm = MagicMock()
-        rm.check_max_drawdown.return_value = False
+        rm.check_drawdown.return_value = False
         rm.check_correlation.return_value = check_result
         return rm
 

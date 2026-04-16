@@ -698,7 +698,7 @@ class PaperTrader:
 
         # Delegate to risk_manager if available
         if self.risk_manager is not None:
-            if self.risk_manager.check_max_drawdown(peak_pv, current_pv):
+            if self.risk_manager.check_drawdown(peak_pv, current_pv):
                 self._trigger_shutdown(
                     f"RiskManager: max drawdown exceeded (peak={peak_pv:.2f}, current={current_pv:.2f})"
                 )

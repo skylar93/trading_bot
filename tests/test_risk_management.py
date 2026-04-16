@@ -133,14 +133,14 @@ class TestRiskManager(unittest.TestCase):
 
         # No drawdown
         self.assertFalse(
-            self.risk_manager.check_max_drawdown(initial_value, current_value),
+            self.risk_manager.check_drawdown(initial_value, current_value),
             "Should not trigger max drawdown when no drawdown exists",
         )
 
         # Small drawdown
         current_value = initial_value * 0.95  # 5% drawdown
         self.assertFalse(
-            self.risk_manager.check_max_drawdown(initial_value, current_value),
+            self.risk_manager.check_drawdown(initial_value, current_value),
             "Should not trigger max drawdown for small drawdown",
         )
 
@@ -149,7 +149,7 @@ class TestRiskManager(unittest.TestCase):
             1 - self.config["max_drawdown_pct"] * 1.1
         )
         self.assertTrue(
-            self.risk_manager.check_max_drawdown(initial_value, current_value),
+            self.risk_manager.check_drawdown(initial_value, current_value),
             "Should trigger max drawdown when threshold exceeded",
         )
 
