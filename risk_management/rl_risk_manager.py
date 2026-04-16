@@ -249,25 +249,22 @@ class RLRiskManager(RiskManagerBase):
             if key not in self.position_highest_values or current_price > self.position_highest_values[key]:
                 self.position_highest_values[key] = current_price
     
-    def calculate_var(self, agent_id_or_returns: Union[str, np.ndarray]) -> Optional[float]:
+    def compute_var(self, agent_id_or_returns: Union[str, np.ndarray]) -> Optional[float]:
         """
-        Calculate Value at Risk (VaR).
-        
-        This method supports both:
-        1. Passing an agent_id to calculate VaR from stored returns
+        Compute Value at Risk (VaR).
+
+        Supports both:
+        1. Passing an agent_id to compute VaR from stored returns
         2. Passing a returns array directly
-        
+
         Args:
-            agent_id_or_returns: Either:
-                - Agent ID to calculate VaR from stored returns
-                - Array of returns to calculate VaR directly
-                
+            agent_id_or_returns: Agent ID (str) or returns array (np.ndarray)
+
         Returns:
-            Optional[float]: Value at Risk at the configured confidence level, None if insufficient data
+            Optional[float]: VaR at the configured confidence level, or None if insufficient data
         """
         returns = None
-        
-        # If agent_id is provided, get returns from history
+
         if isinstance(agent_id_or_returns, str):
             agent_id = agent_id_or_returns
             if agent_id in self.returns_history and len(self.returns_history[agent_id]) >= 10:
@@ -275,19 +272,26 @@ class RLRiskManager(RiskManagerBase):
             else:
                 return None
         else:
-            # Returns array provided directly
             returns = agent_id_or_returns
-        
-        # Check if we have enough data
+
         if len(returns) < 10:
             return None
 
-        # Delegate VaR computation to UnifiedRiskManager
         return self._unified.compute_var(
             returns,
             confidence_level=self.config.var_confidence_level,
             var_method="parametric" if self.config.use_parametric_var else "historical",
         )
+
+    def calculate_var(self, *args, **kwargs) -> Optional[float]:
+        """Deprecated. Use compute_var() instead."""
+        import warnings
+        warnings.warn(
+            "calculate_var() is deprecated; use compute_var()",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.compute_var(*args, **kwargs)
     
     def _get_risk_metrics(self) -> Dict[str, Any]:
         """
@@ -736,17 +740,17 @@ class RLRiskManager(RiskManagerBase):
                 "portfolio_var_exceed_events": self.portfolio_var_exceed_events,
             }
     
-    def check_max_drawdown(self, agent_id_or_peak, peak_value=None, current_value=None) -> bool:
+    def check_drawdown(self, agent_id_or_peak, peak_value=None, current_value=None) -> bool:
         """
-        Check if maximum drawdown has been exceeded.
+        Check if drawdown limit has been exceeded.
 
         Supports three call patterns:
-        1. check_max_drawdown(peak, current)          — legacy 2-arg float
-        2. check_max_drawdown("agent", peak, current) — 3-arg string agent_id
-        3. check_max_drawdown("agent")                — lookup from stored values
+        1. check_drawdown(peak, current)          — 2-arg float
+        2. check_drawdown("agent", peak, current) — 3-arg string agent_id
+        3. check_drawdown("agent")                — lookup from stored values
 
         Returns:
-            bool: True if max drawdown exceeded, False otherwise
+            bool: True if drawdown limit exceeded, False otherwise
         """
         # Pattern 1: called with (peak_float, current_float)
         if isinstance(agent_id_or_peak, (int, float)):
@@ -815,6 +819,16 @@ class RLRiskManager(RiskManagerBase):
 
         return False
 
+    def check_max_drawdown(self, *args, **kwargs) -> bool:
+        """Deprecated. Use check_drawdown() instead."""
+        import warnings
+        warnings.warn(
+            "check_max_drawdown() is deprecated; use check_drawdown()",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.check_drawdown(*args, **kwargs)
+
     def adjust_for_regime(self, action: float, regime_probs: np.ndarray) -> float:
         """
         Regime 확률에 따라 position sizing을 조정한다.
@@ -857,7 +871,7 @@ class RLRiskManager(RiskManagerBase):
         if agent_id in self.returns_history:
             returns = np.array(list(self.returns_history[agent_id]))
             if len(returns) >= 10:
-                var_value = self.calculate_var(returns)
+                var_value = self.compute_var(returns)
         
         if var_value is None:
             return None

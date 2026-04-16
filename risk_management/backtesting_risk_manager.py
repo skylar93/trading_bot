@@ -185,21 +185,19 @@ class BacktestingRiskManager(RiskManagerBase):
         self._asset_returns_df = None
         self._asset_stds = None
 
-    def check_max_drawdown(self, peak_value: float, current_value: float) -> bool:
+    def check_drawdown(self, peak_value: float, current_value: float) -> bool:
         """
-        Check if max drawdown has been exceeded.
-        
+        Check if drawdown limit has been exceeded.
+
         Args:
             peak_value: Historical peak portfolio value
             current_value: Current portfolio value
-            
+
         Returns:
-            bool: True if max drawdown exceeded, False otherwise
+            bool: True if drawdown limit exceeded, False otherwise
         """
-        # Delegate core computation to UnifiedRiskManager
         max_exceeded = self._unified.check_drawdown(peak_value, current_value, self.config.max_drawdown_pct)
 
-        # If using forced liquidation, also set the flag
         if max_exceeded and self.config.use_forced_liquidation:
             self.liquidation_triggered = True
             if peak_value > 0:
@@ -209,6 +207,16 @@ class BacktestingRiskManager(RiskManagerBase):
                 )
 
         return max_exceeded
+
+    def check_max_drawdown(self, *args, **kwargs) -> bool:
+        """Deprecated. Use check_drawdown() instead."""
+        import warnings
+        warnings.warn(
+            "check_max_drawdown() is deprecated; use check_drawdown()",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.check_drawdown(*args, **kwargs)
 
     def calculate_stop_loss(
         self, entry_price: float, position_size: float, is_long: bool = True
@@ -230,27 +238,36 @@ class BacktestingRiskManager(RiskManagerBase):
         else:
             return entry_price * (1 + self.config.stop_loss_pct)
 
-    def check_stop_loss(self, symbol: str, current_price: float) -> bool:
+    def check_trailing_stop(self, symbol: str, current_price: float) -> bool:
         """
         Check if stop loss has been triggered for a symbol.
-        
+
         Args:
             symbol: Asset symbol to check
             current_price: Current price of the asset
-            
+
         Returns:
-            bool: True if stop loss triggered, False otherwise
+            bool: True if stop triggered, False otherwise
         """
         if not self.config.use_stop_loss or symbol not in self.stop_losses:
             return False
-            
+
         stop_config = self.stop_losses[symbol]
-        
-        # Check if stop loss is triggered
+
         if stop_config.is_long:
             return current_price <= stop_config.stop_price
         else:
             return current_price >= stop_config.stop_price
+
+    def check_stop_loss(self, *args, **kwargs) -> bool:
+        """Deprecated. Use check_trailing_stop() instead."""
+        import warnings
+        warnings.warn(
+            "check_stop_loss() is deprecated; use check_trailing_stop()",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.check_trailing_stop(*args, **kwargs)
 
     def update_trailing_stop(self, symbol: str, current_price: float) -> None:
         """
@@ -417,7 +434,7 @@ class BacktestingRiskManager(RiskManagerBase):
             return 0.0
             
         # Calculate VaR
-        var = self.calculate_var(returns, confidence_level)
+        var = self.compute_var(returns, confidence_level)
         
         # Calculate CVaR
         tail = returns[returns <= -var]
@@ -510,14 +527,14 @@ class BacktestingRiskManager(RiskManagerBase):
         # Delegate: check_correlation returns True if limit EXCEEDED; we want True if within limit
         return not self._unified.check_correlation(corr, self.config.max_correlation)
     
-    def calculate_var(self, returns, confidence_level=None):
+    def compute_var(self, returns, confidence_level=None):
         """
-        Calculate Value at Risk (VaR) from historical returns.
-        
+        Compute Value at Risk (VaR) from historical returns.
+
         Args:
             returns: Series or array of historical returns
             confidence_level: Optional confidence level (overrides config value)
-            
+
         Returns:
             float: VaR at the specified confidence level
         """
@@ -528,12 +545,20 @@ class BacktestingRiskManager(RiskManagerBase):
         if len(returns) < 2:
             return 0.0
 
-        # Use provided confidence level or default from config
         cl = confidence_level if confidence_level is not None else self.config.var_confidence_level
 
-        # Delegate to UnifiedRiskManager (historical VaR for backtesting)
         result = self._unified.compute_var(returns, confidence_level=cl, var_method="historical")
         return result if result is not None else 0.0
+
+    def calculate_var(self, *args, **kwargs):
+        """Deprecated. Use compute_var() instead."""
+        import warnings
+        warnings.warn(
+            "calculate_var() is deprecated; use compute_var()",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.compute_var(*args, **kwargs)
     
     def get_portfolio_var(self, 
                      portfolio_value: float, 

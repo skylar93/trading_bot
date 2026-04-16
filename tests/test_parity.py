@@ -74,9 +74,9 @@ class TestDrawdownParity:
         (1000.0, 1100.0, False), # profit → ok
     ])
     def test_brm_vs_rlrm(self, brm, rlrm, peak, current, expected_breach):
-        brm_result = brm.check_max_drawdown(peak, current)
+        brm_result = brm.check_drawdown(peak, current)
         # RLRiskManager pattern 1: (peak_float, current_float)
-        rl_result = rlrm.check_max_drawdown(peak, current)
+        rl_result = rlrm.check_drawdown(peak, current)
         assert brm_result == rl_result, (
             f"Drawdown check diverged: BRM={brm_result}, RL={rl_result} "
             f"(peak={peak}, current={current})"
@@ -87,14 +87,14 @@ class TestDrawdownParity:
         peak, current = 1000.0, 840.0  # 16% → breach
         threshold = 0.15
         unified_result = unified_hist.check_drawdown(peak, current, threshold)
-        brm_result = brm.check_max_drawdown(peak, current)
-        rl_result = rlrm.check_max_drawdown(peak, current)
+        brm_result = brm.check_drawdown(peak, current)
+        rl_result = rlrm.check_drawdown(peak, current)
         assert unified_result == brm_result == rl_result == True
 
     def test_zero_peak_safe(self, brm, rlrm, unified_hist):
         """All three must return False (not breach) when peak <= 0."""
-        assert brm.check_max_drawdown(0.0, 100.0) == False
-        assert rlrm.check_max_drawdown(0.0, 100.0) == False
+        assert brm.check_drawdown(0.0, 100.0) == False
+        assert rlrm.check_drawdown(0.0, 100.0) == False
         assert unified_hist.check_drawdown(0.0, 100.0, 0.15) == False
 
 
@@ -111,7 +111,7 @@ class TestVaRParity:
         return rng.normal(0, 0.01, 30)
 
     def test_historical_var_brm_vs_unified(self, brm, unified_hist, returns_30):
-        brm_var = brm.calculate_var(returns_30, confidence_level=0.95)
+        brm_var = brm.compute_var(returns_30, confidence_level=0.95)
         uni_var = unified_hist.compute_var(returns_30, confidence_level=0.95)
         assert uni_var is not None
         assert abs(brm_var - uni_var) < 1e-10, (
@@ -119,7 +119,7 @@ class TestVaRParity:
         )
 
     def test_historical_var_rlrm_vs_unified(self, rlrm, unified_hist, returns_30):
-        rl_var = rlrm.calculate_var(returns_30)
+        rl_var = rlrm.compute_var(returns_30)
         uni_var = unified_hist.compute_var(returns_30, confidence_level=0.95)
         assert rl_var is not None
         assert uni_var is not None
@@ -128,8 +128,8 @@ class TestVaRParity:
         )
 
     def test_all_three_agree_historical(self, brm, rlrm, unified_hist, returns_30):
-        brm_var = brm.calculate_var(returns_30, 0.95)
-        rl_var = rlrm.calculate_var(returns_30)
+        brm_var = brm.compute_var(returns_30, 0.95)
+        rl_var = rlrm.compute_var(returns_30)
         uni_var = unified_hist.compute_var(returns_30, 0.95)
         assert rl_var is not None and uni_var is not None
         assert abs(brm_var - rl_var) < 1e-10
@@ -139,7 +139,7 @@ class TestVaRParity:
         short_returns = np.array([0.01, -0.02, 0.03])
         # BRM returns 0.0 for len < 2 ... actually len=3 is >= 2, it just computes
         # RL returns None for len < 10
-        rl_var = rlrm.calculate_var(short_returns)
+        rl_var = rlrm.compute_var(short_returns)
         uni_var = unified_hist.compute_var(short_returns)
         assert rl_var is None
         assert uni_var is None
@@ -161,7 +161,7 @@ class TestVaRParity:
         rng = np.random.default_rng(99)
         returns = rng.normal(0, 0.01, 50)
         # Both should give same result
-        rl_var = rm.calculate_var(returns)
+        rl_var = rm.compute_var(returns)
         uni_var = UnifiedRiskManager(mode="live", var_method="parametric").compute_var(returns, 0.95)
         assert rl_var is not None and uni_var is not None
         assert abs(rl_var - uni_var) < 1e-10, (
@@ -326,3 +326,51 @@ class TestThreadSafety:
 
         assert not errors
         assert all(r == True for r in results)
+
+
+# ---------------------------------------------------------------------------
+# E10: 100 random scenario parity
+# ---------------------------------------------------------------------------
+
+class TestRandomScenarioParity:
+    """E10: 100 random scenarios — all three managers must agree."""
+
+    def test_drawdown_parity_100_random(self):
+        rng = np.random.default_rng(2026_04_16)
+        config_b = BacktestingRiskConfig(max_drawdown_pct=0.15)
+        config_r = RLRiskConfig(max_drawdown_pct=0.15, use_parametric_var=False)
+        brm = BacktestingRiskManager(config_b)
+        rlrm = RLRiskManager(config_r)
+        unified = UnifiedRiskManager(mode="backtest", var_method="historical")
+
+        peaks = rng.uniform(100.0, 10000.0, 100)
+        currents = peaks * rng.uniform(0.5, 1.2, 100)
+
+        for i, (peak, current) in enumerate(zip(peaks, currents)):
+            b = brm.check_drawdown(peak, current)
+            r = rlrm.check_drawdown(peak, current)
+            u = unified.check_drawdown(peak, current, 0.15)
+            assert b == r == u, (
+                f"Scenario {i}: peak={peak:.2f}, current={current:.2f} → "
+                f"BRM={b}, RL={r}, Unified={u}"
+            )
+
+    def test_var_parity_100_random(self):
+        rng = np.random.default_rng(2026_04_16)
+        config_b = BacktestingRiskConfig(use_var=True, var_confidence_level=0.95)
+        config_r = RLRiskConfig(use_var=True, var_confidence_level=0.95, use_parametric_var=False)
+        brm = BacktestingRiskManager(config_b)
+        rlrm = RLRiskManager(config_r)
+        unified = UnifiedRiskManager(mode="backtest", var_method="historical")
+
+        for i in range(100):
+            n = int(rng.integers(15, 101))
+            returns = rng.normal(0, 0.01, n)
+            b = brm.compute_var(returns, confidence_level=0.95)
+            r = rlrm.compute_var(returns)
+            u = unified.compute_var(returns, confidence_level=0.95)
+            assert b is not None and r is not None and u is not None, (
+                f"Scenario {i}: unexpected None (n={n})"
+            )
+            assert abs(b - r) < 1e-10, f"Scenario {i}: BRM={b} vs RL={r}"
+            assert abs(b - u) < 1e-10, f"Scenario {i}: BRM={b} vs Unified={u}"

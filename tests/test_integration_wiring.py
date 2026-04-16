@@ -17,7 +17,7 @@ class TestPaperTraderRiskWiring:
 
         agent = MagicMock()
         rm = MagicMock()
-        rm.check_max_drawdown.return_value = True  # drawdown exceeded
+        rm.check_drawdown.return_value = True  # drawdown exceeded
 
         trader = PaperTrader(
             agent=agent,
@@ -29,7 +29,7 @@ class TestPaperTraderRiskWiring:
         trader.state.portfolio_history.append(8000.0)
         trader.state.peak_portfolio_value = 10000.0
         trader._check_risk(price=100.0)
-        rm.check_max_drawdown.assert_called_once()
+        rm.check_drawdown.assert_called_once()
 
 
 class TestOrderManagerRiskWiring:

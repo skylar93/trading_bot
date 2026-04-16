@@ -105,7 +105,7 @@ class OrderManager:
     paper_mode : bool
         When True (default), all orders are simulated locally.
     risk_manager : optional
-        Any object with ``check_max_drawdown(peak, current) -> bool`` and
+        Any object with ``check_drawdown(peak, current) -> bool`` and
         optionally ``check_correlation(value, threshold) -> bool``.
         UnifiedRiskManager satisfies both.
     audit_logger : AuditLogger, optional
@@ -276,7 +276,7 @@ class OrderManager:
             if tracker is not None:
                 peak = tracker.peak_value
                 current = tracker.portfolio_value
-                if self._risk_manager.check_max_drawdown(peak, current):
+                if self._risk_manager.check_drawdown(peak, current):
                     order_id = self._reject_order(
                         side, amount, order_type, limit_price,
                         reason="max_drawdown",
