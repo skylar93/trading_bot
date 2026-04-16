@@ -1,10 +1,18 @@
 import pytest
 import asyncio
 import numpy as np
-from unittest.mock import Mock, patch, AsyncMock
-import ccxt
-from envs.live_trading_env import LiveTradingEnvironment, OrderStatus, Order
 import pandas as pd
+from unittest.mock import Mock, patch, AsyncMock
+
+try:
+    import ccxt
+    HAS_CCXT = True
+except ImportError:
+    HAS_CCXT = False
+
+from envs.live_trading_env import LiveTradingEnvironment, OrderStatus, Order
+
+pytestmark = pytest.mark.skipif(not HAS_CCXT, reason="ccxt not installed; activates in Track F (Week 72)")
 
 @pytest.fixture
 def mock_ccxt():

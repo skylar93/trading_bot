@@ -2,43 +2,53 @@
 
 import pytest
 import numpy as np
-import ray
-from training.utils.ray_manager import (
-    RayConfig,
-    BatchConfig,
-    RayManager,
-    RayActor,
-)
 
+try:
+    import ray
+    from training.utils.ray_manager import (
+        RayConfig,
+        BatchConfig,
+        RayManager,
+        RayActor,
+    )
+    HAS_RAY = True
+except ImportError:
+    HAS_RAY = False
 
-@ray.remote
-class TestTrainingActor(RayActor):
-    """Test implementation of TrainingActor"""
+pytestmark = pytest.mark.skipif(not HAS_RAY, reason="ray not installed")
 
-    def __init__(self, config):
-        self.config = config
+# Only define ray.remote actors when ray is available; avoids NameError at collection time.
+if HAS_RAY:
+    @ray.remote
+    class TestTrainingActor(RayActor):
+        """Test implementation of TrainingActor"""
 
-    def process_batch(self, batch_data: np.ndarray) -> dict:
-        """Simple batch processing for testing"""
-        return {
-            "loss": float(np.mean(batch_data)),
-            "metrics": {"batch_size": len(batch_data)},
-        }
+        def __init__(self, config):
+            self.config = config
 
+        def process_batch(self, batch_data: np.ndarray) -> dict:
+            """Simple batch processing for testing"""
+            return {
+                "loss": float(np.mean(batch_data)),
+                "metrics": {"batch_size": len(batch_data)},
+            }
 
-@ray.remote
-class TestEvaluationActor(RayActor):
-    """Test implementation of EvaluationActor"""
+    @ray.remote
+    class TestEvaluationActor(RayActor):
+        """Test implementation of EvaluationActor"""
 
-    def __init__(self, config):
-        self.config = config
+        def __init__(self, config):
+            self.config = config
 
-    def process_batch(self, batch_data: np.ndarray) -> dict:
-        """Simple batch processing for testing"""
-        return {
-            "returns": float(np.sum(batch_data)),
-            "metrics": {"batch_size": len(batch_data)},
-        }
+        def process_batch(self, batch_data: np.ndarray) -> dict:
+            """Simple batch processing for testing"""
+            return {
+                "returns": float(np.sum(batch_data)),
+                "metrics": {"batch_size": len(batch_data)},
+            }
+else:
+    TestTrainingActor = None
+    TestEvaluationActor = None
 
 
 @pytest.fixture
