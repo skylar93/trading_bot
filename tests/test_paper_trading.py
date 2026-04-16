@@ -23,7 +23,7 @@ def paper_env():
     return env
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_initialization(paper_env):
     """Test environment initialization"""
     await paper_env.initialize()
@@ -36,7 +36,7 @@ async def test_initialization(paper_env):
         await paper_env.cleanup()
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_position_sizing(paper_env):
     """Test position sizing logic"""
     await paper_env.initialize()
@@ -55,7 +55,7 @@ async def test_position_sizing(paper_env):
         await paper_env.cleanup()
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_slippage_simulation(paper_env):
     """Test slippage simulation"""
     await paper_env.initialize()
@@ -67,7 +67,7 @@ async def test_slippage_simulation(paper_env):
         await paper_env.cleanup()
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_risk_management(paper_env):
     """Test risk management features"""
     await paper_env.initialize()
@@ -102,7 +102,7 @@ async def test_risk_management(paper_env):
         await paper_env.cleanup()
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_metrics_calculation(paper_env):
     """Test performance metrics calculation"""
     await paper_env.initialize()
@@ -119,7 +119,7 @@ async def test_metrics_calculation(paper_env):
         await paper_env.cleanup()
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_market_data_handling(paper_env):
     """Test market data processing"""
     await paper_env.initialize()
@@ -134,7 +134,7 @@ async def test_market_data_handling(paper_env):
         await paper_env.cleanup()
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_trade_execution_limits(paper_env):
     """Test trade execution limits"""
     await paper_env.initialize()
@@ -149,7 +149,7 @@ async def test_trade_execution_limits(paper_env):
         await paper_env.cleanup()
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_logging(paper_env):
     """Test logging functionality"""
     await paper_env.initialize()
@@ -160,7 +160,7 @@ async def test_logging(paper_env):
         await paper_env.cleanup()
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_stress_conditions(paper_env):
     """Test behavior under stress conditions"""
     await paper_env.initialize()
@@ -175,7 +175,7 @@ async def test_stress_conditions(paper_env):
         await paper_env.cleanup()
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_limit_order(paper_env):
     """Test limit order execution"""
     await paper_env.initialize()
@@ -200,7 +200,7 @@ async def test_limit_order(paper_env):
         await paper_env.cleanup()
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_stop_limit_order(paper_env):
     """Test stop-limit order execution"""
     await paper_env.initialize()
@@ -269,7 +269,7 @@ async def test_stop_limit_order(paper_env):
         await paper_env.cleanup()
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_trailing_stop_order(paper_env):
     """Test trailing stop order execution"""
     await paper_env.initialize()
@@ -297,7 +297,7 @@ async def test_trailing_stop_order(paper_env):
         await paper_env.cleanup()
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_iceberg_order(paper_env):
     """Test iceberg order execution"""
     await paper_env.initialize()
@@ -327,7 +327,7 @@ async def test_iceberg_order(paper_env):
         await paper_env.cleanup()
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_order_expiration(paper_env):
     """Test order expiration"""
     await paper_env.initialize()
@@ -363,7 +363,7 @@ async def test_order_expiration(paper_env):
         await paper_env.cleanup()
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_order_cancellation(paper_env):
     """Test order cancellation"""
     await paper_env.initialize()

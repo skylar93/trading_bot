@@ -7,7 +7,10 @@ import pandas as pd
 from gymnasium import spaces
 from datetime import datetime
 from collections import deque
-from data.utils.websocket_loader import WebSocketLoader
+try:
+    from data.utils.websocket_loader import WebSocketLoader
+except ImportError:
+    WebSocketLoader = None  # not yet available; Track F (Week 72) will provide this
 import os
 
 logger = logging.getLogger(__name__)

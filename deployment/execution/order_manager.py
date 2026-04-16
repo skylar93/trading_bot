@@ -230,16 +230,25 @@ class OrderManager:
         if amount <= 0:
             raise ValueError(f"Order amount must be positive, got {amount}.")
 
-        # S44: idempotency check — return existing order if key already seen
+        # S44: idempotency check — atomic get-or-reserve using setdefault.
+        # order_id is pre-generated so we can reserve the slot before any processing.
+        # This closes the TOCTOU race: two concurrent threads with the same key both
+        # call setdefault, but only one wins — the loser gets back the winner's id
+        # and returns immediately without creating a duplicate order.
+        _pre_order_id = str(uuid.uuid4())[:8]
         if idempotency_key is not None:
             with self._lock:
-                existing_id = self._idempotency_map.get(idempotency_key)
-                if existing_id is not None:
+                registered_id = self._idempotency_map.setdefault(
+                    idempotency_key, _pre_order_id
+                )
+                if registered_id != _pre_order_id:
+                    # Another thread already registered this key — return its order.
                     logger.info(
                         "submit_order: idempotency_key=%r already exists → returning %s",
-                        idempotency_key, existing_id,
+                        idempotency_key, registered_id,
                     )
-                    return existing_id
+                    return registered_id
+                # We won the race. _pre_order_id is now reserved in the map.
 
         # S41: correlation limit check
         if self._current_correlation is not None:
@@ -296,7 +305,8 @@ class OrderManager:
         if current_price is None and price is not None:
             current_price = price
 
-        order_id = str(uuid.uuid4())[:8]
+        # Re-use the pre-generated id (already reserved in _idempotency_map if keyed).
+        order_id = _pre_order_id
         _now = datetime.utcnow()
         order = Order(
             order_id=order_id,
@@ -310,8 +320,8 @@ class OrderManager:
         )
         with self._lock:
             self._orders[order_id] = order
-            if idempotency_key is not None:
-                self._idempotency_map[idempotency_key] = order_id
+            # _idempotency_map already has order_id reserved via setdefault above;
+            # for the non-keyed path, nothing to register.
 
         # Audit: order submitted
         if self._audit_logger is not None:

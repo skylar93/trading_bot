@@ -6,8 +6,20 @@ import numpy as np
 import pandas as pd
 from gymnasium import spaces
 from typing import Dict, List, Tuple, Optional, Union, AsyncGenerator
-from data.utils.websocket_loader import WebSocketLoader
-import ccxt.async_support as ccxt
+try:
+    from data.utils.websocket_loader import WebSocketLoader
+except ImportError:
+    WebSocketLoader = None  # not yet available; Track F (Week 72) will provide this
+
+try:
+    import ccxt.async_support as ccxt
+    _CcxtExchange = ccxt.Exchange
+except ImportError:
+    ccxt = None  # not yet installed; Track F (Week 72) will install ccxt
+
+    class _CcxtExchange:  # type: ignore[no-redef]
+        """Stub so Optional[ccxt.Exchange] type hints don't fail at import time."""
+        pass
 from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
@@ -90,7 +102,7 @@ class LiveTradingEnvironment(gym.Env):
         retry_attempts: int = 3,
         retry_delay: float = 1.0,
         websocket: Optional[WebSocketLoader] = None,
-        exchange: Optional[ccxt.Exchange] = None,
+        exchange: Optional[_CcxtExchange] = None,
     ):
         super(LiveTradingEnvironment, self).__init__()
 

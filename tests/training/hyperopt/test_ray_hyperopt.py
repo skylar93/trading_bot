@@ -9,17 +9,23 @@ from unittest.mock import patch
 import os
 import tempfile
 import shutil
-from ray.tune.schedulers import ASHAScheduler
-from ray.tune.search.hyperopt import HyperOptSearch
-import ray
 
-from training.hyperopt.hyperopt_ray import (
-    train_func,
-    create_search_space,
-    create_search_algorithm,
-    create_scheduler,
-    run_hyperparameter_optimization
-)
+try:
+    import ray
+    from ray.tune.schedulers import ASHAScheduler
+    from ray.tune.search.hyperopt import HyperOptSearch
+    from training.hyperopt.hyperopt_ray import (
+        train_func,
+        create_search_space,
+        create_search_algorithm,
+        create_scheduler,
+        run_hyperparameter_optimization,
+    )
+    HAS_RAY = True
+except ImportError:
+    HAS_RAY = False
+
+pytestmark = pytest.mark.skipif(not HAS_RAY, reason="ray not installed")
 
 @pytest.fixture
 def ray_results_dir():
