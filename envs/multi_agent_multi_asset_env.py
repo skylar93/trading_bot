@@ -350,18 +350,39 @@ class MultiAgentMultiAssetEnv(gym.Env):
         for asset, df in window_data.items():
             # Extract price and volume data
             asset_data = df[feature_columns].values
-            
-            # Normalize data
-            asset_data = (asset_data - np.mean(asset_data, axis=0)) / (np.std(asset_data, axis=0) + 1e-8)
-            
+
+            # Guard: empty or single-row window produces "Mean of empty slice" /
+            # "Degrees of freedom <= 0" warnings in numpy.  Return zeros for such
+            # degenerate windows (first step edge case) instead of propagating NaN.
+            if asset_data.shape[0] < 2:
+                n_cols = asset_data.shape[1] if asset_data.ndim == 2 else len(feature_columns)
+                asset_data = np.zeros((max(asset_data.shape[0], 1), n_cols), dtype=np.float32)
+            else:
+                # Normalize data; std guard (+1e-8) prevents final division by zero,
+                # but numpy may still warn for the std computation on uniform columns.
+                col_mean = np.mean(asset_data, axis=0)
+                col_std = np.std(asset_data, axis=0)
+                asset_data = (asset_data - col_mean) / (col_std + 1e-8)
+                # Replace any residual NaN/Inf that slipped through (e.g. all-NaN col)
+                asset_data = np.nan_to_num(asset_data, nan=0.0, posinf=0.0, neginf=0.0)
+
             # Add asset positions if available
             if self.shared_capital and asset in self.agent_positions.get(agent_id, {}):
                 position = self.agent_positions[agent_id][asset]
-                position_value = position * self.prices[asset]
-                position_percentage = position_value / self.agent_portfolio_values[agent_id] if self.agent_portfolio_values[agent_id] > 0 else 0
-                
-                # Add position information as additional feature
-                position_info = np.ones((len(df), 1)) * position_percentage
+                price = self.prices.get(asset, 0.0)
+                # Guard: delisted asset may have NaN/0 price → treat as 0
+                if not np.isfinite(price) or price <= 0:
+                    price = 0.0
+                position_value = position * price
+                pv = self.agent_portfolio_values[agent_id]
+                if np.isfinite(pv) and pv > 0 and np.isfinite(position_value):
+                    position_percentage = position_value / pv
+                else:
+                    position_percentage = 0.0
+
+                # Add position information as additional feature.
+                # Use asset_data.shape[0] (after guard) not len(df) to keep shapes aligned.
+                position_info = np.ones((asset_data.shape[0], 1), dtype=np.float32) * position_percentage
                 asset_data = np.hstack([asset_data, position_info])
             
             observations.append(asset_data)
@@ -504,9 +525,25 @@ class MultiAgentMultiAssetEnv(gym.Env):
                 "metrics": self.agent_metrics[agent_id],
                 "prices": {asset: self.prices[asset] for asset in self.agent_assets[agent_id]}
             }
-        
+
+        # E16 NaN canary — catch numeric corruption before it silently propagates
+        for agent_id in self.agents:
+            obs = observations.get(agent_id)
+            if obs is not None and not np.all(np.isfinite(obs)):
+                bad = np.sum(~np.isfinite(obs))
+                raise AssertionError(
+                    f"NaN/Inf in observation for agent {agent_id} at step "
+                    f"{self.current_step}: {bad} non-finite values"
+                )
+            rew = rewards.get(agent_id, 0.0)
+            if not np.isfinite(rew):
+                raise AssertionError(
+                    f"NaN/Inf reward for agent {agent_id} at step "
+                    f"{self.current_step}: {rew}"
+                )
+
         return observations, rewards, dones, truncated, infos
-    
+
     def _step_independent_capital(self, actions):
         """
         Handle step logic for independent capital mode.
@@ -559,8 +596,18 @@ class MultiAgentMultiAssetEnv(gym.Env):
             action: Portfolio weights action
             agent_assets: List of assets assigned to this agent
         """
-        # Normalize weights to sum to 1.0
-        weights = action / (np.sum(action) + 1e-8)
+        # Validate action before normalizing.  NaN/Inf entries or an all-zero
+        # vector cause "invalid value encountered in divide" RuntimeWarnings.
+        # Fall back to uniform allocation for any degenerate input.
+        action = np.asarray(action, dtype=np.float64)
+        if not np.all(np.isfinite(action)) or np.sum(np.abs(action)) < 1e-10:
+            action = np.ones(len(action), dtype=np.float64)
+        action = np.clip(action, 0.0, None)  # weights must be non-negative
+        action_sum = np.sum(action)
+        if action_sum < 1e-10:
+            action = np.ones(len(action), dtype=np.float64)
+            action_sum = float(len(action))
+        weights = action / action_sum
         
         # Get portfolio value
         portfolio_value = self.agent_portfolio_values[agent_id]
@@ -688,21 +735,31 @@ class MultiAgentMultiAssetEnv(gym.Env):
     def _update_agent_portfolio_values(self):
         """Update portfolio values for all agents."""
         for agent_id in self.agents:
-            # Calculate position values
+            # Calculate position values; skip assets whose price is invalid
+            # (e.g. delisted assets that get NaN/0 price) to avoid NaN portfolio
             position_value = 0.0
             for asset, position in self.agent_positions[agent_id].items():
                 price = self.prices.get(asset, 0.0)
+                if not np.isfinite(price) or price <= 0:
+                    # Asset delisted or invalid — treat position as worthless
+                    price = 0.0
                 position_value += position * price
-            
+
             # Calculate total portfolio value
-            portfolio_value = self.agent_balances[agent_id] + position_value
+            balance = self.agent_balances[agent_id]
+            if not np.isfinite(balance):
+                balance = 0.0
+            portfolio_value = balance + position_value
+            # Final safety: clip to [0, ∞) so metrics never go NaN
+            if not np.isfinite(portfolio_value):
+                portfolio_value = 0.0
             self.agent_portfolio_values[agent_id] = portfolio_value
-            
+
             # Update metrics
             metrics = self.agent_metrics[agent_id]
             if portfolio_value > metrics["highest_portfolio_value"]:
                 metrics["highest_portfolio_value"] = portfolio_value
-            
+
             # Calculate drawdown
             drawdown = 1 - (portfolio_value / metrics["highest_portfolio_value"]) if metrics["highest_portfolio_value"] > 0 else 0
             if drawdown > metrics["max_drawdown"]:
@@ -720,22 +777,26 @@ class MultiAgentMultiAssetEnv(gym.Env):
             float: Reward value
         """
         current_value = self.agent_portfolio_values[agent_id]
-        
+
         # Basic reward is relative change in portfolio value
-        if prev_portfolio_value > 0:
+        if np.isfinite(prev_portfolio_value) and prev_portfolio_value > 0 and np.isfinite(current_value):
             reward = (current_value / prev_portfolio_value) - 1.0
         else:
             reward = 0.0
-        
+
         # Apply sharpe ratio adjustment if we have enough history
         # (not implemented here for brevity)
-        
+
         # Apply drawdown penalty
         drawdown = self.agent_metrics[agent_id]["max_drawdown"]
-        if drawdown > 0.1:  # Penalty for drawdowns over 10%
+        if np.isfinite(drawdown) and drawdown > 0.1:  # Penalty for drawdowns over 10%
             drawdown_penalty = (drawdown - 0.1) * 10
             reward -= drawdown_penalty
-        
+
+        # Final guard: never emit NaN/Inf reward
+        if not np.isfinite(reward):
+            reward = 0.0
+
         return reward
     
     def _reallocate_capital(self):
