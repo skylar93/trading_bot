@@ -759,6 +759,22 @@ class SingleAssetRLTradingEnv(gym.Env):
             )
             self.logger.info(f"📈 REWARD DEBUG: {reward_debug}")
 
+        # E16 NaN canary — observation must be finite before leaving step().
+        # The reward path already sanitizes to 0.0 on NaN (line 730), so only
+        # the observation needs a hard guard here.
+        if not np.all(np.isfinite(observation)):
+            bad = int(np.sum(~np.isfinite(observation)))
+            self.logger.error(
+                f"NaN/Inf in observation at step {self.current_step}: "
+                f"{bad} non-finite values — replacing with 0.0"
+            )
+            observation = np.nan_to_num(observation, nan=0.0, posinf=0.0, neginf=0.0)
+        if not np.isfinite(reward):
+            self.logger.error(
+                f"NaN/Inf reward at step {self.current_step}: {reward} — replacing with 0.0"
+            )
+            reward = 0.0
+
         return observation, reward, self.done, False, info
 
     def _enforce_risk_limits(self, current_price: float) -> Tuple[bool, str]:
