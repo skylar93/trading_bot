@@ -93,8 +93,12 @@ class OrderManager:
         Exchange credentials and operational limits.
         Keys:
             exchange_id           – CCXT exchange id (default: "binance")
-            api_key               – live mode only
-            api_secret            – live mode only
+            exchange_mode         – "paper" | "sandbox" | "live"  (default: "paper")
+                                    Overrides paper_mode when present.
+                                    sandbox: connects to exchange testnet.
+                                    live:    connects to real exchange.
+            api_key               – required for sandbox/live mode
+            api_secret            – required for sandbox/live mode
             symbol                – trading pair (default: "BTC/USDT")
             max_order_size        – maximum single order size in base currency
             daily_loss_limit      – halt trading when daily P&L drops below this
@@ -129,6 +133,11 @@ class OrderManager:
         clock_sync: Optional[ClockSync] = None,
     ) -> None:
         exchange_config = exchange_config or {}
+        # F3: exchange_mode ("paper" | "sandbox" | "live") overrides paper_mode bool.
+        _mode = exchange_config.get("exchange_mode")
+        if _mode is not None:
+            paper_mode = (_mode == "paper")
+        self._exchange_mode: str = _mode if _mode is not None else ("paper" if paper_mode else "live")
         self.paper_mode = paper_mode
         self._config = exchange_config
         self.symbol: str = exchange_config.get("symbol", "BTC/USDT")
@@ -188,8 +197,8 @@ class OrderManager:
             self._exchange = None
 
         logger.info(
-            "OrderManager initialised | symbol=%s paper_mode=%s max_order_size=%s",
-            self.symbol, paper_mode, self.max_order_size,
+            "OrderManager initialised | symbol=%s mode=%s max_order_size=%s",
+            self.symbol, self._exchange_mode, self.max_order_size,
         )
 
     # ------------------------------------------------------------------
@@ -702,11 +711,16 @@ class OrderManager:
             import ccxt
             exchange_id = config.get("exchange_id", "binance")
             exchange_class = getattr(ccxt, exchange_id)
-            return exchange_class({
+            exchange = exchange_class({
                 "apiKey": config.get("api_key", ""),
                 "secret": config.get("api_secret", ""),
                 "enableRateLimit": True,
             })
+            # F3: activate testnet when exchange_mode == "sandbox"
+            if self._exchange_mode == "sandbox":
+                exchange.set_sandbox_mode(True)
+                logger.info("OrderManager: sandbox (testnet) mode activated for %s", exchange_id)
+            return exchange
         except ImportError:
             if not self.paper_mode:
                 raise RuntimeError(

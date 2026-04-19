@@ -26,6 +26,17 @@ logger = logging.getLogger(__name__)
 
 _GENESIS_HASH = "0" * 64
 
+# F6: Keys whose values must never appear in audit records.
+# Applied recursively before hashing and writing.
+_REDACT_KEYS: frozenset = frozenset({
+    "api_key", "apikey", "apiKey",
+    "api_secret", "apisecret", "apiSecret",
+    "secret", "password", "passphrase",
+    "token", "access_token", "refresh_token",
+    "private_key", "privateKey",
+})
+_REDACTED_VALUE = "***REDACTED***"
+
 
 def _sha256(prev_hash: str, payload: Dict[str, Any]) -> str:
     """Compute sha256(prev_hash + canonical_json(payload))."""
@@ -131,15 +142,30 @@ class AuditLogger:
 
     def _write(self, record_type: str, payload: Dict[str, Any]) -> None:
         ts = datetime.now(timezone.utc).isoformat()
+        # F6: strip credential keys before hashing or persisting
+        safe_payload = self._redact(payload)
         with self._lock:
-            h = _sha256(self._prev_hash, payload)
-            record = {"ts": ts, "type": record_type, "payload": payload, "hash": h}
+            h = _sha256(self._prev_hash, safe_payload)
+            record = {"ts": ts, "type": record_type, "payload": safe_payload, "hash": h}
             line = json.dumps(record, separators=(",", ":")) + "\n"
             self._fh.write(line)
             if self._fsync:
                 self._fh.flush()
                 os.fsync(self._fh.fileno())
             self._prev_hash = h
+
+    @staticmethod
+    def _redact(payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Recursively replace credential values with ***REDACTED***."""
+        out: Dict[str, Any] = {}
+        for k, v in payload.items():
+            if k.lower() in {key.lower() for key in _REDACT_KEYS}:
+                out[k] = _REDACTED_VALUE
+            elif isinstance(v, dict):
+                out[k] = AuditLogger._redact(v)
+            else:
+                out[k] = v
+        return out
 
     @staticmethod
     def _replay_chain(log_path: str) -> str:

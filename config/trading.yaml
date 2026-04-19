@@ -25,14 +25,20 @@ trading:
 
 # ── 주문 실행 ─────────────────────────────────────────────────
 execution:
-  paper_mode: true
+  # exchange_mode: "paper" | "sandbox" | "live"  (기본값: paper, 안전)
+  # sandbox: Binance testnet 등 거래소 테스트넷에 실제 WebSocket 연결
+  # live:    실 거래소 연결 (G11 Go-Live 체크리스트 통과 후에만)
+  exchange_mode: "paper"
+  paper_mode: true          # exchange_mode 설정 시 자동 override됨 (하위 호환)
   exchange_id: "binance"
   symbol: "BTC/USDT"
+  timeframe: "1m"
   max_order_size: 0.1
   daily_loss_limit: -500.0
   initial_cash: 100000.0
   rate_limit_calls: 10
   rate_limit_period: 1.0
+  heartbeat_timeout: 60.0  # seconds; CCXTAdapter watchdog threshold
 
 # ── 리워드 & 마찰 ──────────────────────────────────────────────
 reward:

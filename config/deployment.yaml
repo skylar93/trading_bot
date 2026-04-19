@@ -35,6 +35,18 @@ paper_trading:
   api_key_ref: "EXCHANGE_BINANCE_KEY"
   api_secret_ref: "EXCHANGE_BINANCE_SECRET"
 
+# ── Sandbox / Testnet (Week 72, Track F) ──────────────────────
+# exchange_mode: "sandbox"로 설정 시 아래 credential 참조
+sandbox:
+  exchange_id: "binance"
+  symbol: "BTC/USDT"
+  timeframe: "1m"
+  exchange_mode: "sandbox"
+  heartbeat_timeout: 60.0
+  # SecretProvider로 런타임에 resolve — 평문 절대 금지
+  api_key_ref: "EXCHANGE_BINANCE_TESTNET_KEY"
+  api_secret_ref: "EXCHANGE_BINANCE_TESTNET_SECRET"
+
 # ── LLM Review Panel ──────────────────────────────────────────
 llm_review:
   enabled: false
