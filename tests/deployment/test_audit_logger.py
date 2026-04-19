@@ -389,3 +389,74 @@ class TestObservationHash:
         size = os.path.getsize(log_file)
         # Full obs would be ~8000 bytes; log should be tiny
         assert size < 500, f"Log file unexpectedly large ({size} bytes) — obs may have been stored"
+
+
+# ---------------------------------------------------------------------------
+# F6: Credential redaction (Week 72)
+# ---------------------------------------------------------------------------
+
+class TestCredentialRedaction:
+    def test_api_key_is_redacted(self, tmp_path):
+        log_file = str(tmp_path / "redact.jsonl")
+        with AuditLogger(log_file) as al:
+            al.log_risk_event({"event": "test", "api_key": "super_secret_key"})
+
+        records = _read_records(log_file)
+        payload = records[0]["payload"]
+        assert payload["api_key"] == "***REDACTED***"
+        assert "super_secret_key" not in json.dumps(payload)
+
+    def test_api_secret_is_redacted(self, tmp_path):
+        log_file = str(tmp_path / "redact2.jsonl")
+        with AuditLogger(log_file) as al:
+            al.log_risk_event({"event": "test", "api_secret": "my_secret_123"})
+
+        records = _read_records(log_file)
+        assert records[0]["payload"]["api_secret"] == "***REDACTED***"
+
+    def test_nested_credential_is_redacted(self, tmp_path):
+        log_file = str(tmp_path / "redact3.jsonl")
+        with AuditLogger(log_file) as al:
+            al.log_risk_event({
+                "event": "exchange_init",
+                "config": {"api_key": "nested_key", "symbol": "BTC/USDT"},
+            })
+
+        records = _read_records(log_file)
+        cfg = records[0]["payload"]["config"]
+        assert cfg["api_key"] == "***REDACTED***"
+        assert cfg["symbol"] == "BTC/USDT"  # non-sensitive key preserved
+
+    def test_non_credential_fields_preserved(self, tmp_path):
+        log_file = str(tmp_path / "redact4.jsonl")
+        with AuditLogger(log_file) as al:
+            al.log_risk_event({"event": "halt", "reason": "drawdown", "value": 0.25})
+
+        records = _read_records(log_file)
+        payload = records[0]["payload"]
+        assert payload["reason"] == "drawdown"
+        assert payload["value"] == 0.25
+
+    def test_redaction_applied_before_hash(self, tmp_path):
+        """Hash must be computed on the redacted payload (chain integrity)."""
+        log_file = str(tmp_path / "redact5.jsonl")
+        with AuditLogger(log_file) as al:
+            al.log_risk_event({"api_key": "secret"})
+
+        records = _read_records(log_file)
+        payload = records[0]["payload"]
+        stored_hash = records[0]["hash"]
+        # Recompute expected hash over the redacted payload
+        expected = _sha256(_GENESIS_HASH, payload)
+        assert stored_hash == expected
+
+    def test_chain_remains_valid_after_redaction(self, tmp_path):
+        """Full chain integrity check after redaction."""
+        log_file = str(tmp_path / "redact6.jsonl")
+        with AuditLogger(log_file) as al:
+            al.log_risk_event({"step": 1, "api_key": "secret1"})
+            al.log_risk_event({"step": 2, "api_secret": "secret2"})
+            al.log_risk_event({"step": 3, "event": "normal"})
+
+        records = _read_records(log_file)
+        assert _verify_chain(records) is True

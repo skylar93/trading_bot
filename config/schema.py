@@ -241,14 +241,25 @@ class DataConfig(BaseModel):
 class ExecutionConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    paper_mode: bool = True
+    exchange_mode: str = "paper"   # "paper" | "sandbox" | "live"
+    paper_mode: bool = True        # derived from exchange_mode when both present
     exchange_id: str = "binance"
     symbol: str = "BTC/USDT"
+    timeframe: str = "1m"
     max_order_size: float = 0.1
     daily_loss_limit: float = -500.0
     initial_cash: float = 100_000.0
     rate_limit_calls: int = 10
     rate_limit_period: float = 1.0
+    heartbeat_timeout: float = 60.0
+
+    @field_validator("exchange_mode")
+    @classmethod
+    def exchange_mode_valid(cls, v: str) -> str:
+        allowed = {"paper", "sandbox", "live"}
+        if v not in allowed:
+            raise ValueError(f"exchange_mode must be one of {allowed}, got '{v}'")
+        return v
 
     @field_validator("max_order_size")
     @classmethod
