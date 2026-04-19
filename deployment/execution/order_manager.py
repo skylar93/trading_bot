@@ -12,6 +12,11 @@ Week 64 additions (Track C — Live Risk Enforcement):
   S44 — Idempotency key: prevents duplicate live orders on retry
   S45 — RateLimiter / ClockSync now in dedicated modules
 
+Week 74 additions (Track F — Execution Realism):
+  F12 — Order types: limit, stop_loss_limit, take_profit (paper + live)
+  F13 — Partial fill simulation (paper) + proper status mapping (live)
+  F14 — Cancel-replace, per-order TTL with background expiry thread
+
 Usage (paper mode, default):
     manager = OrderManager(exchange_config={}, paper_mode=True)
     order_id = manager.submit_order("buy", amount=0.01)
@@ -31,7 +36,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -56,27 +61,33 @@ except ImportError:  # pragma: no cover
 
 _ORDER_STATUSES = frozenset({"pending", "filled", "partial", "cancelled", "failed"})
 
+# F12: supported order types
+_ORDER_TYPES = frozenset({"market", "limit", "stop_loss_limit", "take_profit"})
+
 
 @dataclass
 class Order:
     order_id: str
     side: str               # "buy" | "sell"
     amount: float
-    order_type: str         # "market" | "limit"
+    order_type: str         # see _ORDER_TYPES
     limit_price: Optional[float]
     status: str             # see _ORDER_STATUSES
+    stop_price: Optional[float] = None     # F12: trigger price for stop/take-profit orders
     filled_amount: float = 0.0
     avg_fill_price: float = 0.0
     fee: float = 0.0
     pnl: float = 0.0
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
+    expires_at: Optional[datetime] = None  # F14: TTL expiry timestamp
     exchange_order_id: Optional[str] = None
     idempotency_key: Optional[str] = None   # S44: duplicate-order prevention
     # S52: latency timestamps (submit → ack → fill)
     submitted_at: Optional[datetime] = None   # set in submit_order before execution
     acked_at: Optional[datetime] = None       # exchange ack (live) or immediate (paper)
     filled_at: Optional[datetime] = None      # fill completion
+    fills: List[Dict[str, Any]] = field(default_factory=list)  # F13: individual fill events
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +117,10 @@ class OrderManager:
             rate_limit_period     – seconds for rate limit window (default: 1.0)
             correlation_threshold – correlation limit for S41 (default: 0.7)
             max_retries           – live order retry attempts (default: 3)
+            partial_fill_sim      – F13: enable partial fill simulation in paper mode
+            partial_fill_min_ratio– F13: minimum fill ratio when simulation enabled (default: 0.3)
+            order_ttl_sec         – F14: pending order TTL in seconds (0 = disabled)
+            order_ttl_check_interval_sec – F14: expiry check interval (default: 10.0)
     paper_mode : bool
         When True (default), all orders are simulated locally.
     risk_manager : optional
@@ -120,6 +135,10 @@ class OrderManager:
         Override the default circuit breaker.
     clock_sync : ClockSync, optional
         Override the default clock sync checker.
+    fee_model : optional
+        F16: FeeModel instance.  If provided, overrides hardcoded 0.1% paper fee.
+    alerter : optional
+        Trading alerter; used to emit cancel-failure alerts (F14).
     """
 
     def __init__(
@@ -131,6 +150,8 @@ class OrderManager:
         fat_finger_guard: Optional[FatFingerGuard] = None,
         circuit_breaker: Optional[VolatilityCircuitBreaker] = None,
         clock_sync: Optional[ClockSync] = None,
+        fee_model=None,
+        alerter=None,
     ) -> None:
         exchange_config = exchange_config or {}
         # F3: exchange_mode ("paper" | "sandbox" | "live") overrides paper_mode bool.
@@ -146,6 +167,8 @@ class OrderManager:
         self._risk_manager = risk_manager
         self._audit_logger = audit_logger
         self._max_retries: int = int(exchange_config.get("max_retries", 3))
+        self._fee_model = fee_model
+        self._alerter = alerter
 
         # S41: correlation threshold (from config or default 0.7)
         self._correlation_threshold: float = float(
@@ -178,6 +201,18 @@ class OrderManager:
             halt_on_skew=bool(exchange_config.get("halt_on_clock_skew", False)),
         )
 
+        # F13: partial fill simulation
+        self._partial_fill_sim: bool = bool(exchange_config.get("partial_fill_sim", False))
+        self._partial_fill_min_ratio: float = float(
+            exchange_config.get("partial_fill_min_ratio", 0.3)
+        )
+
+        # F14: TTL-based order expiry
+        self._order_ttl_sec: float = float(exchange_config.get("order_ttl_sec", 0.0))
+        self._ttl_check_interval: float = float(
+            exchange_config.get("order_ttl_check_interval_sec", 10.0)
+        )
+
         self._lock = threading.RLock()
         self._orders: Dict[str, Order] = {}
         self._idempotency_map: Dict[str, str] = {}   # S44: key → order_id
@@ -201,9 +236,20 @@ class OrderManager:
         else:
             self._exchange = None
 
+        # F14: background expiry thread
+        self._stop_event = threading.Event()
+        if self._order_ttl_sec > 0:
+            self._expiry_thread = threading.Thread(
+                target=self._order_expiry_worker, daemon=True, name="order-expiry"
+            )
+            self._expiry_thread.start()
+        else:
+            self._expiry_thread = None
+
         logger.info(
-            "OrderManager initialised | symbol=%s mode=%s max_order_size=%s",
+            "OrderManager initialised | symbol=%s mode=%s max_order_size=%s partial_fill_sim=%s ttl=%.0fs",
             self.symbol, self._exchange_mode, self.max_order_size,
+            self._partial_fill_sim, self._order_ttl_sec,
         )
 
     # ------------------------------------------------------------------
@@ -220,9 +266,11 @@ class OrderManager:
         amount: float,
         order_type: str = "market",
         limit_price: Optional[float] = None,
+        stop_price: Optional[float] = None,          # F12
         current_price: Optional[float] = None,
         price: Optional[float] = None,   # compat alias for current_price
-        idempotency_key: Optional[str] = None,   # S44
+        idempotency_key: Optional[str] = None,       # S44
+        ttl_sec: Optional[float] = None,             # F14: per-order TTL override
     ) -> str:
         """Submit a new order.
 
@@ -235,7 +283,6 @@ class OrderManager:
             raise RuntimeError("Daily loss limit breached — trading halted.")
 
         # F11: proactively measure clock drift (throttled to avoid per-order RTT).
-        # check() updates is_halted when halt_on_skew=True and drift > threshold.
         _now = time.monotonic()
         if not self.paper_mode and _now - self._last_clock_check_at >= self._clock_check_interval:
             self._clock_sync.check()
@@ -251,11 +298,13 @@ class OrderManager:
         if amount <= 0:
             raise ValueError(f"Order amount must be positive, got {amount}.")
 
+        # F12: validate order type
+        if order_type not in _ORDER_TYPES:
+            raise ValueError(
+                f"Invalid order_type: {order_type!r}. Must be one of {sorted(_ORDER_TYPES)}."
+            )
+
         # S44: idempotency check — atomic get-or-reserve using setdefault.
-        # order_id is pre-generated so we can reserve the slot before any processing.
-        # This closes the TOCTOU race: two concurrent threads with the same key both
-        # call setdefault, but only one wins — the loser gets back the winner's id
-        # and returns immediately without creating a duplicate order.
         _pre_order_id = str(uuid.uuid4())[:8]
         if idempotency_key is not None:
             with self._lock:
@@ -263,57 +312,51 @@ class OrderManager:
                     idempotency_key, _pre_order_id
                 )
                 if registered_id != _pre_order_id:
-                    # Another thread already registered this key — return its order.
                     logger.info(
                         "submit_order: idempotency_key=%r already exists → returning %s",
                         idempotency_key, registered_id,
                     )
                     return registered_id
-                # We won the race. _pre_order_id is now reserved in the map.
 
         # S41: correlation limit check
         if self._current_correlation is not None:
             corr_violated = self._check_correlation_limit(self._current_correlation)
             if corr_violated:
-                order_id = self._reject_order(
+                return self._reject_order(
                     side, amount, order_type, limit_price,
                     reason="correlation_limit",
                     idempotency_key=idempotency_key,
                 )
-                return order_id
 
-        # S43: volatility circuit breaker — blocks new orders only
+        # S43: volatility circuit breaker
         if self._circuit_breaker.is_tripped():
-            order_id = self._reject_order(
+            return self._reject_order(
                 side, amount, order_type, limit_price,
                 reason="volatility_circuit_breaker",
                 idempotency_key=idempotency_key,
             )
-            return order_id
 
-        # Pre-trade drawdown check (existing logic)
+        # Pre-trade drawdown check
         if self._risk_manager is not None:
             tracker = self._position_tracker
             if tracker is not None:
                 peak = tracker.peak_value
                 current = tracker.portfolio_value
                 if self._risk_manager.check_drawdown(peak, current):
-                    order_id = self._reject_order(
+                    return self._reject_order(
                         side, amount, order_type, limit_price,
                         reason="max_drawdown",
                         idempotency_key=idempotency_key,
                     )
-                    return order_id
 
         # S42: fat-finger guard
         ok, reason = self._fat_finger.check(amount)
         if not ok:
-            order_id = self._reject_order(
+            return self._reject_order(
                 side, amount, order_type, limit_price,
                 reason=f"fat_finger:{reason}",
                 idempotency_key=idempotency_key,
             )
-            return order_id
 
         if amount > self.max_order_size:
             logger.warning(
@@ -322,27 +365,31 @@ class OrderManager:
             )
             amount = self.max_order_size
 
-        # Accept `price` as alias for `current_price`
         if current_price is None and price is not None:
             current_price = price
 
-        # Re-use the pre-generated id (already reserved in _idempotency_map if keyed).
+        # F14: compute expiry timestamp
+        effective_ttl = ttl_sec if ttl_sec is not None else self._order_ttl_sec
+        expires_at: Optional[datetime] = None
+        if effective_ttl > 0:
+            expires_at = datetime.utcnow() + timedelta(seconds=effective_ttl)
+
         order_id = _pre_order_id
-        _now = datetime.utcnow()
+        _now_dt = datetime.utcnow()
         order = Order(
             order_id=order_id,
             side=side,
             amount=amount,
             order_type=order_type,
             limit_price=limit_price,
+            stop_price=stop_price,       # F12
             status="pending",
+            expires_at=expires_at,       # F14
             idempotency_key=idempotency_key,
-            submitted_at=_now,   # S52: latency start
+            submitted_at=_now_dt,        # S52
         )
         with self._lock:
             self._orders[order_id] = order
-            # _idempotency_map already has order_id reserved via setdefault above;
-            # for the non-keyed path, nothing to register.
 
         # Audit: order submitted
         if self._audit_logger is not None:
@@ -371,7 +418,7 @@ class OrderManager:
             self._audit_logger.log_fill(order)
 
         # S42: record fill size for future fat-finger baselines
-        if order.status == "filled" and order.filled_amount > 0:
+        if order.status in ("filled", "partial") and order.filled_amount > 0:
             self._fat_finger.record_fill(order.filled_amount)
 
         return order_id
@@ -388,7 +435,7 @@ class OrderManager:
         return order.status
 
     def cancel_order(self, order_id: str) -> bool:
-        """Cancel a pending order. Returns True if successful."""
+        """Cancel a pending or partial order. Returns True if successful."""
         with self._lock:
             if order_id not in self._orders:
                 logger.warning("cancel_order: unknown order_id %s", order_id)
@@ -409,6 +456,50 @@ class OrderManager:
         except Exception as e:
             logger.error("Failed to cancel order %s: %s", order_id, e)
             return False
+
+    def cancel_replace_order(
+        self,
+        order_id: str,
+        side: str,
+        amount: float,
+        order_type: str = "limit",
+        limit_price: Optional[float] = None,
+        stop_price: Optional[float] = None,
+        current_price: Optional[float] = None,
+        idempotency_key: Optional[str] = None,
+        ttl_sec: Optional[float] = None,
+    ) -> str:
+        """Cancel an existing order and submit a replacement atomically.
+
+        Raises RuntimeError if the original order cannot be cancelled.
+        Returns the new order_id.
+        """
+        cancelled = self.cancel_order(order_id)
+        if not cancelled:
+            if self._audit_logger is not None:
+                self._audit_logger.log_risk_event({
+                    "type": "cancel_replace_failed",
+                    "order_id": order_id,
+                    "reason": "cancel_failed",
+                })
+            if self._alerter is not None:
+                try:
+                    self._alerter.notify_error(
+                        f"cancel_replace_order: could not cancel {order_id}"
+                    )
+                except Exception:
+                    pass
+            raise RuntimeError(f"cancel_replace_order: could not cancel order {order_id}")
+        return self.submit_order(
+            side=side,
+            amount=amount,
+            order_type=order_type,
+            limit_price=limit_price,
+            stop_price=stop_price,
+            current_price=current_price,
+            idempotency_key=idempotency_key,
+            ttl_sec=ttl_sec,
+        )
 
     def reconcile(self, current_price: Optional[float] = None) -> Dict[str, Any]:
         """Compare internal state with exchange and return summary dict."""
@@ -456,10 +547,13 @@ class OrderManager:
     def update_paper_price(self, price: float) -> None:
         """Notify manager of latest market price (paper mode).
 
-        Also feeds the price to the circuit breaker for vol tracking (S43).
+        Also feeds the price to the circuit breaker for vol tracking (S43),
+        and checks pending limit/stop orders against the new price (F12).
         """
         self._position_tracker.update_price(price)
         self._circuit_breaker.update(price)
+        if self.paper_mode:
+            self._check_pending_orders(price)
 
     def get_order(self, order_id: str) -> Order:
         if order_id not in self._orders:
@@ -476,11 +570,7 @@ class OrderManager:
         return self._halted
 
     def compute_latency_percentiles(self) -> Dict[str, float]:
-        """Return latency percentiles (p50/p95/p99) in milliseconds.
-
-        Computed from all submit-to-fill samples collected since init.
-        Returns zero values if no samples yet.
-        """
+        """Return latency percentiles (p50/p95/p99) in milliseconds."""
         with self._lock:
             samples = list(self._latency_samples)
         if not samples:
@@ -504,17 +594,22 @@ class OrderManager:
     def clock_sync(self) -> ClockSync:
         return self._clock_sync
 
+    def close(self) -> None:
+        """Shut down background threads and release exchange connection."""
+        self._stop_event.set()
+        if self._expiry_thread is not None and self._expiry_thread.is_alive():
+            self._expiry_thread.join(timeout=2.0)
+        if self._exchange is not None:
+            try:
+                self._exchange.close()
+            except Exception:
+                pass
+
     # ------------------------------------------------------------------
     # S41: Correlation limit helper
     # ------------------------------------------------------------------
 
     def _check_correlation_limit(self, correlation_value: float) -> bool:
-        """
-        Return True (= reject order) if correlation limit is breached.
-
-        Uses risk_manager.check_correlation() if available, otherwise
-        falls back to the stored threshold.
-        """
         check_fn = getattr(self._risk_manager, "check_correlation", None)
         if callable(check_fn):
             breached = check_fn(correlation_value, self._correlation_threshold)
@@ -524,8 +619,7 @@ class OrderManager:
         if breached:
             logger.warning(
                 "Order rejected: correlation %.4f exceeds threshold %.4f",
-                correlation_value,
-                self._correlation_threshold,
+                correlation_value, self._correlation_threshold,
             )
             if self._audit_logger is not None:
                 self._audit_logger.log_risk_event({
@@ -548,7 +642,6 @@ class OrderManager:
         reason: str,
         idempotency_key: Optional[str] = None,
     ) -> str:
-        """Create a failed order record and log the rejection reason."""
         order_id = str(uuid.uuid4())[:8]
         order = Order(
             order_id=order_id,
@@ -576,6 +669,74 @@ class OrderManager:
         return order_id
 
     # ------------------------------------------------------------------
+    # F12: Fill price resolution (paper mode)
+    # ------------------------------------------------------------------
+
+    def _resolve_paper_fill_price(self, order: Order, market_price: float) -> Optional[float]:
+        """Return fill price if order condition is met, else None (stay pending)."""
+        if order.order_type == "market":
+            return market_price
+
+        lp = order.limit_price
+        sp = order.stop_price
+
+        if order.order_type == "limit":
+            if lp is None:
+                logger.warning("Limit order %s missing limit_price; treating as market", order.order_id)
+                return market_price
+            # Buy limit: fill when market dips to or below limit
+            if order.side == "buy":
+                return lp if market_price <= lp else None
+            # Sell limit: fill when market rises to or above limit
+            return lp if market_price >= lp else None
+
+        if order.order_type == "stop_loss_limit":
+            if sp is None or lp is None:
+                logger.warning("stop_loss_limit order %s missing stop_price or limit_price", order.order_id)
+                return market_price
+            # Buy stop: trigger when price breaks above stop, fill at limit
+            if order.side == "buy":
+                return lp if market_price >= sp else None
+            # Sell stop-loss: trigger when price drops below stop, fill at limit
+            return lp if market_price <= sp else None
+
+        if order.order_type == "take_profit":
+            if sp is None or lp is None:
+                logger.warning("take_profit order %s missing stop_price or limit_price", order.order_id)
+                return market_price
+            # Take-profit sell: trigger when price rises above stop, fill at limit
+            if order.side == "sell":
+                return lp if market_price >= sp else None
+            # Take-profit buy (uncommon): trigger when price dips below stop
+            return lp if market_price <= sp else None
+
+        logger.warning("Unknown order_type %r; treating as market", order.order_type)
+        return market_price
+
+    # ------------------------------------------------------------------
+    # F13: Partial fill simulation (paper mode)
+    # ------------------------------------------------------------------
+
+    def _draw_partial_fill_ratio(self) -> float:
+        """Return fill ratio in [min_ratio, 1.0]. Always 1.0 when sim disabled."""
+        if not self._partial_fill_sim:
+            return 1.0
+        return float(np.random.uniform(self._partial_fill_min_ratio, 1.0))
+
+    # ------------------------------------------------------------------
+    # F16: Fee computation (paper mode)
+    # ------------------------------------------------------------------
+
+    def _compute_paper_fee(self, quantity: float, price: float, is_maker: bool = False) -> float:
+        """Compute paper-mode fee using FeeModel if available, else 0.1% default."""
+        if self._fee_model is not None:
+            try:
+                return float(self._fee_model.compute_fee(quantity, price, is_maker=is_maker))
+            except Exception as e:
+                logger.warning("FeeModel.compute_fee failed (%s); using default 0.1%%", e)
+        return quantity * price * 0.001
+
+    # ------------------------------------------------------------------
     # Paper order execution
     # ------------------------------------------------------------------
 
@@ -584,45 +745,94 @@ class OrderManager:
         if price <= 0:
             price = 1.0
 
-        # S52: paper orders are instant — ack and fill happen together
         order.acked_at = datetime.utcnow()
 
+        # F12: resolve fill price (may return None for unmet conditions)
+        fill_price = self._resolve_paper_fill_price(order, price)
+        if fill_price is None:
+            # Condition not met — leave as pending for later check
+            order.status = "pending"
+            order.updated_at = datetime.utcnow()
+            return
+
+        # F13: partial fill ratio
+        fill_ratio = self._draw_partial_fill_ratio()
+        is_maker = order.order_type in ("limit", "stop_loss_limit", "take_profit")
+
         if order.side == "buy":
-            fee = order.amount * price * 0.001
-            self._position_tracker.apply_buy(
-                quantity=order.amount, price=price, fee=fee
-            )
-            order.filled_amount = order.amount
-            order.avg_fill_price = price
+            fill_qty = order.amount * fill_ratio
+            fee = self._compute_paper_fee(fill_qty, fill_price, is_maker=is_maker)
+            self._position_tracker.apply_buy(quantity=fill_qty, price=fill_price, fee=fee)
+            order.filled_amount = fill_qty
+            order.avg_fill_price = fill_price
             order.fee = fee
         else:
-            sell_qty = min(order.amount, self._position_tracker.position)
+            available = self._position_tracker.position
+            sell_qty = min(order.amount * fill_ratio, available)
             if sell_qty < 1e-9:
                 order.status = "failed"
                 order.updated_at = datetime.utcnow()
                 order.filled_at = order.updated_at
                 return
-            proceeds = sell_qty * price
-            fee = proceeds * 0.001
-            # Capture entry price BEFORE apply_sell (resets on full close)
+            fee = self._compute_paper_fee(sell_qty, fill_price, is_maker=is_maker)
             entry_price = self._position_tracker.entry_price
-            self._position_tracker.apply_sell(
-                quantity=sell_qty, price=price, fee=fee
-            )
+            self._position_tracker.apply_sell(quantity=sell_qty, price=fill_price, fee=fee)
             order.filled_amount = sell_qty
-            order.avg_fill_price = price
+            order.avg_fill_price = fill_price
             order.fee = fee
-            pnl = (price - entry_price) * sell_qty if entry_price > 0 else 0.0
+            pnl = (fill_price - entry_price) * sell_qty if entry_price > 0 else 0.0
             with self._lock:
                 self._daily_pnl += (pnl - fee)
             self._check_daily_loss_limit()
 
-        order.status = "filled"
+        # F13: record individual fill event in audit log
+        fill_event: Dict[str, Any] = {
+            "fill_id": str(uuid.uuid4())[:8],
+            "order_id": order.order_id,
+            "side": order.side,
+            "qty": order.filled_amount,
+            "price": fill_price,
+            "fee": order.fee,
+            "is_partial": fill_ratio < 1.0,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+        order.fills.append(fill_event)
+        if self._audit_logger is not None:
+            self._audit_logger.log_fill(fill_event)
+
+        # F13: determine partial vs full status
+        remaining = order.amount - order.filled_amount
+        if remaining > 1e-9 and fill_ratio < 1.0:
+            order.status = "partial"
+            # Leave order alive for future fills via _check_pending_orders
+        else:
+            order.status = "filled"
+            order.filled_at = datetime.utcnow()   # S52
         order.updated_at = datetime.utcnow()
-        order.filled_at = order.updated_at   # S52
+
+    def _check_pending_orders(self, price: float) -> None:
+        """Try to fill pending limit/stop orders at the new market price (F12)."""
+        with self._lock:
+            candidates = [
+                o for o in self._orders.values()
+                if o.status in ("pending", "partial") and o.order_type != "market"
+            ]
+        for order in candidates:
+            self._execute_paper_order(order, price)
+            if self._audit_logger is not None and order.status in ("filled", "partial"):
+                pass  # fill event already logged inside _execute_paper_order
+            if order.status == "filled" and order.filled_amount > 0:
+                self._fat_finger.record_fill(order.filled_amount)
+            # S52: latency for orders filled via price update
+            if order.filled_at is not None and order.submitted_at is not None:
+                latency_ms = (
+                    (order.filled_at - order.submitted_at).total_seconds() * 1000.0
+                )
+                with self._lock:
+                    self._latency_samples.append(latency_ms)
 
     # ------------------------------------------------------------------
-    # Live order execution — S44: idempotency key + improved backoff
+    # Live order execution — S44: idempotency key + F12: order types
     # ------------------------------------------------------------------
 
     def _execute_live_order(self, order: Order) -> None:
@@ -632,29 +842,78 @@ class OrderManager:
                 self.rate_limiter.acquire()
                 params: Dict[str, Any] = {}
                 if order.idempotency_key is not None:
-                    # Standard CCXT client order id field (exchange may ignore)
                     params["clientOrderId"] = order.idempotency_key
 
+                # F12: dispatch by order type
                 if order.order_type == "market":
                     result = self._exchange.create_market_order(
                         self.symbol, order.side, order.amount, params=params
                     )
-                else:
+                elif order.order_type == "limit":
                     result = self._exchange.create_limit_order(
-                        self.symbol, order.side, order.amount, order.limit_price,
-                        params=params,
+                        self.symbol, order.side, order.amount, order.limit_price, params=params
                     )
+                elif order.order_type == "stop_loss_limit":
+                    params["stopPrice"] = order.stop_price
+                    result = self._exchange.create_order(
+                        self.symbol, "stop_loss_limit", order.side,
+                        order.amount, order.limit_price, params=params,
+                    )
+                elif order.order_type == "take_profit":
+                    params["stopPrice"] = order.stop_price
+                    result = self._exchange.create_order(
+                        self.symbol, "take_profit_limit", order.side,
+                        order.amount, order.limit_price, params=params,
+                    )
+                else:
+                    result = self._exchange.create_market_order(
+                        self.symbol, order.side, order.amount, params=params
+                    )
+
                 order.exchange_order_id = result.get("id")
-                order.acked_at = datetime.utcnow()   # S52: exchange has the order
-                order.status = "filled" if result.get("status") == "closed" else "pending"
-                order.filled_amount = float(result.get("filled", 0.0))
+                order.acked_at = datetime.utcnow()   # S52
+
+                # F13: map CCXT status → internal status (including partial)
+                status_raw = result.get("status", "")
+                filled = float(result.get("filled", 0.0))
+                remaining = float(result.get("remaining") or 0.0)
+                if status_raw == "closed":
+                    order.status = "filled"
+                elif status_raw in ("canceled", "cancelled"):
+                    order.status = "cancelled"
+                elif status_raw == "open" and filled > 0 and remaining > 0:
+                    order.status = "partial"
+                else:
+                    order.status = "pending"
+
+                order.filled_amount = filled
                 order.avg_fill_price = float(result.get("average") or result.get("price") or 0.0)
                 fee_info = result.get("fee") or {}
                 order.fee = float(fee_info.get("cost", 0.0))
                 order.updated_at = datetime.utcnow()
+
                 if order.status == "filled":
                     order.filled_at = order.updated_at   # S52
-                # Update position tracker on successful fill
+
+                # F13: record fill event in audit log
+                if filled > 0:
+                    fill_event: Dict[str, Any] = {
+                        "fill_id": str(uuid.uuid4())[:8],
+                        "order_id": order.order_id,
+                        "exchange_order_id": order.exchange_order_id,
+                        "side": order.side,
+                        "qty": filled,
+                        "remaining": remaining,
+                        "price": order.avg_fill_price,
+                        "fee": order.fee,
+                        "is_partial": order.status == "partial",
+                        "timestamp": datetime.utcnow().isoformat(),
+                    }
+                    order.fills.append(fill_event)
+                    if self._audit_logger is not None:
+                        self._audit_logger.log_fill(fill_event)
+
+                # Update position tracker on filled orders
                 if order.status == "filled" and self._position_tracker is not None:
                     if order.side == "buy":
                         self._position_tracker.apply_buy(
@@ -686,12 +945,94 @@ class OrderManager:
         try:
             self.rate_limiter.acquire()
             result = self._exchange.fetch_order(order.exchange_order_id, self.symbol)
-            status_map = {"open": "pending", "closed": "filled", "canceled": "cancelled"}
-            order.status = status_map.get(result.get("status", ""), order.status)
-            order.filled_amount = float(result.get("filled", order.filled_amount))
+            filled = float(result.get("filled", order.filled_amount))
+            remaining = float(result.get("remaining") or 0.0)
+            status_raw = result.get("status", "")
+            if status_raw == "closed":
+                order.status = "filled"
+                order.filled_at = datetime.utcnow()
+            elif status_raw in ("canceled", "cancelled"):
+                order.status = "cancelled"
+            elif status_raw == "open" and filled > 0 and remaining > 0:
+                order.status = "partial"
+            else:
+                order.status = "pending"
+
+            # F13: record new fills since last check
+            prev_filled = order.filled_amount
+            if filled > prev_filled + 1e-9:
+                incremental_qty = filled - prev_filled
+                fill_event: Dict[str, Any] = {
+                    "fill_id": str(uuid.uuid4())[:8],
+                    "order_id": order.order_id,
+                    "exchange_order_id": order.exchange_order_id,
+                    "side": order.side,
+                    "qty": incremental_qty,
+                    "remaining": remaining,
+                    "price": float(result.get("average") or result.get("price") or 0.0),
+                    "is_partial": order.status == "partial",
+                    "timestamp": datetime.utcnow().isoformat(),
+                }
+                order.fills.append(fill_event)
+                if self._audit_logger is not None:
+                    self._audit_logger.log_fill(fill_event)
+
+            order.filled_amount = filled
             order.updated_at = datetime.utcnow()
         except Exception as e:
             logger.warning("Failed to refresh order %s: %s", order.order_id, e)
+
+    # ------------------------------------------------------------------
+    # F14: TTL expiry
+    # ------------------------------------------------------------------
+
+    def _expire_stale_orders(self) -> None:
+        """Cancel pending/partial orders that have exceeded their TTL."""
+        now = datetime.utcnow()
+        with self._lock:
+            candidates = [
+                o for o in self._orders.values()
+                if o.status in ("pending", "partial")
+                and o.expires_at is not None
+                and o.expires_at <= now
+            ]
+        for order in candidates:
+            logger.info(
+                "Order %s expired (ttl=%.0fs, type=%s)",
+                order.order_id, self._order_ttl_sec, order.order_type,
+            )
+            cancelled = self.cancel_order(order.order_id)
+            if not cancelled:
+                logger.error("Failed to cancel expired order %s", order.order_id)
+                if self._audit_logger is not None:
+                    self._audit_logger.log_risk_event({
+                        "type": "cancel_expired_failed",
+                        "order_id": order.order_id,
+                        "order_type": order.order_type,
+                    })
+                if self._alerter is not None:
+                    try:
+                        self._alerter.notify_error(
+                            f"Failed to auto-cancel expired order {order.order_id}"
+                        )
+                    except Exception:
+                        pass
+            else:
+                if self._audit_logger is not None:
+                    self._audit_logger.log_risk_event({
+                        "type": "order_expired",
+                        "order_id": order.order_id,
+                        "order_type": order.order_type,
+                    })
+
+    def _order_expiry_worker(self) -> None:
+        """Background thread: periodically expire stale orders."""
+        while not self._stop_event.is_set():
+            try:
+                self._expire_stale_orders()
+            except Exception as e:
+                logger.error("Order expiry worker error: %s", e)
+            self._stop_event.wait(self._ttl_check_interval)
 
     # ------------------------------------------------------------------
     # Safety checks
@@ -728,7 +1069,6 @@ class OrderManager:
                 "secret": config.get("api_secret", ""),
                 "enableRateLimit": True,
             })
-            # F3: activate testnet when exchange_mode == "sandbox"
             if self._exchange_mode == "sandbox":
                 exchange.set_sandbox_mode(True)
                 logger.info("OrderManager: sandbox (testnet) mode activated for %s", exchange_id)
@@ -751,8 +1091,4 @@ class OrderManager:
         return self
 
     def __exit__(self, *_) -> None:
-        if self._exchange is not None:
-            try:
-                self._exchange.close()
-            except Exception:
-                pass
+        self.close()
