@@ -1,7 +1,8 @@
 """
 Model Registry — lightweight, file-based (no MLflow required).
 
-Unified implementation satisfying both Week 67 (S59) and Week 68 (S62) APIs.
+Unified implementation satisfying both Week 67 (S59) and Week 68 (S62) APIs,
+extended in Week 75 (G1) with a promotion state machine.
 
 Week 67 API (simple, file-based):
     registry = ModelRegistry("path/to/registry.json")
@@ -20,6 +21,18 @@ Week 68 API (directory-based, with rollback):
     registry.get_version(ver)
     registry.get_active()
 
+Week 75 API (G1 — promotion state machine):
+    registry.promote(ver, to_stage="staging", actor="alice", reason="backtest passed")
+    registry.get_stage(ver)          # → "staging"
+    registry.list_by_stage("canary") # → [VersionID, ...]
+    VALID_TRANSITIONS = {
+        "candidate": ["staging"],
+        "staging":   ["canary", "retired"],
+        "canary":    ["prod", "staging", "retired"],
+        "prod":      ["retired"],
+        "retired":   [],
+    }
+
 Constructor auto-detects mode:
     - Positional arg ending in ``.json`` → file mode (Week 67 compatible)
     - ``registry_dir=`` kwarg or positional directory path → dir mode (Week 68)
@@ -37,13 +50,37 @@ import shutil
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_REGISTRY_DIR = os.path.join(
     os.path.expanduser("~"), ".trading_bot", "model_registry"
 )
+
+# ---------------------------------------------------------------------------
+# G1 — Promotion state machine constants
+# ---------------------------------------------------------------------------
+
+VALID_STAGES = ("candidate", "staging", "canary", "prod", "retired")
+
+VALID_TRANSITIONS: Dict[str, List[str]] = {
+    "candidate": ["staging"],
+    "staging":   ["canary", "retired"],
+    "canary":    ["prod", "staging", "retired"],
+    "prod":      ["retired"],
+    "retired":   [],
+}
+
+PROMOTION_CRITERIA: Dict[Tuple[str, str], str] = {
+    ("candidate", "staging"): "offline backtest: Sharpe ≥ 0.5, max_drawdown ≤ 30%",
+    ("staging",   "canary"):  "walkforward eval pass + human approval",
+    ("canary",    "prod"):    "7d canary traffic split, ruin prob CI < 1%, human approval",
+    ("canary",    "staging"): "canary underperformance detected — demote",
+    ("staging",   "retired"): "model deprecated",
+    ("canary",    "retired"): "model deprecated",
+    ("prod",      "retired"): "model replaced by newer prod version",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +179,13 @@ class ModelRegistry:
             self._write_index({"versions": {}, "active": None})
 
         logger.info("ModelRegistry at %s (mode=%s)", self._index_path, self._mode)
+
+        # G1: ensure promotion index section exists
+        with self._lock:
+            index = self._read_index()
+            if "stages" not in index:
+                index["stages"] = {}
+                self._write_index(index)
 
     # ------------------------------------------------------------------
     # Core CRUD
@@ -246,6 +290,23 @@ class ModelRegistry:
                 # file mode: store meta inline
                 index.setdefault("versions", {})[str(version)] = meta
 
+            self._write_index(index)
+
+        # G1: auto-initialise stage to "candidate"
+        with self._lock:
+            index = self._read_index()
+            index.setdefault("stages", {})[str(version)] = {
+                "stage": "candidate",
+                "history": [
+                    {
+                        "from_stage": None,
+                        "to_stage": "candidate",
+                        "actor": "system",
+                        "reason": "initial registration",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
+                ],
+            }
             self._write_index(index)
 
         logger.info(
@@ -393,6 +454,165 @@ class ModelRegistry:
         if active is None:
             return None
         return self.get_version(int(active))
+
+    # ------------------------------------------------------------------
+    # G1 — Promotion state machine
+    # ------------------------------------------------------------------
+
+    def promote(
+        self,
+        version: int | str,
+        to_stage: str,
+        *,
+        actor: str = "unknown",
+        reason: str = "",
+        force: bool = False,
+    ) -> None:
+        """Transition ``version`` to ``to_stage``.
+
+        Parameters
+        ----------
+        version : int or str
+            Version to promote (accepts ``1`` or ``"v1"``).
+        to_stage : str
+            Target stage.  Must be a valid transition from the current stage
+            unless ``force=True``.
+        actor : str
+            Human or system identifier performing the promotion.
+        reason : str
+            Free-text justification (stored in history).
+        force : bool
+            Skip transition-validity check.  Use for testing only.
+
+        Raises
+        ------
+        KeyError
+            Version not in registry.
+        ValueError
+            ``to_stage`` is not a valid stage or the transition is not allowed.
+        """
+        if to_stage not in VALID_STAGES:
+            raise ValueError(
+                f"Unknown stage {to_stage!r}. Valid stages: {VALID_STAGES}"
+            )
+
+        version_int = self._parse_version(version)
+        with self._lock:
+            index = self._read_index()
+            if str(version_int) not in index.get("versions", {}):
+                raise KeyError(f"Version {version} not in registry")
+
+            stages = index.setdefault("stages", {})
+            stage_entry = stages.setdefault(
+                str(version_int),
+                {
+                    "stage": "candidate",
+                    "history": [],
+                },
+            )
+            current_stage = stage_entry["stage"]
+
+            if not force:
+                allowed = VALID_TRANSITIONS.get(current_stage, [])
+                if to_stage not in allowed:
+                    raise ValueError(
+                        f"Transition {current_stage!r} → {to_stage!r} is not allowed. "
+                        f"Allowed from {current_stage!r}: {allowed}"
+                    )
+
+            event: Dict[str, Any] = {
+                "from_stage": current_stage,
+                "to_stage": to_stage,
+                "actor": actor,
+                "reason": reason,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            stage_entry["stage"] = to_stage
+            stage_entry["history"].append(event)
+            stages[str(version_int)] = stage_entry
+            index["stages"] = stages
+            self._write_index(index)
+
+        logger.info(
+            "Model v%d promoted: %s → %s  (actor=%s reason=%r)",
+            version_int, current_stage, to_stage, actor, reason,
+        )
+
+    def get_stage(self, version: int | str) -> str:
+        """Return the current promotion stage of ``version``.
+
+        Returns ``"candidate"`` for versions registered before G1 was deployed.
+
+        Raises
+        ------
+        KeyError
+            Version not in registry.
+        """
+        version_int = self._parse_version(version)
+        index = self._read_index()
+        if str(version_int) not in index.get("versions", {}):
+            raise KeyError(f"Version {version} not in registry")
+        stages = index.get("stages", {})
+        return stages.get(str(version_int), {}).get("stage", "candidate")
+
+    def get_promotion_history(self, version: int | str) -> List[Dict[str, Any]]:
+        """Return the full promotion event history for ``version``."""
+        version_int = self._parse_version(version)
+        index = self._read_index()
+        if str(version_int) not in index.get("versions", {}):
+            raise KeyError(f"Version {version} not in registry")
+        stages = index.get("stages", {})
+        return list(stages.get(str(version_int), {}).get("history", []))
+
+    def list_by_stage(self, stage: str) -> List[VersionID]:
+        """Return all version IDs currently at ``stage``, sorted ascending."""
+        if stage not in VALID_STAGES:
+            raise ValueError(f"Unknown stage {stage!r}")
+        index = self._read_index()
+        stages = index.get("stages", {})
+        result = []
+        for v_str in sorted(index.get("versions", {}).keys(), key=int):
+            s = stages.get(v_str, {}).get("stage", "candidate")
+            if s == stage:
+                result.append(VersionID(int(v_str)))
+        return result
+
+    def check_promotion_conditions(
+        self,
+        version: int | str,
+        to_stage: str,
+    ) -> Tuple[bool, str]:
+        """Check whether ``version`` can be promoted to ``to_stage``.
+
+        Returns
+        -------
+        (ok, message) : (bool, str)
+            ``ok=True`` when the transition is structurally valid.
+            The caller must still verify empirical criteria (backtest metrics,
+            canary performance) before calling ``promote()``.
+        """
+        try:
+            version_int = self._parse_version(version)
+        except (KeyError, ValueError) as exc:
+            return False, str(exc)
+
+        try:
+            current = self.get_stage(version_int)
+        except KeyError as exc:
+            return False, str(exc)
+
+        allowed = VALID_TRANSITIONS.get(current, [])
+        if to_stage not in allowed:
+            return False, (
+                f"Transition {current!r} → {to_stage!r} not allowed. "
+                f"Allowed: {allowed}"
+            )
+
+        criteria = PROMOTION_CRITERIA.get((current, to_stage), "")
+        msg = f"OK: {current!r} → {to_stage!r}"
+        if criteria:
+            msg += f". Required criteria: {criteria}"
+        return True, msg
 
     def rollback(
         self,
