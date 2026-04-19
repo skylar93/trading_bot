@@ -186,6 +186,11 @@ class OrderManager:
         self._halted: bool = False
         # S52: latency tracking (submit-to-fill, ms)
         self._latency_samples: List[float] = []
+        # F11: throttle clock-skew checks to avoid per-order exchange round trips
+        self._clock_check_interval: float = float(
+            exchange_config.get("clock_check_interval_sec", 30.0)
+        )
+        self._last_clock_check_at: float = 0.0
         self._position_tracker = PositionTracker(
             initial_cash=float(exchange_config.get("initial_cash", 10_000.0))
         )
@@ -228,6 +233,13 @@ class OrderManager:
 
         if self._halted:
             raise RuntimeError("Daily loss limit breached — trading halted.")
+
+        # F11: proactively measure clock drift (throttled to avoid per-order RTT).
+        # check() updates is_halted when halt_on_skew=True and drift > threshold.
+        _now = time.monotonic()
+        if not self.paper_mode and _now - self._last_clock_check_at >= self._clock_check_interval:
+            self._clock_sync.check()
+            self._last_clock_check_at = _now
 
         # S45: clock skew halt
         if self._clock_sync.is_halted:

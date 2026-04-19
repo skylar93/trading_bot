@@ -29,6 +29,7 @@ import numpy as np
 
 from deployment.analysis.pnl_attribution import PnLAttributor
 from deployment.audit.audit_logger import AuditLogger
+from deployment.exchange.snapshot import ExchangeSnapshot
 from deployment.execution.order_manager import OrderManager
 from deployment.execution.position_tracker import PositionTracker
 from deployment.monitoring.alerter import TradingAlerter
@@ -239,6 +240,7 @@ class PaperTrader:
         regime_detector: Optional[RegimeDetector] = None,
         feature_drift_detector: Optional[FeatureDriftDetector] = None,
         on_regime_change: Optional[Callable[[int, int, np.ndarray], None]] = None,
+        exchange_snapshot: Optional[ExchangeSnapshot] = None,  # F7/F8/F9
     ) -> None:
         self.agent = agent
         self.config = config
@@ -302,6 +304,15 @@ class PaperTrader:
         self._nan_check_enabled: bool = bool(pipeline_cfg.get("nan_check_enabled", True))
         self._nan_halt_after_n: int = int(pipeline_cfg.get("nan_halt_after_n", 5))
         self._consecutive_nan_steps: int = 0
+
+        # F7/F8/F9: exchange reconciliation
+        self.exchange_snapshot: Optional[ExchangeSnapshot] = exchange_snapshot
+        recon_cfg = config.get("reconciliation", {}) or {}
+        self._on_mismatch: str = recon_cfg.get("on_mismatch", "halt")  # halt|warn|ignore
+        self._recon_qty_threshold: float = float(recon_cfg.get("qty_threshold", 0.001))
+        self._recon_price_threshold: float = float(recon_cfg.get("price_threshold", 0.001))
+        self._recon_interval_sec: float = float(recon_cfg.get("interval_sec", 60.0))
+        self._last_reconcile_at: float = 0.0
 
         if not simulation_mode:
             self._exchange = self._init_exchange(pt)
@@ -382,6 +393,8 @@ class PaperTrader:
             self._check_regime()
             self._run_shadow_agent(obs, step)
             self._maybe_daily_report()
+            # F9: periodic exchange reconciliation
+            self._periodic_reconcile(time.time())
 
             step += 1
             self.state.step = step
@@ -509,6 +522,8 @@ class PaperTrader:
             trader.state.balance,
             trader.state.position,
         )
+        # F8: reconcile local state against exchange immediately after restore
+        trader._reconcile_on_boot()
         return trader
 
     def save_checkpoint(self, path: str) -> None:
@@ -799,6 +814,142 @@ class PaperTrader:
                     self.on_regime_change(prev, new_regime, probs)
                 except Exception as exc:
                     logger.warning("on_regime_change hook raised: %s", exc)
+
+    # ------------------------------------------------------------------
+    # F8/F9: Exchange reconciliation
+    # ------------------------------------------------------------------
+
+    def _reconcile_on_boot(self) -> None:
+        """F8: Compare restored local state against live exchange snapshot."""
+        if self.exchange_snapshot is None:
+            return
+        logger.info("Reconcile-on-boot: fetching exchange snapshot for %s", self.symbol)
+        result = self._do_reconcile()
+        self._last_reconcile_at = time.time()
+        if result["ok"]:
+            logger.info("Reconcile-on-boot: OK (no mismatches)")
+        else:
+            logger.warning(
+                "Reconcile-on-boot: %d mismatch(es) detected: %s",
+                len(result["diffs"]),
+                result["diffs"],
+            )
+            self._handle_mismatch(result["diffs"], context="boot")
+
+    def _periodic_reconcile(self, current_time: float) -> None:
+        """F9: Reconcile every _recon_interval_sec seconds during run loop."""
+        if self.exchange_snapshot is None:
+            return
+        if current_time - self._last_reconcile_at < self._recon_interval_sec:
+            return
+        self._last_reconcile_at = current_time
+        result = self._do_reconcile()
+        if not result["ok"]:
+            logger.warning(
+                "Periodic reconcile: %d mismatch(es): %s",
+                len(result["diffs"]),
+                result["diffs"],
+            )
+            self._handle_mismatch(result["diffs"], context="periodic")
+
+    def _do_reconcile(self) -> Dict[str, Any]:
+        """Core reconcile: compare local state with exchange snapshot.
+
+        Returns dict with keys: ok (bool), diffs (list), local_qty, exchange_qty.
+        """
+        sym = self.symbol
+        try:
+            snap = self.exchange_snapshot.snapshot(sym)
+        except Exception as exc:
+            logger.error("Reconcile: snapshot fetch failed: %s", exc)
+            return {"ok": True, "diffs": [], "local_qty": 0.0, "exchange_qty": 0.0}
+
+        local_qty = self.state.position
+        local_entry = self.state.entry_price
+
+        # Sum up exchange position qty for this symbol
+        exchange_qty = 0.0
+        exchange_entry = 0.0
+        base = sym.split("/")[0]
+        for pos in snap["positions"]:
+            pos_sym = pos.get("symbol", "")
+            if pos_sym == sym or pos_sym.startswith(base):
+                exchange_qty += pos["qty"]
+                exchange_entry = pos["entry_price"]
+
+        # Fall back to balance for spot exchanges that don't support fetch_positions
+        if exchange_qty == 0.0 and not snap["positions"]:
+            exchange_qty = float(snap["balance"]["free"].get(base, 0))
+
+        diffs: List[Dict[str, Any]] = []
+
+        # Qty mismatch
+        qty_diff = abs(local_qty - exchange_qty)
+        if qty_diff > self._recon_qty_threshold:
+            diffs.append({
+                "type": "qty_mismatch",
+                "local_qty": local_qty,
+                "exchange_qty": exchange_qty,
+                "diff": qty_diff,
+            })
+
+        # Price drift (only meaningful when both sides hold a position)
+        if local_qty > self._recon_qty_threshold and exchange_entry > 0:
+            price_diff = abs(local_entry - exchange_entry)
+            rel_drift = price_diff / exchange_entry if exchange_entry else 0.0
+            if rel_drift > self._recon_price_threshold:
+                diffs.append({
+                    "type": "price_drift",
+                    "local_entry": local_entry,
+                    "exchange_entry": exchange_entry,
+                    "rel_drift": rel_drift,
+                })
+
+        # Open orders mismatch
+        exchange_open_count = len(snap["open_orders"])
+        local_open_count = 0
+        if self.order_manager is not None:
+            with self.order_manager._lock:
+                local_open_count = sum(
+                    1 for o in self.order_manager._orders.values()
+                    if o.status in ("pending", "partial")
+                )
+        if local_open_count != exchange_open_count:
+            diffs.append({
+                "type": "open_orders_mismatch",
+                "local_open": local_open_count,
+                "exchange_open": exchange_open_count,
+            })
+
+        # Audit every reconcile result
+        if self.audit_logger is not None:
+            self.audit_logger.log_risk_event({
+                "type": "reconcile",
+                "ok": len(diffs) == 0,
+                "diffs": diffs,
+                "local_qty": local_qty,
+                "exchange_qty": exchange_qty,
+                "step": self.state.step,
+            })
+
+        return {
+            "ok": len(diffs) == 0,
+            "diffs": diffs,
+            "local_qty": local_qty,
+            "exchange_qty": exchange_qty,
+            "snapshot": snap,
+        }
+
+    def _handle_mismatch(self, diffs: List[Dict[str, Any]], context: str = "") -> None:
+        """Act on detected mismatches according to on_mismatch config."""
+        msg = f"Position mismatch [{context}]: {diffs}"
+        if self.alerter is not None:
+            self.alerter.send_alert(msg, level="ERROR")
+        if self._on_mismatch == "halt":
+            self._trigger_shutdown(f"reconcile_halt: {msg}")
+        elif self._on_mismatch == "warn":
+            logger.warning("on_mismatch=warn: %s", msg)
+        # "ignore": log already happened in _do_reconcile
 
     def _trigger_shutdown(self, reason: str) -> None:
         logger.warning("SHUTDOWN triggered: %s", reason)
