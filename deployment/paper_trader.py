@@ -18,6 +18,8 @@ Usage (API):
 from __future__ import annotations
 
 import logging
+import os
+import signal
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -336,11 +338,21 @@ class PaperTrader:
         else:
             self._exchange = None
 
+        # G13: write PID file so kill_switch.py can locate this process
+        pid_cfg = config.get("pid_file", "state/paper_trader.pid")
+        self._pid_file = Path(pid_cfg)
+        self._pid_file.parent.mkdir(parents=True, exist_ok=True)
+        self._pid_file.write_text(str(os.getpid()))
+
+        # G13: SIGUSR1 triggers immediate kill-switch (cancel orders + shutdown)
+        signal.signal(signal.SIGUSR1, self._handle_kill_signal)
+
         logger.info(
-            "PaperTrader initialised | symbol=%s balance=%.2f simulation=%s",
+            "PaperTrader initialised | symbol=%s balance=%.2f simulation=%s pid=%d",
             self.symbol,
             self.initial_balance,
             simulation_mode,
+            os.getpid(),
         )
 
     # ------------------------------------------------------------------
@@ -968,13 +980,28 @@ class PaperTrader:
             logger.warning("on_mismatch=warn: %s", msg)
         # "ignore": log already happened in _do_reconcile
 
+    def _handle_kill_signal(self, signum: int, frame: object) -> None:
+        """G13: SIGUSR1 handler — cancel all orders, liquidate, halt within 5 s."""
+        logger.warning("KILL SIGNAL received (sig=%d) — initiating emergency shutdown", signum)
+        if self.order_manager is not None:
+            self.order_manager.cancel_all_orders()
+        self._trigger_shutdown("kill_switch: SIGUSR1")
+
     def _trigger_shutdown(self, reason: str) -> None:
         logger.warning("SHUTDOWN triggered: %s", reason)
+        # Cancel all open orders before liquidating
+        if self.order_manager is not None:
+            self.order_manager.cancel_all_orders()
         # Liquidate position at current price
         if self.state.position > 0 and self.state._current_price > 0:
             self._execute_sell(1.0, self.state._current_price)
         self.state.shutdown_triggered = True
         self.state.shutdown_reason = reason
+        # Remove PID file so kill_switch.py knows we exited cleanly
+        try:
+            self._pid_file.unlink(missing_ok=True)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # G2: Canary agent (replaces Phase 6 shadow agent, backward-compat)

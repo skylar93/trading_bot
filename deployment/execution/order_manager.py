@@ -510,6 +510,25 @@ class OrderManager:
             logger.error("Failed to cancel order %s: %s", order_id, e)
             return False
 
+    def cancel_all_orders(self) -> int:
+        """Cancel all open (pending/partial) orders. Returns count cancelled.
+
+        G13: Called by kill switch to ensure a clean exit.
+        """
+        with self._lock:
+            open_ids = [
+                oid for oid, o in self._orders.items()
+                if o.status in ("pending", "partial")
+            ]
+        cancelled = 0
+        for oid in open_ids:
+            if self.cancel_order(oid):
+                cancelled += 1
+            else:
+                logger.warning("cancel_all_orders: could not cancel %s", oid)
+        logger.info("cancel_all_orders: cancelled %d / %d open orders", cancelled, len(open_ids))
+        return cancelled
+
     def cancel_replace_order(
         self,
         order_id: str,
