@@ -237,6 +237,7 @@ class PaperTrader:
         audit_logger: Optional[AuditLogger] = None,
         data_source=None,
         shadow_agent=None,
+        canary_agent=None,
         regime_detector: Optional[RegimeDetector] = None,
         feature_drift_detector: Optional[FeatureDriftDetector] = None,
         on_regime_change: Optional[Callable[[int, int, np.ndarray], None]] = None,
@@ -244,8 +245,13 @@ class PaperTrader:
     ) -> None:
         self.agent = agent
         self.config = config
-        # Phase 6 Week 68 (S61): optional shadow agent — observes only, no orders.
-        self.shadow_agent = shadow_agent
+
+        # G2: canary_agent replaces/extends shadow_agent.
+        # shadow_agent kwarg kept for backward compatibility — treated as canary_agent
+        # when canary_agent is not explicitly provided.
+        self.canary_agent = canary_agent if canary_agent is not None else shadow_agent
+        # Backward-compat alias so existing code using .shadow_agent still works.
+        self.shadow_agent = self.canary_agent
         self.mlflow_manager = mlflow_manager
         self.simulation_mode = simulation_mode
         self.alerter = alerter
@@ -304,6 +310,17 @@ class PaperTrader:
         self._nan_check_enabled: bool = bool(pipeline_cfg.get("nan_check_enabled", True))
         self._nan_halt_after_n: int = int(pipeline_cfg.get("nan_halt_after_n", 5))
         self._consecutive_nan_steps: int = 0
+
+        # G2: canary routing config
+        canary_cfg = config.get("canary", {}) or {}
+        self._canary_enabled: bool = bool(canary_cfg.get("enabled", False))
+        self._canary_traffic_pct: float = float(canary_cfg.get("traffic_pct", 0.10))
+        # Canary perf tracking for auto-promotion suggestion (G2)
+        self._canary_returns: List[float] = []
+        self._prod_returns: List[float] = []
+        self._canary_promotion_suggested: bool = False
+        # Counters for deterministic routing (every 1/traffic_pct steps → canary)
+        self._canary_step_counter: int = 0
 
         # F7/F8/F9: exchange reconciliation
         self.exchange_snapshot: Optional[ExchangeSnapshot] = exchange_snapshot
@@ -391,7 +408,7 @@ class PaperTrader:
             self._check_risk(price)
             self._check_drift()
             self._check_regime()
-            self._run_shadow_agent(obs, step)
+            self._run_canary_agent(obs, step, price)
             self._maybe_daily_report()
             # F9: periodic exchange reconciliation
             self._periodic_reconcile(time.time())
@@ -960,47 +977,150 @@ class PaperTrader:
         self.state.shutdown_reason = reason
 
     # ------------------------------------------------------------------
-    # Phase 6 Week 68 (S61): Shadow agent
+    # G2: Canary agent (replaces Phase 6 shadow agent, backward-compat)
     # ------------------------------------------------------------------
 
-    def _run_shadow_agent(self, obs: np.ndarray, step: int) -> None:
-        """S61: Run shadow_agent prediction without executing any orders.
+    def _run_canary_agent(self, obs: np.ndarray, step: int, price: float) -> None:
+        """G2: Run canary_agent prediction; optionally execute its action.
 
-        The shadow agent observes the same state as the main agent but its
-        decisions are only recorded to the audit log for post-hoc comparison.
+        In observe-only mode (canary_enabled=False or canary_agent is None),
+        the canary action is only recorded to the audit log.
+
+        When canary_enabled=True, every 1/traffic_pct steps the canary action
+        is *executed* instead of the main agent action.  The resulting return
+        difference is tracked to support automatic promotion suggestion.
         """
-        if self.shadow_agent is None:
+        if self.canary_agent is None:
             return
         try:
-            shadow_action, _ = self.shadow_agent.predict(obs, deterministic=True)
-            if isinstance(shadow_action, np.ndarray):
-                shadow_action_val = float(shadow_action.flat[0])
-            else:
-                shadow_action_val = float(shadow_action)
-            main_action, _ = self.agent.predict(obs, deterministic=True)
-            if isinstance(main_action, np.ndarray):
-                main_action_val = float(main_action.flat[0])
-            else:
-                main_action_val = float(main_action)
-            logger.debug(
-                "shadow step=%d main_action=%.4f shadow_action=%.4f",
-                step, main_action_val, shadow_action_val,
+            import hashlib
+
+            canary_action, _ = self.canary_agent.predict(obs, deterministic=True)
+            canary_action_val = float(
+                canary_action.flat[0]
+                if isinstance(canary_action, np.ndarray)
+                else canary_action
             )
+            main_action, _ = self.agent.predict(obs, deterministic=True)
+            main_action_val = float(
+                main_action.flat[0]
+                if isinstance(main_action, np.ndarray)
+                else main_action
+            )
+
+            # G2: canary traffic routing
+            is_canary_step = False
+            if self._canary_enabled and self._canary_traffic_pct > 0:
+                self._canary_step_counter += 1
+                threshold = max(1, round(1.0 / self._canary_traffic_pct))
+                if self._canary_step_counter >= threshold:
+                    self._canary_step_counter = 0
+                    is_canary_step = True
+
+            source = "canary_active" if is_canary_step else "canary_observe"
+
+            if is_canary_step:
+                # Measure prod return for this step before executing canary
+                pv_before = self.state.portfolio_value
+                self._execute_action(canary_action_val, price)
+                pv_after = self.state.portfolio_value
+                canary_step_return = (pv_after - pv_before) / pv_before if pv_before > 0 else 0.0
+                self._canary_returns.append(canary_step_return)
+                # Approximate prod return using main action direction
+                self._prod_returns.append(main_action_val * 0.001)  # proxy
+                self._check_canary_promotion_suggestion()
+            else:
+                self._prod_returns.append(main_action_val * 0.001)
+
+            logger.debug(
+                "canary step=%d main=%.4f canary=%.4f active=%s",
+                step, main_action_val, canary_action_val, is_canary_step,
+            )
+
             if self.audit_logger is not None:
-                import hashlib
                 obs_hash = hashlib.sha256(obs.tobytes()).hexdigest()
                 self.audit_logger.log_model_decision(
-                    action=shadow_action_val,
+                    action=canary_action_val,
                     obs_hash=obs_hash,
                     extra={
-                        "source": "shadow",
+                        "source": source,
                         "step": step,
                         "main_action": main_action_val,
-                        "shadow_action": shadow_action_val,
+                        "canary_action": canary_action_val,
+                        "canary_active": is_canary_step,
                     },
                 )
         except Exception as e:
-            logger.warning("Shadow agent step failed at step=%d: %s", step, e)
+            logger.warning("Canary agent step failed at step=%d: %s", step, e)
+
+    def _check_canary_promotion_suggestion(self) -> None:
+        """G2: Suggest promotion if canary return ≥ prod - 0.5σ over last N steps."""
+        min_window = 168  # ~7 days of hourly steps
+        n = min(len(self._canary_returns), len(self._prod_returns))
+        if n < min_window or self._canary_promotion_suggested:
+            return
+
+        canary_arr = np.array(self._canary_returns[-min_window:])
+        prod_arr = np.array(self._prod_returns[-min_window:])
+        prod_std = float(np.std(prod_arr)) if len(prod_arr) > 1 else 0.0
+        threshold = float(np.mean(prod_arr)) - 0.5 * prod_std
+
+        if float(np.mean(canary_arr)) >= threshold:
+            self._canary_promotion_suggested = True
+            logger.warning(
+                "CANARY PROMOTION SUGGESTION: canary return (%.4f) ≥ prod - 0.5σ "
+                "(%.4f) over %d steps. Human approval required before promoting.",
+                float(np.mean(canary_arr)),
+                threshold,
+                min_window,
+            )
+            if self.audit_logger is not None:
+                self.audit_logger.log_risk_event({
+                    "type": "canary_promotion_suggestion",
+                    "canary_mean_return": float(np.mean(canary_arr)),
+                    "prod_threshold": threshold,
+                    "window_steps": min_window,
+                    "step": self.state.step,
+                    "note": "human approval required — do NOT auto-promote",
+                })
+
+    # ------------------------------------------------------------------
+    # G5: Hot-swap agent without restart
+    # ------------------------------------------------------------------
+
+    def replace_agent(self, new_agent, *, actor: str = "unknown", reason: str = "") -> None:
+        """G5: Atomically replace the main agent while preserving all internal state.
+
+        The swap is performed under the PositionTracker lock so no partially-updated
+        state is visible to concurrent callers.  The next call to ``run()`` (or the
+        next step in the current run) will use ``new_agent`` for decisions.
+
+        Parameters
+        ----------
+        new_agent :
+            Replacement agent with a ``predict(obs, deterministic)`` method.
+        actor : str
+            Identifier of the person/system performing the swap (for audit log).
+        reason : str
+            Free-text justification recorded in the audit log.
+        """
+        with self.state.pos._lock:
+            old_agent = self.agent
+            self.agent = new_agent
+
+        logger.warning(
+            "Agent hot-swapped at step=%d (actor=%s reason=%r old=%r new=%r)",
+            self.state.step, actor, reason, old_agent, new_agent,
+        )
+        if self.audit_logger is not None:
+            self.audit_logger.log_risk_event({
+                "type": "agent_hotswap",
+                "step": self.state.step,
+                "actor": actor,
+                "reason": reason,
+                "old_agent": repr(old_agent),
+                "new_agent": repr(new_agent),
+            })
 
     # ------------------------------------------------------------------
     # Phase 6 Week 65 helpers

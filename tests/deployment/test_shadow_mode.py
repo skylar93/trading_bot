@@ -174,9 +174,10 @@ class TestShadowModeAuditLog:
         shadow_records = [
             r for r in records
             if r["type"] == "model_decision"
-            and r["payload"].get("source") == "shadow"
+            # G2: source renamed from "shadow" → "canary_observe" / "canary_active"
+            and r["payload"].get("source", "").startswith("canary")
         ]
-        assert len(shadow_records) > 0, "No shadow decisions found in audit log"
+        assert len(shadow_records) > 0, "No canary decisions found in audit log"
 
     def test_shadow_record_contains_comparison_fields(self, tmp_path):
         log_file = str(tmp_path / "audit.jsonl")
@@ -201,13 +202,15 @@ class TestShadowModeAuditLog:
 
         shadow_recs = [
             r for r in records
-            if r["type"] == "model_decision" and r["payload"].get("source") == "shadow"
+            if r["type"] == "model_decision"
+            # G2: source renamed from "shadow" → "canary_observe" / "canary_active"
+            and r["payload"].get("source", "").startswith("canary")
         ]
         assert len(shadow_recs) > 0
         rec = shadow_recs[0]["payload"]
-        # Must contain comparison fields
+        # Must contain comparison fields (G2: shadow_action → canary_action)
         assert "main_action" in rec
-        assert "shadow_action" in rec
+        assert "canary_action" in rec
         assert "step" in rec
         assert "obs_hash" in rec
 
