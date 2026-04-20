@@ -1,0 +1,32 @@
+# Prometheus scrape configuration — Week 78 H1
+#
+# The trading bot exposes metrics on :9100/metrics (prometheus_client HTTP server).
+# Prometheus scrapes every 10 seconds.
+#
+# Usage:
+#   docker-compose up prometheus grafana
+#   open http://localhost:9090   # Prometheus UI
+#   open http://localhost:3000   # Grafana (admin / trading_admin)
+
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+  external_labels:
+    service: trading-bot
+
+scrape_configs:
+  # Trading bot metrics (MetricsExporter HTTP server on :9100)
+  - job_name: trading_bot
+    static_configs:
+      - targets:
+          - host.docker.internal:9100   # Docker Desktop (Mac/Windows)
+          # - trading_bot:9100          # If running inside Docker network
+    metrics_path: /metrics
+    scrape_interval: 10s
+    scrape_timeout: 5s
+
+  # Prometheus self-monitoring
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - localhost:9090

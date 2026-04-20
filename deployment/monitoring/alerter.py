@@ -3,33 +3,37 @@ Trading Alerter: condition-based notification dispatcher.
 
 Supported channels:
     - console  : logger.warning (always available, used as fallback)
-    - telegram : sends message via python-telegram-bot (requires token + chat_id)
+    - telegram : sends message via Telegram Bot API
     - webhook  : HTTP POST to a generic endpoint
+    - discord  : HTTP POST to a Discord webhook URL
 
 Triggers:
     - drawdown exceeds threshold (default 10 %)
     - daily P&L below loss limit
     - feature/reward drift detected
     - connection lost for more than N seconds
+    - kill switch activated
+    - audit chain integrity break
+    - runtime error (notify_error)
     - trade executed (optional, verbose mode only)
 
 Usage:
     alerter = TradingAlerter({
-        "alert_channels": ["console", "telegram"],
+        "alert_channels": ["console", "discord"],
         "drawdown_alert_threshold": 0.10,
         "daily_loss_alert": -500,
-        "telegram_token": "...",
-        "telegram_chat_id": "...",
+        "discord_webhook_url": "https://discord.com/api/webhooks/...",
     })
     alerter.check_drawdown(current=9000, peak=10000)
     alerter.check_daily_pnl(pnl=-600)
     alerter.notify_drift(detector="adwin", signal_name="reward")
-    alerter.notify_trade(side="buy", amount=0.05, price=30000.0)
+    alerter.notify_kill_switch()
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import time
 import urllib.request
 import urllib.parse
@@ -39,6 +43,12 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+# Discord embeds colour codes
+_COLOUR_WARNING = 0xFFA500   # orange
+_COLOUR_CRITICAL = 0xFF0000  # red
+_COLOUR_INFO = 0x00B0F4      # blue
+_COLOUR_ERROR = 0xFF0000     # red
 
 
 @dataclass
@@ -63,13 +73,15 @@ class TradingAlerter:
     config : dict
         Alert configuration.
         Keys:
-            alert_channels              – list of channels: ["console"], ["telegram"], ["webhook"]
+            alert_channels              – list of channels: ["console"] | ["telegram"] |
+                                          ["webhook"] | ["discord"]
             drawdown_alert_threshold    – drawdown fraction to trigger alert (default 0.10)
             daily_loss_alert            – daily P&L threshold to trigger alert (default -500)
             connection_timeout_seconds  – seconds of lost connection before alert (default 60)
-            telegram_token              – Telegram bot token (or set TELEGRAM_BOT_TOKEN env var)
-            telegram_chat_id            – Telegram chat id (or set TELEGRAM_CHAT_ID env var)
-            webhook_url                 – HTTP endpoint for webhook alerts
+            telegram_token              – Telegram bot token (or TELEGRAM_BOT_TOKEN env var)
+            telegram_chat_id            – Telegram chat id (or TELEGRAM_CHAT_ID env var)
+            webhook_url                 – HTTP endpoint for generic webhook alerts
+            discord_webhook_url         – Discord webhook URL (or DISCORD_WEBHOOK_URL env var)
             verbose                     – if True, also alert on every trade (default False)
     """
 
@@ -81,7 +93,6 @@ class TradingAlerter:
         self.verbose: bool = bool(config.get("verbose", False))
 
         # Telegram
-        import os
         self._telegram_token: Optional[str] = (
             config.get("telegram_token") or os.environ.get("TELEGRAM_BOT_TOKEN")
         )
@@ -89,14 +100,21 @@ class TradingAlerter:
             str(config.get("telegram_chat_id", "")) or os.environ.get("TELEGRAM_CHAT_ID")
         )
 
-        # Webhook
+        # Generic webhook
         self._webhook_url: Optional[str] = config.get("webhook_url") or None
+
+        # Discord webhook
+        self._discord_url: Optional[str] = (
+            config.get("discord_webhook_url")
+            or os.environ.get("DISCORD_WEBHOOK_URL")
+            or None
+        )
 
         # Connection tracking
         self._last_connection_time: float = time.monotonic()
         self._connection_alert_sent: bool = False
 
-        # Audit log (useful for testing and post-hoc analysis)
+        # Audit log
         self.alert_history: List[AlertRecord] = []
 
         logger.info(
@@ -111,14 +129,9 @@ class TradingAlerter:
     # ------------------------------------------------------------------
 
     def check_drawdown(self, current: float, peak: float) -> bool:
-        """
-        Check if drawdown from peak exceeds the alert threshold.
-
-        Returns True if alert was triggered.
-        """
+        """Alert if drawdown from peak exceeds the threshold. Returns True if fired."""
         if peak <= 0:
             return False
-
         drawdown = (peak - current) / peak
         if drawdown >= self.drawdown_threshold:
             self._dispatch(
@@ -134,11 +147,7 @@ class TradingAlerter:
         return False
 
     def check_daily_pnl(self, pnl: float) -> bool:
-        """
-        Check if daily P&L has dropped below the alert threshold.
-
-        Returns True if alert was triggered.
-        """
+        """Alert if daily P&L is below the loss limit. Returns True if fired."""
         if pnl <= self.daily_loss_limit:
             self._dispatch(
                 level="CRITICAL",
@@ -152,16 +161,7 @@ class TradingAlerter:
         return False
 
     def check_connection_lost(self, seconds_since_last_tick: float) -> bool:
-        """
-        Fire an alert if the data feed has been silent for > connection_timeout seconds.
-
-        Parameters
-        ----------
-        seconds_since_last_tick : float
-            Elapsed seconds since the last received data tick.
-
-        Returns True if alert was triggered.
-        """
+        """Alert if data feed has been silent for > connection_timeout. Returns True if fired."""
         if seconds_since_last_tick > self.connection_timeout:
             self._dispatch(
                 level="CRITICAL",
@@ -188,7 +188,7 @@ class TradingAlerter:
         logger.info("Connection restored; alert state reset.")
 
     def notify_trade(self, side: str, amount: float, price: float, order_id: str = "") -> None:
-        """Optionally alert on trade execution (only in verbose mode)."""
+        """Alert on trade execution (only in verbose mode)."""
         if not self.verbose:
             return
         self._dispatch(
@@ -199,6 +199,28 @@ class TradingAlerter:
                 + (f" (id={order_id})" if order_id else "")
             ),
         )
+
+    def notify_error(self, error: str, context: Optional[str] = None) -> None:
+        """Alert on a runtime error (called from OrderManager and PaperTrader error paths)."""
+        msg = f"Runtime error: {error}"
+        if context:
+            msg += f" | context={context}"
+        self._dispatch(level="ERROR", event="runtime_error", message=msg)
+
+    def notify_kill_switch(self, reason: str = "manual") -> None:
+        """Alert that the kill switch has been activated — highest priority."""
+        self._dispatch(
+            level="CRITICAL",
+            event="kill_switch_activated",
+            message=f"KILL SWITCH ACTIVATED — reason={reason}. All orders cancelled.",
+        )
+
+    def notify_audit_chain_break(self, details: str = "") -> None:
+        """Alert that audit log integrity has been compromised."""
+        msg = "AUDIT CHAIN INTEGRITY BREAK detected — log continuity cannot be guaranteed."
+        if details:
+            msg += f" Details: {details}"
+        self._dispatch(level="CRITICAL", event="audit_chain_break", message=msg)
 
     def send_alert(self, message: str, level: str = "WARNING") -> None:
         """Manually dispatch an alert message."""
@@ -223,6 +245,8 @@ class TradingAlerter:
                 self._send_telegram(full_message)
             elif channel == "webhook":
                 self._send_webhook(event, level, message, timestamp)
+            elif channel == "discord":
+                self._send_discord(event, level, message, timestamp)
             else:
                 logger.warning("Unknown alert channel: %s", channel)
 
@@ -282,3 +306,45 @@ class TradingAlerter:
                     logger.warning("Webhook returned status %s", resp.status)
         except Exception as e:
             logger.error("Webhook alert failed: %s", e)
+
+    def _send_discord(self, event: str, level: str, message: str, timestamp: str) -> None:
+        """Send alert to a Discord channel via incoming webhook."""
+        if not self._discord_url:
+            logger.warning(
+                "Discord alert skipped: discord_webhook_url not configured. "
+                "Set DISCORD_WEBHOOK_URL env var."
+            )
+            return
+
+        colour_map = {
+            "CRITICAL": _COLOUR_CRITICAL,
+            "ERROR": _COLOUR_ERROR,
+            "WARNING": _COLOUR_WARNING,
+            "INFO": _COLOUR_INFO,
+        }
+        colour = colour_map.get(level, _COLOUR_WARNING)
+
+        try:
+            payload = json.dumps({
+                "username": "Trading Bot Alerter",
+                "embeds": [
+                    {
+                        "title": f"[{level}] {event}",
+                        "description": message,
+                        "color": colour,
+                        "footer": {"text": timestamp},
+                    }
+                ],
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                self._discord_url,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                # Discord returns 204 No Content on success
+                if resp.status not in (200, 204):
+                    logger.warning("Discord webhook returned status %s", resp.status)
+        except Exception as e:
+            logger.error("Discord alert failed: %s", e)

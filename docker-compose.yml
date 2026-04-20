@@ -136,6 +136,63 @@ services:
       - default
 
   # ──────────────────────────────────────────────────────────
+  # ──────────────────────────────────────────────────────────
+  # Prometheus (Week 78: H1) — scrapes bot metrics from :9100
+  # ──────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: trading_prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deployment/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.enable-lifecycle"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    profiles:
+      - observability
+      - default
+
+  # ──────────────────────────────────────────────────────────
+  # Grafana (Week 78: H2) — dashboard UI at :3000
+  # ──────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: trading_grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=trading_admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/trading_bot.json
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./deployment/monitoring/grafana_dashboard.json:/var/lib/grafana/dashboards/trading_bot.json:ro
+      - ./deployment/monitoring/grafana_provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    profiles:
+      - observability
+      - default
+
   # Data Fetcher (cron-style daily update)
   # ──────────────────────────────────────────────────────────
   data_fetcher:
@@ -160,6 +217,10 @@ services:
 # ──────────────────────────────────────────────────────────
 volumes:
   mlruns:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
     driver: local
 
 networks:

@@ -1,6 +1,7 @@
 # ============================================================
 # config/monitoring.yaml — 모니터링 & 알림 설정
 # Week 63: Config Consolidation
+# Week 78 (H1-H5): Observability Stack — Prometheus, Grafana, Discord, OTel, Sentry
 #
 # base.yaml 위에 deep_merge됨.
 # MetricsExporter, Alerter, Dashboard, Prometheus 설정.
@@ -12,16 +13,20 @@ monitoring:
   # ─ MetricsExporter ──────────────────────────────────────────
   max_history: 10000            # 메모리 내 최대 스냅샷 수
 
-  # ─ Prometheus ───────────────────────────────────────────────
-  use_prometheus: false
-  prometheus_port: 9090
+  # ─ Prometheus (H1) ──────────────────────────────────────────
+  # prometheus_client HTTP server — port 9100
+  # Grafana/Prometheus가 이 엔드포인트를 scrape함
+  use_prometheus: true
+  prometheus_port: 9100
 
   # ─ Dashboard ────────────────────────────────────────────────
   dashboard_enabled: true
   dashboard_port: 8080
 
   # ─ 알림 채널 ────────────────────────────────────────────────
-  alert_channels: ["console"]   # "console" | "telegram" | "webhook"
+  # "console" | "telegram" | "webhook" | "discord"
+  # Discord는 discord_webhook_url 또는 DISCORD_WEBHOOK_URL env var 필요
+  alert_channels: ["console"]
   drawdown_alert_threshold: 0.10
   daily_loss_alert: -500.0
   connection_timeout_seconds: 60.0
@@ -31,8 +36,13 @@ monitoring:
   telegram_token: ""
   telegram_chat_id: ""
 
-  # ─ Webhook ──────────────────────────────────────────────────
+  # ─ Generic Webhook ──────────────────────────────────────────
   webhook_url: ""
+
+  # ─ Discord (H3) ─────────────────────────────────────────────
+  # Discord Incoming Webhook URL
+  # 환경변수 DISCORD_WEBHOOK_URL로도 설정 가능
+  discord_webhook_url: ""
 
   # ─ Drift 감지 (모니터링 레이어) ──────────────────────────────
   use_drift_detection: false
@@ -40,15 +50,24 @@ monitoring:
   drift_window_size: 500
 
   # ─ Feature Drift (S56) ──────────────────────────────────────
-  # When enabled, each feature in the observation vector is monitored
-  # individually.  Alarm fires → audit log + alerter.
   use_feature_drift_detection: false
   feature_drift_method: "adwin"  # "adwin" | "page_hinkley"
 
   # ─ Regime Detection (S57) ────────────────────────────────────
-  # When enabled, RegimeDetector.predict() is called every step using
-  # the current price history window.  Regime changes are logged and
-  # the on_regime_change hook is called.
   use_regime_detection: false
   regime_n_regimes: 3           # number of hidden states
   regime_method: "threshold"    # "hmm" | "threshold" (hmm requires hmmlearn)
+
+  # ─ OpenTelemetry Tracing (H4) ────────────────────────────────
+  # OTel span export. OTEL_EXPORTER_OTLP_ENDPOINT env var 설정 시 OTLP로 전송.
+  # 미설정 시 ConsoleSpanExporter (stdout).
+  otel_enabled: true
+  otel_service_name: "trading-bot"
+  # otel_otlp_endpoint: "http://localhost:4318"  # Jaeger OTLP HTTP
+
+  # ─ Sentry (H5) ──────────────────────────────────────────────
+  # 런타임 예외 자동 수집. SENTRY_DSN env var 또는 아래 설정.
+  # credential/price 데이터는 before_send hook에서 자동 scrubbing.
+  sentry_dsn: ""                # 또는 env var SENTRY_DSN
+  sentry_traces_sample_rate: 0.1
+  sentry_environment: "local"   # "local" | "paper" | "live"
