@@ -46,6 +46,7 @@ from deployment.execution.rate_limiter import RateLimiter
 from deployment.execution.fat_finger_guard import FatFingerGuard
 from deployment.execution.circuit_breaker import VolatilityCircuitBreaker
 from deployment.execution.clock_sync import ClockSync
+from risk_management.limits import PreTradeComplianceChecker
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +140,9 @@ class OrderManager:
         F16: FeeModel instance.  If provided, overrides hardcoded 0.1% paper fee.
     alerter : optional
         Trading alerter; used to emit cancel-failure alerts (F14).
+    compliance_checker : PreTradeComplianceChecker, optional
+        G6-G9: pre-trade compliance enforcement (position limits, self-trade
+        prevention, notional caps, wash trade guard).
     """
 
     def __init__(
@@ -152,6 +156,7 @@ class OrderManager:
         clock_sync: Optional[ClockSync] = None,
         fee_model=None,
         alerter=None,
+        compliance_checker: Optional[PreTradeComplianceChecker] = None,
     ) -> None:
         exchange_config = exchange_config or {}
         # F3: exchange_mode ("paper" | "sandbox" | "live") overrides paper_mode bool.
@@ -169,6 +174,8 @@ class OrderManager:
         self._max_retries: int = int(exchange_config.get("max_retries", 3))
         self._fee_model = fee_model
         self._alerter = alerter
+        # G6-G9: pre-trade compliance checker (Week 76)
+        self._compliance_checker: Optional[PreTradeComplianceChecker] = compliance_checker
 
         # S41: correlation threshold (from config or default 0.7)
         self._correlation_threshold: float = float(
@@ -358,6 +365,28 @@ class OrderManager:
                 idempotency_key=idempotency_key,
             )
 
+        # G6-G9: pre-trade compliance (Week 76)
+        if self._compliance_checker is not None:
+            _ref_price = current_price or price or limit_price or 1.0
+            _order_notional = amount * _ref_price
+            _tracker = self._position_tracker
+            _sym_notional = _tracker.position * _ref_price
+            _port_notional = _tracker.portfolio_value
+            _comp_ok, _comp_reason = self._compliance_checker.check_all(
+                symbol=self.symbol,
+                side=side,
+                order_notional=_order_notional,
+                limit_price=limit_price,
+                current_symbol_notional=_sym_notional,
+                current_portfolio_notional=_port_notional,
+            )
+            if not _comp_ok:
+                return self._reject_order(
+                    side, amount, order_type, limit_price,
+                    reason=_comp_reason,
+                    idempotency_key=idempotency_key,
+                )
+
         if amount > self.max_order_size:
             logger.warning(
                 "Order amount %.6f exceeds max_order_size %.6f; clamping.",
@@ -394,6 +423,20 @@ class OrderManager:
         # Audit: order submitted
         if self._audit_logger is not None:
             self._audit_logger.log_order(order)
+
+        # G8+G9: commit notional and timestamp for accepted order
+        if self._compliance_checker is not None:
+            _ref_price = current_price or price or limit_price or 1.0
+            self._compliance_checker.record_order(
+                self.symbol, side, amount * _ref_price
+            )
+            # G7: register pending limit orders so future submits can detect crossing
+            if limit_price is not None and order_type in (
+                "limit", "stop_loss_limit", "take_profit"
+            ):
+                self._compliance_checker.register_open_order(
+                    self.symbol, limit_price, side
+                )
 
         try:
             if self.paper_mode:
@@ -446,12 +489,22 @@ class OrderManager:
             if self.paper_mode:
                 order.status = "cancelled"
                 order.updated_at = datetime.utcnow()
+                # G7: release from self-trade tracking
+                if self._compliance_checker is not None and order.limit_price is not None:
+                    self._compliance_checker.deregister_open_order(
+                        self.symbol, order.limit_price
+                    )
                 return True
         try:
             self.rate_limiter.acquire()
             self._exchange.cancel_order(order.exchange_order_id, self.symbol)
             order.status = "cancelled"
             order.updated_at = datetime.utcnow()
+            # G7: release from self-trade tracking
+            if self._compliance_checker is not None and order.limit_price is not None:
+                self._compliance_checker.deregister_open_order(
+                    self.symbol, order.limit_price
+                )
             return True
         except Exception as e:
             logger.error("Failed to cancel order %s: %s", order_id, e)
@@ -808,6 +861,11 @@ class OrderManager:
         else:
             order.status = "filled"
             order.filled_at = datetime.utcnow()   # S52
+            # G7: release filled limit order from self-trade tracking
+            if self._compliance_checker is not None and order.limit_price is not None:
+                self._compliance_checker.deregister_open_order(
+                    self.symbol, order.limit_price
+                )
         order.updated_at = datetime.utcnow()
 
     def _check_pending_orders(self, price: float) -> None:
