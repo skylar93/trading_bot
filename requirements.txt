@@ -74,6 +74,9 @@ opentelemetry-sdk>=1.20.0       # OTel tracing SDK
 pandera>=0.18.0                 # H6: declarative OHLCV schema validation
 dvc>=3.50.0                     # H8: data versioning & pipeline tracking
 
+# Scheduled Retraining (Week 80)
+prefect>=2.14.0                 # H11: workflow orchestration (local worker, solo-dev)
+
 # Utilities
 python-dotenv>=1.0.1
 pydantic>=2.10.4
