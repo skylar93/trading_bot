@@ -70,6 +70,10 @@ sentry-sdk>=2.0.0               # Runtime exception tracking
 opentelemetry-api>=1.20.0       # OTel tracing API
 opentelemetry-sdk>=1.20.0       # OTel tracing SDK
 
+# Data & Model Governance (Week 79)
+pandera>=0.18.0                 # H6: declarative OHLCV schema validation
+dvc>=3.50.0                     # H8: data versioning & pipeline tracking
+
 # Utilities
 python-dotenv>=1.0.1
 pydantic>=2.10.4

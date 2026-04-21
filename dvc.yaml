@@ -1,0 +1,56 @@
+# DVC pipeline — Week 79 (H8)
+# Run with: dvc repro
+#
+# Stages:
+#   fetch      → data/raw/
+#   preprocess → data/processed/
+#   validate   → data quality gate check
+#
+# Initialize once: python scripts/setup_dvc.py
+
+stages:
+  fetch:
+    cmd: python scripts/fetch_data.py --output data/raw/
+    params:
+      - config/local_3060ti.yaml:
+          - data.symbol
+          - data.start_date
+          - data.end_date
+          - data.timeframe
+    outs:
+      - data/raw/:
+          cache: true
+          desc: "Raw OHLCV downloaded from exchange or CSV"
+
+  preprocess:
+    cmd: python scripts/preprocess_data.py --input data/raw/ --output data/processed/
+    deps:
+      - data/raw/
+      - training/data/feature_engineering.py
+    outs:
+      - data/processed/:
+          cache: true
+          desc: "Feature-engineered OHLCV ready for training"
+
+  validate:
+    cmd: python -c "
+import pandas as pd, glob, sys
+from data.quality import validate_ohlcv
+errors = []
+for f in glob.glob('data/processed/*.csv') + glob.glob('data/processed/*.parquet'):
+    df = pd.read_csv(f) if f.endswith('.csv') else pd.read_parquet(f)
+    errs = validate_ohlcv(df)
+    if errs:
+        print(f'FAIL {f}:')
+        for e in errs: print(' ', e)
+        errors.extend(errs)
+if errors:
+    sys.exit(1)
+print('All data files passed quality gate.')
+"
+    deps:
+      - data/processed/
+      - data/quality/pandera_schema.py
+    metrics:
+      - data/processed/quality_report.json:
+          cache: false

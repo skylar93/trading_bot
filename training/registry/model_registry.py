@@ -54,6 +54,123 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+# H7: optional MLflow Model Registry sync
+try:
+    import mlflow
+    from mlflow.tracking import MlflowClient
+    HAS_MLFLOW = True
+except ImportError:
+    HAS_MLFLOW = False
+
+
+# ---------------------------------------------------------------------------
+# H7 — MLflow stage mapping
+# ---------------------------------------------------------------------------
+
+# Our stage vocabulary → MLflow built-in stages
+_STAGE_TO_MLFLOW: Dict[str, str] = {
+    "candidate": "None",
+    "staging":   "Staging",
+    "canary":    "Staging",   # MLflow has no canary; use Staging with tag
+    "prod":      "Production",
+    "retired":   "Archived",
+}
+
+
+class MLflowRegistryBridge:
+    """
+    Synchronises :class:`ModelRegistry` stage transitions to the MLflow
+    Model Registry so MLflow UI shows live promotion state.
+
+    Week 79 (H7): MLflow becomes the authoritative record for model artifacts.
+    ``ModelRegistry`` JSON index remains as a fast local cache.
+
+    Parameters
+    ----------
+    model_name : str
+        Registered-model name in the MLflow Model Registry.
+    tracking_uri : str, optional
+        MLflow tracking URI.  Defaults to ``./mlruns``.
+    """
+
+    def __init__(self, model_name: str, tracking_uri: Optional[str] = None) -> None:
+        if not HAS_MLFLOW:
+            raise ImportError("mlflow is required for MLflowRegistryBridge")
+        self.model_name = model_name
+        if tracking_uri:
+            mlflow.set_tracking_uri(tracking_uri)
+        self._client = MlflowClient()
+        self._ensure_registered_model()
+
+    def _ensure_registered_model(self) -> None:
+        try:
+            self._client.get_registered_model(self.model_name)
+        except mlflow.exceptions.MlflowException:
+            self._client.create_registered_model(
+                self.model_name,
+                description="Trading bot model — managed by ModelRegistry (H7)",
+            )
+            logger.info("Created MLflow registered model: %s", self.model_name)
+
+    def log_version(
+        self,
+        version_int: int,
+        run_id: Optional[str],
+        artifact_path: str = "model",
+        metrics: Optional[Dict[str, float]] = None,
+        tags: Optional[Dict[str, str]] = None,
+    ) -> Optional[str]:
+        """
+        Create a new model version in the MLflow registry.
+
+        Returns the MLflow version string or None if MLflow is unavailable.
+        """
+        if run_id is None:
+            logger.warning("No run_id provided; skipping MLflow model version creation")
+            return None
+        try:
+            model_uri = f"runs:/{run_id}/{artifact_path}"
+            mv = self._client.create_model_version(
+                name=self.model_name,
+                source=model_uri,
+                run_id=run_id,
+                tags={"registry_version": str(version_int), **(tags or {})},
+            )
+            if metrics:
+                for k, v in metrics.items():
+                    self._client.set_model_version_tag(
+                        self.model_name, mv.version, f"metric.{k}", str(v)
+                    )
+            logger.info(
+                "MLflow model version %s created for registry v%d",
+                mv.version, version_int,
+            )
+            return mv.version
+        except Exception as exc:
+            logger.warning("MLflow log_version failed: %s", exc)
+            return None
+
+    def sync_stage(self, version_int: int, our_stage: str, mlflow_version: str) -> None:
+        """Push a stage change to MLflow."""
+        mlflow_stage = _STAGE_TO_MLFLOW.get(our_stage, "None")
+        try:
+            self._client.transition_model_version_stage(
+                name=self.model_name,
+                version=mlflow_version,
+                stage=mlflow_stage,
+                archive_existing_versions=(our_stage == "prod"),
+            )
+            if our_stage == "canary":
+                self._client.set_model_version_tag(
+                    self.model_name, mlflow_version, "stage_detail", "canary"
+                )
+            logger.info(
+                "MLflow stage synced: v%d → %s (mlflow=%s)",
+                version_int, our_stage, mlflow_stage,
+            )
+        except Exception as exc:
+            logger.warning("MLflow sync_stage failed: %s", exc)
+
 _DEFAULT_REGISTRY_DIR = os.path.join(
     os.path.expanduser("~"), ".trading_bot", "model_registry"
 )
@@ -149,6 +266,8 @@ class ModelRegistry:
         registry_path_or_dir: str | Path | None = None,
         *,
         registry_dir: str | Path | None = None,
+        mlflow_model_name: Optional[str] = None,
+        mlflow_tracking_uri: Optional[str] = None,
     ) -> None:
         if registry_dir is not None:
             self._mode = "dir"
@@ -178,6 +297,18 @@ class ModelRegistry:
         if not self._index_path.exists():
             self._write_index({"versions": {}, "active": None})
 
+        # H7: optional MLflow bridge
+        self._mlflow_bridge: Optional[MLflowRegistryBridge] = None
+        if mlflow_model_name and HAS_MLFLOW:
+            try:
+                self._mlflow_bridge = MLflowRegistryBridge(
+                    model_name=mlflow_model_name,
+                    tracking_uri=mlflow_tracking_uri,
+                )
+                logger.info("MLflow bridge enabled: model=%s", mlflow_model_name)
+            except Exception as exc:
+                logger.warning("MLflow bridge init failed (non-fatal): %s", exc)
+
         logger.info("ModelRegistry at %s (mode=%s)", self._index_path, self._mode)
 
         # G1: ensure promotion index section exists
@@ -202,6 +333,8 @@ class ModelRegistry:
         tag: Optional[str] = None,
         tags: Optional[Dict[str, str]] = None,
         copy_files: bool = True,
+        mlflow_run_id: Optional[str] = None,
+        mlflow_artifact_path: str = "model",
     ) -> VersionID:
         """Register a new model version.
 
@@ -308,6 +441,21 @@ class ModelRegistry:
                 ],
             }
             self._write_index(index)
+
+        # H7: log to MLflow Model Registry if bridge is active
+        if self._mlflow_bridge is not None and mlflow_run_id:
+            mlflow_ver = self._mlflow_bridge.log_version(
+                version_int=version,
+                run_id=mlflow_run_id,
+                artifact_path=mlflow_artifact_path,
+                metrics=dict(metrics or {}),
+                tags=dict(tags or {}),
+            )
+            if mlflow_ver:
+                with self._lock:
+                    idx = self._read_index()
+                    idx["versions"][str(version)]["mlflow_version"] = mlflow_ver
+                    self._write_index(idx)
 
         logger.info(
             "Registered model version %d (%s) from %s",
@@ -537,6 +685,17 @@ class ModelRegistry:
             "Model v%d promoted: %s → %s  (actor=%s reason=%r)",
             version_int, current_stage, to_stage, actor, reason,
         )
+
+        # H7: sync to MLflow if bridge is active
+        if self._mlflow_bridge is not None:
+            index = self._read_index()
+            mlflow_ver = (
+                index.get("versions", {})
+                .get(str(version_int), {})
+                .get("mlflow_version")
+            )
+            if mlflow_ver:
+                self._mlflow_bridge.sync_stage(version_int, to_stage, mlflow_ver)
 
     def get_stage(self, version: int | str) -> str:
         """Return the current promotion stage of ``version``.

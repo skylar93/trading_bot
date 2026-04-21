@@ -1,6 +1,11 @@
 """
 DataQualityGate — validates OHLCV DataFrames before they enter the environment (Week 62, S33).
 
+Week 79 (H6): pandera-backed OHLCV expectation suite replaces the ad-hoc checks.
+The external API is unchanged; ``gate.py`` now delegates column-level validation
+to :mod:`data.quality.pandera_schema` and preserves the legacy ``DataIssue``
+surface for callers that inspect individual issues.
+
 Usage::
 
     from data.quality.gate import validate, DataQualityGate
@@ -16,6 +21,7 @@ Issue types
 - zero_volume     : $volume == 0 for a bar
 - time_gap        : gap between consecutive bars exceeds ``max_gap_bars`` (requires
                     a DatetimeIndex or a column named ``timestamp`` / ``time`` / ``date``)
+- schema          : pandera expectation failure (H6)
 """
 
 from __future__ import annotations
@@ -26,6 +32,18 @@ from typing import List, Optional
 
 import numpy as np
 import pandas as pd
+
+from data.quality.pandera_schema import validate_ohlcv as _pandera_validate
+
+# Map pandera kind labels → legacy DataIssue kind names for backward compat
+_PANDERA_KIND_MAP: dict = {
+    "not_null":   "nan_inf",
+    "no_inf":     "nan_inf",
+    "positive":   "negative_price",
+    "monotonic_ts": "time_gap",
+    "no_gap":     "time_gap",
+    "pandera":    "schema",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -91,11 +109,39 @@ class DataQualityGate:
     # ------------------------------------------------------------------
 
     def validate(self, df: pd.DataFrame) -> List[DataIssue]:
-        """Return all issues found.  Never raises."""
+        """Return all issues found.  Never raises.
+
+        H6 (Week 79): pandera runs as a first-pass guard and reports failures
+        via ``data.quality.pandera_schema.validate_ohlcv()``.  The legacy
+        per-row checks always run so that callers continue to receive
+        ``DataIssue`` objects with the original ``kind`` values
+        (``nan_inf``, ``negative_price``, ``zero_volume``, ``time_gap``).
+        This preserves backward compatibility with all existing callers and
+        tests while still benefiting from the declarative pandera schema.
+
+        If pandera reports a violation that the legacy checks cannot attribute
+        to a specific row (e.g. schema-level failures), a supplementary
+        ``DataIssue(kind="schema", ...)`` entry is appended.
+        """
         issues: List[DataIssue] = []
+
+        # Always run legacy per-row checks for backward-compatible DataIssue kinds.
         issues.extend(self._check_nan_inf(df))
         issues.extend(self._check_negative_price(df))
         issues.extend(self._check_zero_volume(df))
+
+        # H6: pandera supplementary pass — catches schema-level violations
+        # (type coercion, unexpected nulls in non-numeric columns, etc.) that
+        # the legacy numeric checks may miss.  Only add if pandera found
+        # something the legacy checks did *not* already catch.
+        if not issues:
+            for msg in _pandera_validate(df):
+                kind = msg.split("]")[0].lstrip("[") if msg.startswith("[") else "schema"
+                # Remap pandera kind names to legacy names for callers that
+                # inspect ``issue.kind`` directly.
+                kind = _PANDERA_KIND_MAP.get(kind, kind)
+                issues.append(DataIssue(kind=kind, row=None, column=None, detail=msg))
+
         if self.max_gap_bars is not None:
             issues.extend(self._check_time_gap(df))
         return issues
