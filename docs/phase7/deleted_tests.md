@@ -67,7 +67,31 @@
 
 ---
 
+---
+
+## Week 80 추가 삭제 (H13 — web_interface 제거)
+
+**결정**: Option A 채택 (Grafana로 대체). `deployment/web_interface/` 전체 제거.
+
+### 10. `deployment/web_interface/` (전체 디렉토리)
+- **삭제 이유**: H13 결정 — 36개 파일, 핵심 realtime 경로 2건이 TODO stub (`realtime_trading_manager.py:106`, `utils/data_stream.py:116`). Grafana + MetricsExporter (H1-H3)가 operational monitoring을 대체.
+- **대체**: `deployment/monitoring/grafana_dashboard.json` (Week 78). 향후 간단한 Streamlit 스크립트가 필요하면 `scripts/` 에 단일 파일로 추가.
+- **커버리지 공백**: 없음 (realtime 경로는 stub이었고, backtest UI는 `scripts/run_full_pipeline.py` + MLflow UI로 대체 가능).
+
+### 11. `tests/test_week11.py`
+- **삭제 이유**: `deployment/web_interface.*` 전적으로 의존. 108개 테스트 전부 web_interface 페이지·컴포넌트 단위 테스트.
+- **대체**: Grafana dashboard validation은 smoke test 수준이면 충분.
+- **커버리지 공백**: web_interface 페이지 단위 테스트 없음 — 의도된 것.
+
+### 12. `tests/test_backtest_integration.py`
+- **삭제 이유**: `deployment.web_interface.utils.backtest.BacktestManager`만 import. BacktestManager는 web_interface 내부 helper이며 다른 경로에서 사용되지 않음.
+- **대체**: 실제 backtesting 커버리지는 `tests/test_base_backtester.py`, `tests/test_backtest_execution.py` 에서 유지.
+- **커버리지 공백**: BacktestManager 기반 agent-backtest integration 시나리오. 실사용 없는 path.
+
+---
+
 ## 파일 위치 (git history)
 
 삭제 전 마지막 커밋에서 참조 가능.  
-`git log --all -- tests/test_basic.py` 등으로 조회.
+`git log --all -- tests/test_basic.py` 등으로 조회.  
+`git log --all -- deployment/web_interface/app.py` 등으로 web_interface 조회.
