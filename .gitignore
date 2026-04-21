@@ -16,6 +16,17 @@ data/
 !data/__init__.py
 !data/sources/
 !data/sources/**
+# Week 62: data quality code
+!data/quality/
+!data/quality/**
+# Week 79 (H8): DVC-tracked directories (gitkeep markers only — actual data ignored)
+!data/raw/
+!data/raw/.gitkeep
+!data/processed/
+!data/processed/.gitkeep
+# tests/data/ is test code, not data — always track
+!tests/data/
+!tests/data/**
 
 # Docker
 docker/
