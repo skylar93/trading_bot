@@ -85,3 +85,4 @@ filelock>=3.16.1
 propcache>=0.2.1
 rpds-py>=0.22.3
 narwhals>=1.19.0
+pytest-repeat>=0.9.3

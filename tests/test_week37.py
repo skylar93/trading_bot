@@ -75,13 +75,13 @@ def _make_env(data, rm_config, **env_kwargs):
 
 class TestStopLoss:
     def test_stop_loss_triggers_on_declining_price(self, declining_data):
-        """Stop loss should force-close a long position as price falls."""
+        """Trailing stop should force-close a long position as price falls."""
         env = _make_env(
             declining_data,
             {
-                "use_stop_loss": True,
-                "stop_loss_threshold": 0.05,  # 5% loss
-                "use_trailing_stop": False,
+                "use_stop_loss": False,
+                "use_trailing_stop": True,
+                "trailing_stop_buffer": 0.05,  # 5% drop from peak
                 "max_drawdown_pct": 1.0,  # effectively disabled
                 "use_forced_liquidation": False,
             },
@@ -91,17 +91,17 @@ class TestStopLoss:
         # Open a long position
         env.step(np.array([1.0]))
 
-        hit_stop_loss = False
+        hit_stop = False
         for _ in range(100):
             _, _, done, _, info = env.step(np.array([0.0]))
-            if info.get("risk_limit_triggered") == "stop_loss":
-                hit_stop_loss = True
+            if info.get("risk_limit_triggered") == "trailing_stop":
+                hit_stop = True
                 break
             if done:
                 break
 
-        assert hit_stop_loss, "Stop loss must trigger on persistently declining price"
-        assert abs(env.current_position) < 1e-8, "Position must be 0 after stop loss"
+        assert hit_stop, "Trailing stop must trigger on persistently declining price"
+        assert abs(env.current_position) < 1e-8, "Position must be 0 after trailing stop"
 
     def test_stop_loss_does_not_trigger_without_risk_manager(self, declining_data):
         """Without a risk manager, no risk_limit_triggered key in info."""
@@ -123,13 +123,13 @@ class TestStopLoss:
                 break
 
     def test_stop_loss_clears_entry_price(self, declining_data):
-        """After stop loss, _entry_price must be None."""
+        """After trailing stop, _entry_price must be None."""
         env = _make_env(
             declining_data,
             {
-                "use_stop_loss": True,
-                "stop_loss_threshold": 0.05,
-                "use_trailing_stop": False,
+                "use_stop_loss": False,
+                "use_trailing_stop": True,
+                "trailing_stop_buffer": 0.05,
                 "max_drawdown_pct": 1.0,
                 "use_forced_liquidation": False,
             },
@@ -140,12 +140,12 @@ class TestStopLoss:
 
         for _ in range(100):
             _, _, done, _, info = env.step(np.array([0.0]))
-            if info.get("risk_limit_triggered") == "stop_loss":
+            if info.get("risk_limit_triggered") == "trailing_stop":
                 break
             if done:
                 break
 
-        assert env._entry_price is None, "_entry_price must be cleared after stop loss"
+        assert env._entry_price is None, "_entry_price must be cleared after trailing stop"
 
 
 class TestTrailingStop:

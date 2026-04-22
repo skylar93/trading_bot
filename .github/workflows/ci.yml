@@ -40,6 +40,9 @@ jobs:
         pip install -r requirements.txt
         pip install pytest pytest-cov pytest-asyncio
 
+    - name: Check deprecated API callers
+      run: python scripts/check_deprecation_callers.py
+
     - name: Run unit tests with coverage
       run: |
         pytest tests/ \

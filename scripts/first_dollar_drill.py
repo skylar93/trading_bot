@@ -61,30 +61,22 @@ def check_pytest_ini_ignores() -> dict[str, Any]:
 
 
 def check_no_old_risk_api() -> dict[str, Any]:
-    """E4: no caller in deployment/ uses the old check_max_drawdown API.
+    """E4: no source file calls deprecated risk API methods.
 
-    risk_management/ is excluded — it retains the deprecated shim intentionally.
+    Delegates to scripts/check_deprecation_callers.py which checks
+    check_stop_loss, check_max_drawdown, and calculate_var across all
+    non-test, non-shim source files.
     """
-    search_dir = PROJECT_ROOT / "deployment"
-    try:
-        result = subprocess.run(
-            ["rg", "-l", "check_max_drawdown", str(search_dir), "--glob", "*.py"],
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-        )
-        hits = [l for l in result.stdout.strip().splitlines() if l]
-    except FileNotFoundError:
-        result = subprocess.run(
-            ["grep", "-rl", "check_max_drawdown", str(search_dir)],
-            capture_output=True, text=True,
-        )
-        hits = [l for l in result.stdout.strip().splitlines() if l]
-    return _check(
-        "deployment/ check_max_drawdown callers → 0",
-        len(hits) == 0,
-        f"{len(hits)} file(s): {hits[:3]}" if hits else "",
+    checker = PROJECT_ROOT / "scripts" / "check_deprecation_callers.py"
+    result = subprocess.run(
+        [sys.executable, str(checker)],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
     )
+    ok = result.returncode == 0
+    detail = result.stdout.strip() if not ok else ""
+    return _check("deprecated risk API callers → 0", ok, detail)
 
 
 def check_risk_config(config: dict[str, Any]) -> list[dict[str, Any]]:
