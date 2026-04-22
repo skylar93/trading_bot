@@ -324,13 +324,12 @@ class TestHandleMismatch:
         trader._trigger_shutdown.assert_not_called()
 
     def test_alerter_notified_on_mismatch(self):
+        # R7 (Week 82): _handle_mismatch now calls notify_reconciliation_drift
         trader = _make_trader(on_mismatch="warn")
         alerter = MagicMock()
         trader.alerter = alerter
         trader._handle_mismatch([{"type": "qty_mismatch"}])
-        alerter.send_alert.assert_called_once()
-        args = alerter.send_alert.call_args
-        assert args[1]["level"] == "ERROR" or args[0][1] == "ERROR"
+        alerter.notify_reconciliation_drift.assert_called_once()
 
 
 class TestReconcileOnBoot:

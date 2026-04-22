@@ -210,6 +210,83 @@ class FeeModel:
             logger.warning("FeeModel.refresh_from_exchange failed: %s", e)
             return False
 
+    def refresh_from_api(
+        self,
+        exchange: Any,
+        symbol: Optional[str] = None,
+        alerter: Any = None,
+    ) -> bool:
+        """
+        Daily fee-tier sync via exchange API (G3 — Week 82).
+
+        Attempts to fetch the trading fee schedule from the exchange using
+        CCXT's ``fetch_trading_fees()``.  For Binance, this maps to
+        ``GET /sapi/v1/asset/tradeFee`` which returns the effective rates
+        for the authenticated account's VIP tier.
+
+        On success:  update internal rates + record refresh timestamp.
+        On failure:  retain previous rates + call alerter.notify_fee_refresh_failed.
+
+        Parameters
+        ----------
+        exchange : CCXT exchange instance (must have REST credentials)
+        symbol   : trading pair to query (e.g. "BTC/USDT")
+        alerter  : optional TradingAlerter instance for failure notifications
+
+        Returns
+        -------
+        bool — True if refresh succeeded, False if it failed (fallback active).
+        """
+        try:
+            # Try Binance-specific sapi endpoint first (authoritative VIP tier)
+            raw_fees: dict = {}
+            if hasattr(exchange, "sapi_get_asset_tradefee"):
+                resp = exchange.sapi_get_asset_tradefee()
+                # Response: {"tradeFee": [{"symbol": "BTCUSDT", "makerCommission": "0.001", ...}]}
+                fee_list = resp.get("tradeFee", []) if isinstance(resp, dict) else []
+                target = symbol.replace("/", "") if symbol else None
+                for entry in fee_list:
+                    sym = entry.get("symbol", "")
+                    if target is None or sym == target:
+                        raw_fees = {
+                            "maker": float(entry.get("makerCommission", 0)),
+                            "taker": float(entry.get("takerCommission", 0)),
+                        }
+                        break
+
+            # Fallback: generic CCXT fetch_trading_fees
+            if not raw_fees:
+                fees = exchange.fetch_trading_fees()
+                sym_key = symbol or ""
+                if sym_key in fees:
+                    raw_fees = fees[sym_key]
+                elif fees:
+                    raw_fees = next(iter(fees.values()))
+
+            maker_rate = raw_fees.get("maker")
+            taker_rate = raw_fees.get("taker")
+            if maker_rate is None and taker_rate is None:
+                raise ValueError("No fee data returned by exchange API")
+
+            with self._lock:
+                if maker_rate is not None and not self._maker_override:
+                    self._maker_bps = float(maker_rate) * 10_000.0
+                if taker_rate is not None and not self._taker_override:
+                    self._taker_bps = float(taker_rate) * 10_000.0
+                self._last_refresh_at = time.monotonic()
+
+            logger.info(
+                "FeeModel.refresh_from_api: maker=%.2fbps taker=%.2fbps",
+                self._maker_bps, self._taker_bps,
+            )
+            return True
+
+        except Exception as exc:
+            logger.warning("FeeModel.refresh_from_api failed: %s", exc)
+            if alerter is not None:
+                alerter.notify_fee_refresh_failed(reason=str(exc))
+            return False
+
     def needs_refresh(self) -> bool:
         """Return True if the refresh interval has elapsed since last fetch."""
         return (time.monotonic() - self._last_refresh_at) >= self._refresh_interval

@@ -222,6 +222,27 @@ class TradingAlerter:
             msg += f" Details: {details}"
         self._dispatch(level="CRITICAL", event="audit_chain_break", message=msg)
 
+    def notify_reconciliation_drift(self, drift_detail: Any) -> None:
+        """Alert that a position/order mismatch was detected during reconciliation."""
+        if isinstance(drift_detail, list):
+            detail_str = "; ".join(
+                f"{d.get('type', '?')}={d}" for d in drift_detail
+            )
+        else:
+            detail_str = str(drift_detail)
+        self._dispatch(
+            level="ERROR",
+            event="reconciliation_drift",
+            message=f"Reconciliation mismatch detected: {detail_str}",
+        )
+
+    def notify_fee_refresh_failed(self, reason: str = "") -> None:
+        """Alert that a scheduled fee-tier API refresh failed (fallback in effect)."""
+        msg = "Fee tier refresh failed — retaining previous rates."
+        if reason:
+            msg += f" Reason: {reason}"
+        self._dispatch(level="WARNING", event="fee_refresh_failed", message=msg)
+
     def send_alert(self, message: str, level: str = "WARNING") -> None:
         """Manually dispatch an alert message."""
         self._dispatch(level=level, event="manual_alert", message=message)

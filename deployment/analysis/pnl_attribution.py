@@ -34,6 +34,17 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# Lazy import to avoid circular dependency; only used when slippage_model is passed.
+_SlippageModel = None
+
+
+def _get_slippage_model_cls():
+    global _SlippageModel
+    if _SlippageModel is None:
+        from deployment.execution.slippage_model import SlippageModel
+        _SlippageModel = SlippageModel
+    return _SlippageModel
+
 
 @dataclass
 class TradeAttribution:
@@ -82,10 +93,15 @@ class PnLAttributor:
     fee_bps : float
         Expected fee in basis-points.  Used only when fee is not directly
         available on the trade object.  Default = 10 bps (0.1 %).
+    slippage_model : SlippageModel, optional
+        When provided, expected slippage is predicted per-trade from the model
+        (vol, size, spread_bps features).  Residual between observed and
+        predicted slippage is folded into market_move.
     """
 
-    def __init__(self, fee_bps: float = 10.0) -> None:
+    def __init__(self, fee_bps: float = 10.0, slippage_model=None) -> None:
         self._fee_bps = fee_bps
+        self._slippage_model = slippage_model
 
     # ------------------------------------------------------------------
     # Public API
@@ -96,6 +112,7 @@ class PnLAttributor:
         trades: Sequence,
         slippage_records: Optional[Sequence[float]] = None,
         entry_price: Optional[float] = None,
+        slippage_features: Optional[Sequence[Dict[str, float]]] = None,
     ) -> List[TradeAttribution]:
         """
         Compute per-trade attribution for a list of Trade objects.
@@ -112,6 +129,12 @@ class PnLAttributor:
             Override for the entry price (used when the Trade object doesn't
             contain it directly — legacy path).  Usually None; the attributor
             infers entry price from ``trade.pnl``.
+        slippage_features :
+            Optional list of feature dicts (vol, size, spread_bps) for each
+            closing trade.  When provided and a slippage_model is attached,
+            expected_slippage is predicted from the model; the residual
+            (observed − expected) is folded into market_move so that
+            slippage_cost reflects only the *model-predicted* component.
 
         Returns
         -------
@@ -119,6 +142,7 @@ class PnLAttributor:
             One entry per *closing* (sell) trade with non-zero quantity.
         """
         slip_iter = iter(slippage_records or [])
+        feat_iter = iter(slippage_features or [])
         results: List[TradeAttribution] = []
         _last_buy_price: Optional[float] = None
 
@@ -148,11 +172,24 @@ class PnLAttributor:
             else:
                 inferred_entry = exit_p  # no info → no market_move
 
-            # Slippage cost: fraction × qty × exit_price
+            # Observed slippage fraction from records
             slip_frac = next(slip_iter, 0.0)
-            slippage_cost = slip_frac * qty * exit_p
+            observed_slip_cost = slip_frac * qty * exit_p
 
-            market_move = (exit_p - inferred_entry) * qty
+            # Model-predicted slippage (R8): if model + features available,
+            # use predicted bps as slippage_cost; residual goes to market_move.
+            feat = next(feat_iter, None)
+            if self._slippage_model is not None and feat is not None:
+                predicted_bps = self._slippage_model.predict(feat)
+                expected_slip_cost = (predicted_bps / 10_000.0) * qty * exit_p
+                # residual = observed − expected folds back into gross P&L
+                residual = observed_slip_cost - expected_slip_cost
+                slippage_cost = expected_slip_cost
+            else:
+                slippage_cost = observed_slip_cost
+                residual = 0.0
+
+            market_move = (exit_p - inferred_entry) * qty + residual
             net_pnl = market_move - slippage_cost - fee
 
             results.append(TradeAttribution(
