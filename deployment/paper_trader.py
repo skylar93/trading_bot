@@ -971,14 +971,16 @@ class PaperTrader:
 
     def _handle_mismatch(self, diffs: List[Dict[str, Any]], context: str = "") -> None:
         """Act on detected mismatches according to on_mismatch config."""
-        msg = f"Position mismatch [{context}]: {diffs}"
+        if self._on_mismatch == "ignore":
+            # "ignore": audit log already happened in _do_reconcile; no alerter noise
+            return
         if self.alerter is not None:
-            self.alerter.send_alert(msg, level="ERROR")
+            self.alerter.notify_reconciliation_drift(diffs)
         if self._on_mismatch == "halt":
+            msg = f"Position mismatch [{context}]: {diffs}"
             self._trigger_shutdown(f"reconcile_halt: {msg}")
         elif self._on_mismatch == "warn":
-            logger.warning("on_mismatch=warn: %s", msg)
-        # "ignore": log already happened in _do_reconcile
+            logger.warning("on_mismatch=warn [%s]: %s", context, diffs)
 
     def _handle_kill_signal(self, signum: int, frame: object) -> None:
         """G13: SIGUSR1 handler — cancel all orders, liquidate, halt within 5 s."""

@@ -1,0 +1,17 @@
+# Alert thresholds — Week 82 (R7)
+# Separate from monitoring.yaml so alert rules can be tuned independently.
+
+reconciliation_drift:
+  qty_threshold_pct: 1.0       # 1% qty mismatch triggers drift alert
+  notional_threshold_usd: 50.0  # $50 notional mismatch floor
+
+canary_auto_demote:
+  sigma_below_prod: 1.0        # canary return must not fall below prod by > 1σ
+  consecutive_hours: 6         # N consecutive hours of underperformance → auto-demote
+
+fee_refresh:
+  interval_hours: 24           # daily sync interval
+  failure_alert: true          # alert on refresh failure (fallback: retain previous rates)
+
+schema_drift:
+  on_drift: halt               # halt | warn
