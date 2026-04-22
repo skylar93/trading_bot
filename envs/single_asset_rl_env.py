@@ -781,32 +781,23 @@ class SingleAssetRLTradingEnv(gym.Env):
         """Week 37: check risk manager limits and force-close position when triggered.
 
         Checks (in priority order):
-        1. Stop loss (uses entry_price vs current_price)
-        2. Trailing stop (uses peak price tracked by risk manager)
-        3. Max drawdown (uses peak_portfolio_value vs current portfolio_value)
+        1. Trailing stop (uses peak price tracked by risk manager)
+        2. Max drawdown (uses peak_portfolio_value vs current portfolio_value)
 
         Returns:
-            (triggered, reason) — reason is 'stop_loss' | 'trailing_stop' | 'max_drawdown' | ''
+            (triggered, reason) — reason is 'trailing_stop' | 'max_drawdown' | ''
         """
         if self._risk_manager is None or abs(self.current_position) < 1e-8:
             return False, ""
 
-        # 1. Stop loss
-        if self._entry_price is not None:
-            if self._risk_manager.check_stop_loss(
-                "env", self.current_position, self._entry_price, current_price
-            ):
-                self._force_close_position(current_price, "stop_loss")
-                return True, "stop_loss"
-
-        # 2. Trailing stop
+        # 1. Trailing stop
         if self._risk_manager.check_trailing_stop(
             "env", "asset", self.current_position, current_price
         ):
             self._force_close_position(current_price, "trailing_stop")
             return True, "trailing_stop"
 
-        # 3. Max drawdown
+        # 2. Max drawdown
         if self._risk_manager.check_drawdown(
             "env", self.peak_portfolio_value, self.portfolio_value
         ):

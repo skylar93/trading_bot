@@ -746,14 +746,6 @@ class MultiAssetTradingEnv(gym.Env):
         # Apply risk management adjustments if available
         original_position_change = position_change
         if self.risk_manager:
-            # Check stop loss if selling while in position
-            if position_change < 0 and self.positions[asset] > 0 and self.avg_entry_prices[asset] > 0:
-                if self.risk_manager.check_stop_loss("default", self.positions[asset], 
-                                                    self.avg_entry_prices[asset], price):
-                    # If stop loss triggered, sell entire position
-                    position_change = -self.positions[asset]
-                    self.logger.warning(f"Stop loss triggered for {asset}, selling entire position")
-            
             # Check trailing stop if in position
             if self.positions[asset] != 0:
                 if self.risk_manager.check_trailing_stop("default", asset, self.positions[asset], price):
