@@ -47,6 +47,7 @@ from deployment.execution.fat_finger_guard import FatFingerGuard
 from deployment.execution.circuit_breaker import VolatilityCircuitBreaker
 from deployment.execution.clock_sync import ClockSync
 from risk_management.limits import PreTradeComplianceChecker
+from deployment.monitoring.tracing import start_span, record_order_latency
 
 logger = logging.getLogger(__name__)
 
@@ -284,6 +285,35 @@ class OrderManager:
         Returns order_id string.
         Raises RuntimeError if trading is halted.
         """
+        _submit_start = time.monotonic()
+        with start_span(
+            "trading.order.submit",
+            attributes={"symbol": self.symbol, "side": side, "amount": amount, "order_type": order_type},
+        ) as _parent_span:
+            return self._submit_order_inner(
+                _parent_span, _submit_start,
+                side=side, amount=amount, order_type=order_type,
+                limit_price=limit_price, stop_price=stop_price,
+                current_price=current_price, price=price,
+                idempotency_key=idempotency_key, ttl_sec=ttl_sec,
+            )
+
+    def _submit_order_inner(
+        self,
+        _parent_span: Any,
+        _submit_start: float,
+        *,
+        side: str,
+        amount: float,
+        order_type: str,
+        limit_price: Optional[float],
+        stop_price: Optional[float],
+        current_price: Optional[float],
+        price: Optional[float],
+        idempotency_key: Optional[str],
+        ttl_sec: Optional[float],
+    ) -> str:
+        """Inner implementation of submit_order — called inside the OTel parent span."""
         self._reset_daily_pnl_if_needed()
 
         if self._halted:
@@ -313,79 +343,94 @@ class OrderManager:
 
         # S44: idempotency check — atomic get-or-reserve using setdefault.
         _pre_order_id = str(uuid.uuid4())[:8]
-        if idempotency_key is not None:
-            with self._lock:
-                registered_id = self._idempotency_map.setdefault(
-                    idempotency_key, _pre_order_id
-                )
-                if registered_id != _pre_order_id:
-                    logger.info(
-                        "submit_order: idempotency_key=%r already exists → returning %s",
-                        idempotency_key, registered_id,
+        with start_span("trading.order.idempotency_lookup") as _idem_span:
+            if idempotency_key is not None:
+                with self._lock:
+                    registered_id = self._idempotency_map.setdefault(
+                        idempotency_key, _pre_order_id
                     )
-                    return registered_id
+                    if registered_id != _pre_order_id:
+                        _idem_span.set_attribute("idempotency.hit", True)
+                        logger.info(
+                            "submit_order: idempotency_key=%r already exists → returning %s",
+                            idempotency_key, registered_id,
+                        )
+                        return registered_id
+                _idem_span.set_attribute("idempotency.hit", False)
 
-        # S41: correlation limit check
-        if self._current_correlation is not None:
-            corr_violated = self._check_correlation_limit(self._current_correlation)
-            if corr_violated:
-                return self._reject_order(
-                    side, amount, order_type, limit_price,
-                    reason="correlation_limit",
-                    idempotency_key=idempotency_key,
-                )
-
-        # S43: volatility circuit breaker
-        if self._circuit_breaker.is_tripped():
-            return self._reject_order(
-                side, amount, order_type, limit_price,
-                reason="volatility_circuit_breaker",
-                idempotency_key=idempotency_key,
-            )
-
-        # Pre-trade drawdown check
-        if self._risk_manager is not None:
-            tracker = self._position_tracker
-            if tracker is not None:
-                peak = tracker.peak_value
-                current = tracker.portfolio_value
-                if self._risk_manager.check_drawdown(peak, current):
+        with start_span("trading.order.risk_check") as _risk_span:
+            # S41: correlation limit check
+            if self._current_correlation is not None:
+                corr_violated = self._check_correlation_limit(self._current_correlation)
+                _risk_span.set_attribute("risk.correlation_check", not corr_violated)
+                if corr_violated:
                     return self._reject_order(
                         side, amount, order_type, limit_price,
-                        reason="max_drawdown",
+                        reason="correlation_limit",
                         idempotency_key=idempotency_key,
                     )
 
-        # S42: fat-finger guard
-        ok, reason = self._fat_finger.check(amount)
-        if not ok:
-            return self._reject_order(
-                side, amount, order_type, limit_price,
-                reason=f"fat_finger:{reason}",
-                idempotency_key=idempotency_key,
-            )
-
-        # G6-G9: pre-trade compliance (Week 76)
-        if self._compliance_checker is not None:
-            _ref_price = current_price or price or limit_price or 1.0
-            _order_notional = amount * _ref_price
-            _tracker = self._position_tracker
-            _sym_notional = _tracker.position * _ref_price
-            _port_notional = _tracker.portfolio_value
-            _comp_ok, _comp_reason = self._compliance_checker.check_all(
-                symbol=self.symbol,
-                side=side,
-                order_notional=_order_notional,
-                limit_price=limit_price,
-                current_symbol_notional=_sym_notional,
-                current_portfolio_notional=_port_notional,
-            )
-            if not _comp_ok:
+            # S43: volatility circuit breaker
+            _cb_tripped = self._circuit_breaker.is_tripped()
+            _risk_span.set_attribute("risk.circuit_breaker_tripped", _cb_tripped)
+            if _cb_tripped:
                 return self._reject_order(
                     side, amount, order_type, limit_price,
-                    reason=_comp_reason,
+                    reason="volatility_circuit_breaker",
                     idempotency_key=idempotency_key,
                 )
+
+            # Pre-trade drawdown check
+            if self._risk_manager is not None:
+                tracker = self._position_tracker
+                if tracker is not None:
+                    peak = tracker.peak_value
+                    current = tracker.portfolio_value
+                    _dd_hit = self._risk_manager.check_drawdown(peak, current)
+                    _risk_span.set_attribute("risk.drawdown_check_passed", not _dd_hit)
+                    if _dd_hit:
+                        return self._reject_order(
+                            side, amount, order_type, limit_price,
+                            reason="max_drawdown",
+                            idempotency_key=idempotency_key,
+                        )
+
+            # S42: fat-finger guard
+            ok, reason = self._fat_finger.check(amount)
+            _risk_span.set_attribute("risk.fat_finger_passed", ok)
+            if not ok:
+                return self._reject_order(
+                    side, amount, order_type, limit_price,
+                    reason=f"fat_finger:{reason}",
+                    idempotency_key=idempotency_key,
+                )
+
+        with start_span("trading.order.compliance_check") as _comp_span:
+            # G6-G9: pre-trade compliance (Week 76)
+            if self._compliance_checker is not None:
+                _ref_price = current_price or price or limit_price or 1.0
+                _order_notional = amount * _ref_price
+                _tracker = self._position_tracker
+                _sym_notional = _tracker.position * _ref_price
+                _port_notional = _tracker.portfolio_value
+                _comp_ok, _comp_reason = self._compliance_checker.check_all(
+                    symbol=self.symbol,
+                    side=side,
+                    order_notional=_order_notional,
+                    limit_price=limit_price,
+                    current_symbol_notional=_sym_notional,
+                    current_portfolio_notional=_port_notional,
+                )
+                _comp_span.set_attribute("compliance.passed", _comp_ok)
+                if not _comp_ok:
+                    _comp_span.set_attribute("compliance.reject_reason", _comp_reason)
+                    return self._reject_order(
+                        side, amount, order_type, limit_price,
+                        reason=_comp_reason,
+                        idempotency_key=idempotency_key,
+                    )
+            else:
+                _comp_span.set_attribute("compliance.passed", True)
 
         if amount > self.max_order_size:
             logger.warning(
@@ -420,6 +465,8 @@ class OrderManager:
         with self._lock:
             self._orders[order_id] = order
 
+        _parent_span.set_attribute("order.id", order_id)
+
         # Audit: order submitted
         if self._audit_logger is not None:
             self._audit_logger.log_order(order)
@@ -438,15 +485,18 @@ class OrderManager:
                     self.symbol, limit_price, side
                 )
 
-        try:
-            if self.paper_mode:
-                self._execute_paper_order(order, current_price)
-            else:
-                self._execute_live_order(order)
-        except Exception as e:
-            order.status = "failed"
-            order.updated_at = datetime.utcnow()
-            logger.error("Order %s failed: %s", order_id, e)
+        with start_span("trading.order.exchange_submit") as _exch_span:
+            _exch_span.set_attribute("order.paper_mode", self.paper_mode)
+            try:
+                if self.paper_mode:
+                    self._execute_paper_order(order, current_price)
+                else:
+                    self._execute_live_order(order)
+            except Exception as e:
+                order.status = "failed"
+                order.updated_at = datetime.utcnow()
+                logger.error("Order %s failed: %s", order_id, e)
+            _exch_span.set_attribute("order.status", order.status)
 
         # S52: record fill latency (submit → fill)
         if order.filled_at is not None and order.submitted_at is not None:
@@ -455,6 +505,7 @@ class OrderManager:
             )
             with self._lock:
                 self._latency_samples.append(latency_ms)
+            record_order_latency(_parent_span, latency_ms)
 
         # Audit: fill (or failure) recorded after execution
         if self._audit_logger is not None:
@@ -463,6 +514,9 @@ class OrderManager:
         # S42: record fill size for future fat-finger baselines
         if order.status in ("filled", "partial") and order.filled_amount > 0:
             self._fat_finger.record_fill(order.filled_amount)
+
+        _total_ms = (time.monotonic() - _submit_start) * 1000.0
+        _parent_span.set_attribute("order.total_latency_ms", _total_ms)
 
         return order_id
 

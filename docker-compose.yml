@@ -193,6 +193,31 @@ services:
       - observability
       - default
 
+  # ──────────────────────────────────────────────────────────
+  # Jaeger all-in-one (Week 83: R12) — OTLP HTTP trace collector
+  # Receives spans from trading-bot via OTEL_EXPORTER_OTLP_ENDPOINT
+  # UI at http://localhost:16686, OTLP HTTP at :4318
+  # ──────────────────────────────────────────────────────────
+  jaeger:
+    image: jaegertracing/all-in-one:1.56
+    container_name: trading_jaeger
+    restart: unless-stopped
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "4317:4317"     # OTLP gRPC
+      - "4318:4318"     # OTLP HTTP
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:14269/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    profiles:
+      - observability
+      - tracing
+
   # Data Fetcher (cron-style daily update)
   # ──────────────────────────────────────────────────────────
   data_fetcher:

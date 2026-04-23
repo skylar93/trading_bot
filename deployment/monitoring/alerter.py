@@ -243,6 +243,44 @@ class TradingAlerter:
             msg += f" Reason: {reason}"
         self._dispatch(level="WARNING", event="fee_refresh_failed", message=msg)
 
+    def notify_canary_auto_demoted(
+        self,
+        version: int,
+        sigma_below: float,
+        consecutive_hours: int,
+        canary_mean: float,
+        prod_mean: float,
+        prod_std: float,
+    ) -> None:
+        """Alert that canary was auto-demoted due to sustained underperformance.
+
+        Traffic has been set to 0 %; human must manually restore via
+        ``promote_model.py --restore-traffic`` after investigating.
+        """
+        msg = (
+            f"CANARY AUTO-DEMOTION: v{version} traffic set to 0%%. "
+            f"Canary return ({canary_mean:.4f}) fell below prod - {sigma_below:.1f}σ "
+            f"({prod_mean:.4f} - {sigma_below:.1f}×{prod_std:.4f} = "
+            f"{prod_mean - sigma_below * prod_std:.4f}) "
+            f"for {consecutive_hours}h. Stage remains 'canary'; "
+            f"human sign-off required to restore traffic."
+        )
+        self._dispatch(level="CRITICAL", event="canary_auto_demoted", message=msg)
+
+    def schema_drift_detected(self, drift_detail: str, on_drift: str = "halt") -> None:
+        """Alert that real-time feed schema drift was detected.
+
+        Parameters
+        ----------
+        drift_detail:
+            Description of the drift (unexpected keys, wrong dtype, etc.).
+        on_drift:
+            Policy from config — ``"halt"`` or ``"warn"``.
+        """
+        level = "CRITICAL" if on_drift == "halt" else "WARNING"
+        msg = f"Schema drift detected ({on_drift} policy): {drift_detail}"
+        self._dispatch(level=level, event="schema_drift", message=msg)
+
     def send_alert(self, message: str, level: str = "WARNING") -> None:
         """Manually dispatch an alert message."""
         self._dispatch(level=level, event="manual_alert", message=message)

@@ -323,6 +323,16 @@ class PaperTrader:
         self._canary_promotion_suggested: bool = False
         # Counters for deterministic routing (every 1/traffic_pct steps → canary)
         self._canary_step_counter: int = 0
+        # G4 (Week 83): canary auto-demotion config
+        _alert_cfg = config.get("alerts", {}) or {}
+        _demote_cfg = _alert_cfg.get("canary_auto_demote", {}) or {}
+        self._canary_demote_sigma: float = float(_demote_cfg.get("sigma_below_prod", 1.0))
+        self._canary_demote_hours: int = int(_demote_cfg.get("consecutive_hours", 6))
+        # steps_per_hour: assume 1 step ≈ 1 minute by default; override via config
+        _steps_per_hour: int = int(canary_cfg.get("steps_per_hour", 60))
+        self._canary_demote_window: int = self._canary_demote_hours * _steps_per_hour
+        self._canary_auto_demoted: bool = False  # latched; only demote once per session
+        self._canary_underperform_streak: int = 0  # consecutive window breaches
 
         # F7/F8/F9: exchange reconciliation
         self.exchange_snapshot: Optional[ExchangeSnapshot] = exchange_snapshot
@@ -1058,6 +1068,7 @@ class PaperTrader:
                 # Approximate prod return using main action direction
                 self._prod_returns.append(main_action_val * 0.001)  # proxy
                 self._check_canary_promotion_suggestion()
+                self._check_canary_auto_demote()
             else:
                 self._prod_returns.append(main_action_val * 0.001)
 
@@ -1112,6 +1123,75 @@ class PaperTrader:
                     "step": self.state.step,
                     "note": "human approval required — do NOT auto-promote",
                 })
+
+    def _check_canary_auto_demote(self) -> None:
+        """G4 (Week 83): Auto-demote canary if it underperforms prod by > sigma for N hours.
+
+        When triggered:
+        - Sets traffic_pct to 0 (blocks all canary execution)
+        - Stage remains 'canary' — human decides final outcome
+        - Fires alerter.notify_canary_auto_demoted()
+        - Latches: only fires once per session (re-enable requires manual restore)
+        """
+        if self._canary_auto_demoted:
+            return
+
+        window = self._canary_demote_window
+        n = min(len(self._canary_returns), len(self._prod_returns))
+        if n < window:
+            return
+
+        canary_arr = np.array(self._canary_returns[-window:])
+        prod_arr = np.array(self._prod_returns[-window:])
+        prod_std = float(np.std(prod_arr)) if len(prod_arr) > 1 else 0.0
+        prod_mean = float(np.mean(prod_arr))
+        canary_mean = float(np.mean(canary_arr))
+        threshold = prod_mean - self._canary_demote_sigma * prod_std
+
+        if canary_mean < threshold:
+            self._canary_underperform_streak += 1
+        else:
+            self._canary_underperform_streak = 0
+            return
+
+        # Require at least canary_demote_hours consecutive windows in breach
+        if self._canary_underperform_streak < self._canary_demote_hours:
+            return
+
+        # --- Demote: block traffic immediately ---
+        self._canary_auto_demoted = True
+        self._canary_traffic_pct = 0.0
+        self._canary_enabled = False
+
+        logger.warning(
+            "CANARY AUTO-DEMOTION triggered: canary(%.4f) < prod - %.1fσ (%.4f) "
+            "for %d consecutive hours. Traffic set to 0%%.",
+            canary_mean, self._canary_demote_sigma, threshold, self._canary_demote_hours,
+        )
+
+        if self.audit_logger is not None:
+            self.audit_logger.log_risk_event({
+                "type": "canary_auto_demoted",
+                "canary_mean_return": canary_mean,
+                "prod_mean_return": prod_mean,
+                "prod_std": prod_std,
+                "threshold": threshold,
+                "sigma_below_prod": self._canary_demote_sigma,
+                "consecutive_hours": self._canary_demote_hours,
+                "window_steps": window,
+                "step": self.state.step,
+                "note": "traffic_pct set to 0; stage remains canary; human sign-off required",
+            })
+
+        if self.alerter is not None:
+            self.alerter.notify_canary_auto_demoted(
+                version=0,  # caller should inject version if known
+                sigma_below=self._canary_demote_sigma,
+                consecutive_hours=self._canary_demote_hours,
+                canary_mean=canary_mean,
+                prod_mean=prod_mean,
+                prod_std=prod_std,
+            )
 
     # ------------------------------------------------------------------
     # G5: Hot-swap agent without restart

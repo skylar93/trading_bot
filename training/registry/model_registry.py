@@ -656,6 +656,12 @@ class ModelRegistry:
                 {
                     "stage": "candidate",
                     "history": [],
+                    # G4 (Week 83): auto-demotion criteria stored for audit trail.
+                    # PaperTrader sets traffic_pct=0; this field records the policy.
+                    "auto_demote_criteria": {
+                        "sigma_below_prod": 1.0,
+                        "consecutive_hours": 6,
+                    },
                 },
             )
             current_stage = stage_entry["stage"]
