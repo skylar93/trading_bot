@@ -155,6 +155,75 @@ def check_audit_chain() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Week 84 checks (R15-R18)
+# ---------------------------------------------------------------------------
+
+def check_key_scope_probe() -> dict[str, Any]:
+    """R15 (G7): verify_exchange_key_scope.py exists and dry-run passes."""
+    probe = PROJECT_ROOT / "scripts" / "verify_exchange_key_scope.py"
+    if not probe.exists():
+        return _check("API key scope probe script exists", False, str(probe))
+    result = subprocess.run(
+        [sys.executable, str(probe), "--dry-run"],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    ok = result.returncode == 0
+    detail = (result.stdout + result.stderr).strip()[-120:] if not ok else "dry-run passed"
+    return _check("API key scope probe (dry-run)", ok, detail)
+
+
+def check_precommit_hook() -> dict[str, Any]:
+    """R16 (G8): pre-commit secret scanner hook active and runs clean."""
+    config = PROJECT_ROOT / ".pre-commit-config.yaml"
+    baseline = PROJECT_ROOT / ".secrets.baseline"
+    if not config.exists():
+        return _check("pre-commit secret scanner active", False, ".pre-commit-config.yaml missing")
+    if not baseline.exists():
+        return _check("pre-commit secret scanner active", False, ".secrets.baseline missing")
+    # Resolve pre-commit binary (may be in venv or anaconda bin)
+    pre_commit_bin = Path(sys.executable).parent / "pre-commit"
+    if not pre_commit_bin.exists():
+        import shutil
+        found = shutil.which("pre-commit")
+        pre_commit_bin = Path(found) if found else pre_commit_bin
+
+    if not pre_commit_bin.exists():
+        return _check("pre-commit secret scanner (detect-secrets)", False,
+                      "pre-commit binary not found — run: pip install pre-commit")
+
+    # Check hook is installed (fast check — don't run all-files in drill)
+    result = subprocess.run(
+        [str(pre_commit_bin), "run", "detect-secrets", "--all-files"],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    ok = result.returncode == 0
+    detail = result.stdout.strip()[-120:] if not ok else "detect-secrets: no new secrets found"
+    return _check("pre-commit secret scanner (detect-secrets)", ok, detail)
+
+
+def check_drill_history(min_drills: int = 2) -> dict[str, Any]:
+    """R18 (G10): runbook drills/ directory has ≥ min_drills completed records."""
+    drills_dir = PROJECT_ROOT / "docs" / "runbook" / "drills"
+    if not drills_dir.exists():
+        return _check(f"runbook drills ≥ {min_drills}", False, "docs/runbook/drills/ missing")
+    drill_files = [
+        f for f in drills_dir.iterdir()
+        if f.suffix == ".md" and f.name != "README.md" and not f.name.startswith("_")
+    ]
+    count = len(drill_files)
+    names = ", ".join(f.name for f in sorted(drill_files)[:3])
+    return _check(
+        f"runbook drills ≥ {min_drills}",
+        count >= min_drills,
+        f"{count} drill(s) found: {names}",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Kill-switch timing test (local process, simulation_mode)
 # ---------------------------------------------------------------------------
 
@@ -356,6 +425,11 @@ def main() -> None:
 
     print("\n── Risk Config Checks ─────────────────────────────────────")
     results.extend(check_risk_config(config))
+
+    print("\n── Week 84 Security & Capacity Checks ────────────────────")
+    results.append(check_key_scope_probe())
+    results.append(check_precommit_hook())
+    results.append(check_drill_history())
 
     if not args.skip_kill_switch_test:
         print("\n── Kill Switch Timing Test ────────────────────────────────")
