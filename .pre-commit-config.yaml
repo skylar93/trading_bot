@@ -1,0 +1,44 @@
+# Pre-commit hooks — Week 84 (R16)
+# Install: pre-commit install
+# Run:     pre-commit run --all-files
+
+repos:
+  # ── Secret scanning ────────────────────────────────────────────────────────
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        name: detect-secrets
+        args: ["--baseline", ".secrets.baseline"]
+        exclude: >
+          (?x)^(
+            \.secrets\.baseline|
+            .*\.lock|
+            tests/.*|
+            .*test.*\.py|
+            docs/.*|
+            .*\.ipynb
+          )$
+
+  # ── Basic file hygiene ─────────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: ".*\\.md$"
+      - id: end-of-file-fixer
+        exclude: ".*\\.md$"
+      - id: check-yaml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=1000"]
+
+  # ── Deprecated API caller check ────────────────────────────────────────────
+  - repo: local
+    hooks:
+      - id: check-deprecation-callers
+        name: check-deprecation-callers
+        entry: python3 scripts/check_deprecation_callers.py
+        language: system
+        pass_filenames: false
+        always_run: true
