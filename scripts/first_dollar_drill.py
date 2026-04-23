@@ -12,9 +12,12 @@ Usage:
     # Write JSON report
     python scripts/first_dollar_drill.py --capital 100 --report drill_report.json
 
+    # Real $100 live drill (requires EXCHANGE_BINANCE_KEY / EXCHANGE_BINANCE_SECRET)
+    python scripts/first_dollar_drill.py --live --capital 100
+
 Exit codes:
     0 — all checks passed (+ drill succeeded if --capital provided)
-    1 — one or more pre-flight checks failed
+    1 — one or more pre-flight checks failed / missing credentials
     2 — drill itself failed (guards fired unexpectedly or NaN detected)
 """
 from __future__ import annotations
@@ -370,6 +373,271 @@ def run_dollar_drill(capital: float, n_steps: int = 200) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# $100 Live Drill (I1-c)
+# ---------------------------------------------------------------------------
+
+def run_live_drill(
+    capital: float,
+    symbol: str = "BTC/USDT",
+    *,
+    _exchange=None,       # injectable for tests (real ccxt exchange object)
+    _order_manager=None,  # injectable for tests (OrderManager instance)
+) -> dict[str, Any]:
+    """I1-c: Real exchange $100 drill. Requires EXCHANGE_BINANCE_KEY/SECRET env vars.
+
+    Safety guards (hard-coded, non-configurable):
+      - capital > 100 → refuse
+      - symbol != BTC/USDT → interactive confirm prompt
+      - 10-minute total timeout → cancel all + abort
+    """
+    import threading
+
+    if capital > 100:
+        return _check("live drill capital guard", False,
+                      f"capital ${capital:.0f} exceeds $100 drill limit — refusing")
+
+    if symbol != "BTC/USDT":
+        resp = input(
+            f"Symbol is {symbol!r} (not BTC/USDT). Proceed? [y/N] "
+        ).strip().lower()
+        if resp != "y":
+            return _check("live drill symbol confirm", False, "aborted by user")
+
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+
+    # ── 1. Load credentials ──────────────────────────────────────────────────
+    if _exchange is None:
+        try:
+            from deployment.secrets.secret_provider import get_default_provider
+            provider = get_default_provider()
+            try:
+                api_key = provider.get("EXCHANGE_BINANCE_KEY")
+                api_secret = provider.get("EXCHANGE_BINANCE_SECRET")
+            except KeyError as missing:
+                print(f"❌ missing credentials: set {missing}")
+                sys.exit(1)
+        except ImportError as exc:
+            return _check("live drill credentials", False,
+                          f"SecretProvider import failed: {exc}")
+    else:
+        # Test injection path: _exchange is provided, credentials not needed
+        api_key = ""
+        api_secret = ""
+
+    # ── 2. Verify key scope (no Withdraw permission) ─────────────────────────
+    if _exchange is None:
+        try:
+            from scripts.verify_exchange_key_scope import run_probes
+            probes, scope_ok = run_probes(
+                exchange_id="binance",
+                api_key=api_key,
+                api_secret=api_secret,
+                sandbox=False,
+                symbol=symbol,
+            )
+        except Exception as exc:
+            return _check("live drill key scope", False, str(exc))
+        if not scope_ok:
+            withdraw_probe = next(
+                (p for p in probes if "Withdraw" in p["name"]), None
+            )
+            if withdraw_probe and not withdraw_probe["pass"]:
+                print("❌ Withdraw permission detected — refusing live drill")
+                sys.exit(1)
+            return _check("live drill key scope", False,
+                          "one or more scope probes failed")
+
+    # ── 3. Fetch mid price ───────────────────────────────────────────────────
+    if _exchange is not None:
+        exchange = _exchange
+    else:
+        try:
+            import ccxt  # type: ignore
+            exchange = ccxt.binance({
+                "apiKey": api_key,
+                "secret": api_secret,
+                "enableRateLimit": True,
+            })
+        except ImportError:
+            return _check("live drill ccxt import", False,
+                          "ccxt not installed — run: pip install ccxt")
+
+    try:
+        ticker = exchange.fetch_ticker(symbol)
+        bid = ticker.get("bid") or ticker.get("last", 0)
+        ask = ticker.get("ask") or ticker.get("last", 0)
+        mid_price = (bid + ask) / 2
+        print(f"  Mid price {symbol}: {mid_price:.2f}")
+    except Exception as exc:
+        return _check("live drill mid price fetch", False, str(exc))
+
+    # Pre-drill balance
+    try:
+        balance = exchange.fetch_balance()
+        pre_usdt = float((balance.get("USDT") or {}).get("free", 0))
+        pre_btc = float((balance.get("BTC") or {}).get("free", 0))
+        print(f"  Pre-drill: {pre_usdt:.2f} USDT, {pre_btc:.8f} BTC")
+    except Exception as exc:
+        return _check("live drill balance fetch", False, str(exc))
+
+    # ── 4. Submit limit buy $50 @ mid × 0.98 ────────────────────────────────
+    notional = 50.0
+    limit_price = round(mid_price * 0.98, 2)
+    qty = round(notional / limit_price, 6)
+
+    if _order_manager is not None:
+        om = _order_manager
+    else:
+        try:
+            from deployment.execution.order_manager import OrderManager
+            from deployment.audit.audit_logger import AuditLogger
+        except ImportError as exc:
+            return _check("live drill order manager import", False, str(exc))
+
+        audit_dir = PROJECT_ROOT / "audit_log"
+        audit_dir.mkdir(exist_ok=True)
+        audit_logger = AuditLogger(str(audit_dir / "audit.jsonl"))
+
+        om = OrderManager(
+            exchange_config={
+                "exchange_id": "binance",
+                "api_key": api_key,
+                "api_secret": api_secret,
+                "sandbox": False,
+                "symbol": symbol,
+            },
+            paper_mode=False,
+            audit_logger=audit_logger,
+        )
+
+    # ── 10-minute timeout watchdog ───────────────────────────────────────────
+    timed_out = threading.Event()
+
+    def _watchdog() -> None:
+        timed_out.wait(timeout=600)
+
+    watchdog = threading.Thread(target=_watchdog, daemon=True)
+    watchdog.start()
+
+    t0 = time.monotonic()
+
+    try:
+        order_id = om.submit_order(
+            side="buy",
+            amount=qty,
+            order_type="limit",
+            limit_price=limit_price,
+        )
+    except Exception as exc:
+        timed_out.set()
+        return _check("live drill order submit", False, str(exc))
+
+    print(f"  Limit buy submitted: {qty} {symbol} @ {limit_price} (id={order_id})")
+
+    # ── 5. Poll for 3 minutes (every 30s) ───────────────────────────────────
+    fill_status = "open"
+    for _ in range(6):
+        if timed_out.is_set():
+            break
+        time.sleep(30)
+        try:
+            fill_status = om.check_order(order_id)
+        except Exception:
+            pass
+        print(f"  Order status: {fill_status}")
+        if fill_status in ("filled", "cancelled", "failed"):
+            break
+
+    elapsed = time.monotonic() - t0
+
+    if timed_out.is_set() or elapsed >= 600:
+        om.cancel_all_orders()
+        timed_out.set()
+        return _check("live drill timeout", False,
+                      f"10-minute timeout — all orders cancelled after {elapsed:.0f}s")
+
+    # ── 6. Handle fill status ────────────────────────────────────────────────
+    try:
+        order = om.get_order(order_id)
+    except Exception:
+        order = None
+
+    if fill_status in ("open", "pending"):
+        print("  Unfilled — cancelling")
+        om.cancel_order(order_id)
+        fill_status = "cancelled"
+    elif fill_status == "filled":
+        filled_qty = order.filled_amount if order else qty
+        print(f"  Filled @ {getattr(order, 'avg_fill_price', '?')} — market sell {filled_qty}")
+        om.submit_order(side="sell", amount=filled_qty, order_type="market")
+    elif fill_status in ("partial", "partially_filled"):
+        filled_qty = order.filled_amount if order else 0.0
+        print(f"  Partial fill ({filled_qty}) — cancel remainder + market sell")
+        om.cancel_order(order_id)
+        if filled_qty > 0:
+            om.submit_order(side="sell", amount=filled_qty, order_type="market")
+
+    # ── 7. Audit chain verification ──────────────────────────────────────────
+    audit_jsonl = PROJECT_ROOT / "audit_log" / "audit.jsonl"
+    audit_ok = True
+    if audit_jsonl.exists():
+        verify_result = subprocess.run(
+            [sys.executable,
+             str(PROJECT_ROOT / "scripts" / "verify_audit_log.py"),
+             str(audit_jsonl)],
+            capture_output=True, text=True,
+        )
+        audit_ok = verify_result.returncode == 0
+
+    # ── 8. Post-drill balance + report ───────────────────────────────────────
+    try:
+        post_bal = exchange.fetch_balance()
+        post_usdt = float((post_bal.get("USDT") or {}).get("free", 0))
+        post_btc = float((post_bal.get("BTC") or {}).get("free", 0))
+        usdt_diff = post_usdt - pre_usdt
+        btc_diff = post_btc - pre_btc
+    except Exception:
+        post_usdt = post_btc = usdt_diff = btc_diff = 0.0
+
+    if _order_manager is None:
+        try:
+            om.close()
+        except Exception:
+            pass
+
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    report_dir = PROJECT_ROOT / "docs" / "phase7.6"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    report_path = report_dir / f"live_drill_{ts}.md"
+    report_path.write_text(
+        f"# Live Drill Report — {ts}\n\n"
+        f"**Symbol**: {symbol}  \n"
+        f"**Capital**: ${capital:.0f}  \n"
+        f"**Notional**: ${notional:.0f}  \n"
+        f"**Limit price**: {limit_price} (mid {mid_price:.2f} × 0.98)  \n"
+        f"**Fill status**: {fill_status}  \n"
+        f"**Elapsed**: {elapsed:.1f}s  \n\n"
+        f"## Balance\n\n"
+        f"| | Pre | Post | Diff |\n"
+        f"|---|---|---|---|\n"
+        f"| USDT | {pre_usdt:.2f} | {post_usdt:.2f} | {usdt_diff:+.2f} |\n"
+        f"| BTC  | {pre_btc:.8f} | {post_btc:.8f} | {btc_diff:+.8f} |\n\n"
+        f"## Audit Chain\n\n"
+        f"{'✅ intact' if audit_ok else '❌ FAILED'}\n"
+    )
+    print(f"  Report → {report_path.relative_to(PROJECT_ROOT)}")
+
+    timed_out.set()  # release watchdog thread
+    ok = elapsed < 600 and audit_ok
+    return _check(
+        "live drill completed",
+        ok,
+        f"status={fill_status}, elapsed={elapsed:.1f}s, audit={'ok' if audit_ok else 'FAIL'}",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -385,6 +653,11 @@ def main() -> None:
                         help="Write JSON report to this path")
     parser.add_argument("--skip-kill-switch-test", action="store_true",
                         help="Skip the in-process kill switch timing test")
+    parser.add_argument(
+        "--live", action="store_true",
+        help="Run real exchange drill (requires EXCHANGE_BINANCE_KEY/SECRET). "
+             "Implies --capital 100 if --capital is not set.",
+    )
     args = parser.parse_args()
 
     print(f"\n{'='*60}")
@@ -435,7 +708,11 @@ def main() -> None:
         print("\n── Kill Switch Timing Test ────────────────────────────────")
         results.append(run_kill_switch_timing_test())
 
-    if not args.check_only:
+    if args.live:
+        capital = args.capital or 100.0
+        print(f"\n── ${capital:.0f} Live Drill (Real Exchange) ──────────────────────")
+        results.append(run_live_drill(capital))
+    elif not args.check_only:
         capital = args.capital or 100.0
         print(f"\n── ${capital:.0f} Simulation Drill ─────────────────────────────")
         results.append(run_dollar_drill(capital))

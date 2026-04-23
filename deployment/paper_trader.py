@@ -1505,15 +1505,44 @@ class PaperTrader:
 
 def _main() -> None:
     import argparse
+    import warnings
     import yaml
 
     parser = argparse.ArgumentParser(description="Paper Trader CLI")
     parser.add_argument("--config", required=True, help="Path to paper_trading.yaml")
-    parser.add_argument("--duration", type=float, default=None, help="Run duration (seconds)")
+    parser.add_argument(
+        "--duration", type=float, default=None,
+        help="Run duration in seconds [deprecated: use --duration-hours]",
+    )
+    parser.add_argument(
+        "--duration-hours", type=float, default=None,
+        help="Run duration in hours (converted to seconds internally)",
+    )
+    parser.add_argument(
+        "--exchange-mode", choices=["paper", "sandbox", "live"], default=None,
+        help="Override config execution.exchange_mode",
+    )
     args = parser.parse_args()
 
     with open(args.config) as f:
         config = yaml.safe_load(f)
+
+    # Resolve duration: --duration-hours takes precedence over --duration
+    duration_seconds: float | None = None
+    if args.duration_hours is not None:
+        duration_seconds = args.duration_hours * 3600.0
+    elif args.duration is not None:
+        warnings.warn(
+            "--duration (seconds) is deprecated; use --duration-hours instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        duration_seconds = args.duration
+
+    # Apply exchange-mode override into config
+    if args.exchange_mode is not None:
+        config.setdefault("execution", {})["exchange_mode"] = args.exchange_mode
+        config.setdefault("paper_trading", {})["exchange_mode"] = args.exchange_mode
 
     # Load agent from checkpoint
     agent_cfg = config.get("agent", {})
@@ -1532,7 +1561,7 @@ def _main() -> None:
         raise ValueError("agent.checkpoint must be set in config")
 
     trader = PaperTrader(agent, config, simulation_mode=False)
-    report = trader.run(duration_seconds=args.duration)
+    report = trader.run(duration_seconds=duration_seconds)
     import json
     print(json.dumps(report, indent=2))
 
