@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Label must match filename (without .plist) -->
+    <key>Label</key>
+    <string>com.tradingbot.drill</string>
+
+    <!-- Full path to Python interpreter + drill script.
+         Replace /Users/YOUR_USERNAME with your actual home directory. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/skylar/anaconda3/bin/python</string>
+        <string>/Users/skylar/Desktop/trading_bot/scripts/autonomous_72h_drill.py</string>
+        <string>--duration-hours</string>
+        <string>72</string>
+        <string>--log-dir</string>
+        <string>/Users/skylar/Desktop/trading_bot/logs</string>
+    </array>
+
+    <!-- Working directory -->
+    <key>WorkingDirectory</key>
+    <string>/Users/skylar/Desktop/trading_bot</string>
+
+    <!-- Stdout / stderr -->
+    <key>StandardOutPath</key>
+    <string>/Users/skylar/Desktop/trading_bot/logs/drill_stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/skylar/Desktop/trading_bot/logs/drill_stderr.log</string>
+
+    <!-- Auto-restart on crash: 5s delay, max 10 per hour -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <!-- Do not start automatically at login — must be loaded manually -->
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
