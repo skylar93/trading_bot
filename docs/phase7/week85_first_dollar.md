@@ -70,13 +70,14 @@ The real drill is intentionally small and self-cancelling:
 export EXCHANGE_BINANCE_KEY="..."
 export EXCHANGE_BINANCE_SECRET="..."
 
-# Run live drill (simulation=False, real exchange)
-# NOTE: current script is simulation-only.
-# For live drill, use PaperTrader with exchange_mode=live and paper_mode=False.
-# Alternatively, execute the order manually and record results below.
-
+# Connectivity check
 python scripts/sandbox_smoke.py --exchange binance --symbol BTC/USDT --duration 30
-# Verify connectivity, then proceed to manual drill
+
+# Live drill — real $100, BTC/USDT, full audit cycle
+python scripts/first_dollar_drill.py --live --capital 100
+
+# Audit chain verification (auto-run inside drill, but can re-verify manually)
+python scripts/verify_audit_log.py audit_log/audit.jsonl
 ```
 
 ### Results (Fill After Live Drill)
