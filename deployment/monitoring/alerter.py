@@ -2,10 +2,12 @@
 Trading Alerter: condition-based notification dispatcher.
 
 Supported channels:
-    - console  : logger.warning (always available, used as fallback)
-    - telegram : sends message via Telegram Bot API
-    - webhook  : HTTP POST to a generic endpoint
-    - discord  : HTTP POST to a Discord webhook URL
+    - console        : logger.warning (always available, used as fallback)
+    - file           : append JSON line to logs/alerts.jsonl (on by default)
+    - desktop_notify : macOS notification center via osascript (on by default, critical only)
+    - telegram       : sends message via Telegram Bot API
+    - webhook        : HTTP POST to a generic endpoint
+    - discord        : HTTP POST to a Discord webhook URL
 
 Triggers:
     - drawdown exceeds threshold (default 10 %)
@@ -34,6 +36,9 @@ from __future__ import annotations
 
 import logging
 import os
+import pathlib
+import subprocess
+import sys
 import time
 import urllib.request
 import urllib.parse
@@ -86,7 +91,10 @@ class TradingAlerter:
     """
 
     def __init__(self, config: Dict[str, Any]) -> None:
-        self._channels: List[str] = config.get("alert_channels", ["console"])
+        # Default: console + file + desktop_notify (zero-config fallback)
+        self._channels: List[str] = list(
+            config.get("alert_channels", ["console", "file", "desktop_notify"])
+        )
         self.drawdown_threshold: float = float(config.get("drawdown_alert_threshold", 0.10))
         self.daily_loss_limit: float = float(config.get("daily_loss_alert", -500.0))
         self.connection_timeout: float = float(config.get("connection_timeout_seconds", 60.0))
@@ -109,6 +117,20 @@ class TradingAlerter:
             or os.environ.get("DISCORD_WEBHOOK_URL")
             or None
         )
+
+        # File channel
+        self._log_dir: pathlib.Path = pathlib.Path(config.get("log_dir", "logs"))
+        self._alerts_file_max_bytes: int = 10 * 1024 * 1024  # 10 MB rotation threshold
+
+        # Env-var auto-detection: add channels not already present
+        if os.environ.get("DISCORD_WEBHOOK_URL") and "discord" not in self._channels:
+            self._channels.append("discord")
+        if (
+            os.environ.get("TELEGRAM_BOT_TOKEN")
+            and os.environ.get("TELEGRAM_CHAT_ID")
+            and "telegram" not in self._channels
+        ):
+            self._channels.append("telegram")
 
         # Connection tracking
         self._last_connection_time: float = time.monotonic()
@@ -300,6 +322,10 @@ class TradingAlerter:
         for channel in self._channels:
             if channel == "console":
                 self._send_console(level, full_message)
+            elif channel == "file":
+                self._send_file(level, event, message, timestamp)
+            elif channel == "desktop_notify":
+                self._send_desktop_notify(level, full_message)
             elif channel == "telegram":
                 self._send_telegram(full_message)
             elif channel == "webhook":
@@ -407,3 +433,40 @@ class TradingAlerter:
                     logger.warning("Discord webhook returned status %s", resp.status)
         except Exception as e:
             logger.error("Discord alert failed: %s", e)
+
+    def _send_file(self, level: str, event: str, message: str, timestamp: str) -> None:
+        """Append alert as a JSON line to logs/alerts.jsonl; rotate at 10 MB."""
+        try:
+            self._log_dir.mkdir(parents=True, exist_ok=True)
+            alerts_path = self._log_dir / "alerts.jsonl"
+            if alerts_path.exists() and alerts_path.stat().st_size > self._alerts_file_max_bytes:
+                date_str = datetime.utcnow().strftime("%Y%m%d")
+                rotated = self._log_dir / f"alerts.jsonl.{date_str}"
+                alerts_path.rename(rotated)
+            record = {
+                "ts": timestamp,
+                "level": level,
+                "event": event,
+                "message": message,
+                "context_redacted": True,
+            }
+            with alerts_path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record) + "\n")
+        except Exception as e:
+            logger.error("File alert failed: %s", e)
+
+    def _send_desktop_notify(self, level: str, message: str) -> None:
+        """Send macOS notification center alert for CRITICAL/ERROR events (silent elsewhere)."""
+        if level not in ("CRITICAL", "ERROR"):
+            return
+        if sys.platform != "darwin":
+            return
+        try:
+            truncated = message[:200].replace('"', '\\"')
+            subprocess.run(
+                ["osascript", "-e", f'display notification "{truncated}" with title "Trading Bot"'],
+                timeout=5,
+                capture_output=True,
+            )
+        except Exception:
+            pass

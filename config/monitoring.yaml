@@ -26,7 +26,7 @@ monitoring:
   # ─ 알림 채널 ────────────────────────────────────────────────
   # "console" | "telegram" | "webhook" | "discord"
   # Discord는 discord_webhook_url 또는 DISCORD_WEBHOOK_URL env var 필요
-  alert_channels: ["console"]
+  alert_channels: ["console", "file", "desktop_notify"]
   drawdown_alert_threshold: 0.10
   daily_loss_alert: -500.0
   connection_timeout_seconds: 60.0
