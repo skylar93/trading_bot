@@ -51,6 +51,7 @@ class DeploymentDriftDetector:
         self.alerter = alerter
         self.halt_requested: bool = False
         self._n_detections: int = 0
+        self._shadow_end_notified: bool = False
 
         # Thresholds (informational; callers may read for custom logic)
         self.reward_return_sigma_threshold: float = float(
@@ -73,7 +74,21 @@ class DeploymentDriftDetector:
     @property
     def in_shadow_mode(self) -> bool:
         """True while within the initial shadow observation window."""
-        return time.time() < self._shadow_mode_until
+        in_shadow = time.time() < self._shadow_mode_until
+        if not in_shadow and not self._shadow_end_notified:
+            self._shadow_end_notified = True
+            self._on_shadow_end()
+        return in_shadow
+
+    def _on_shadow_end(self) -> None:
+        """Called exactly once when shadow mode transitions to active."""
+        logger.warning("Shadow mode ended — drift halt now active")
+        if self.alerter is not None:
+            self.alerter.send_alert(
+                "Shadow mode ended — drift halt now active. "
+                "Review drift_calibration_*.md before continuing.",
+                level="CRITICAL",
+            )
 
     @property
     def n_detections(self) -> int:
@@ -128,7 +143,15 @@ class DeploymentDriftDetector:
         if effective_on_drift == "halt":
             self.halt_requested = True
 
-    def reset_halt(self) -> None:
-        """Clear halt flag after supervised auto-resume."""
+    def reset_halt(self, *, source: str = "operator") -> None:
+        """Clear halt flag.
+
+        source='auto_drill' — automated 30s resume from drill (silent).
+        source='operator'  — manual operator action; sends WARNING alert.
+        """
         self.halt_requested = False
-        logger.info("DeploymentDriftDetector: halt cleared (reset_halt)")
+        logger.info("DeploymentDriftDetector: halt cleared (source=%s)", source)
+        if self.alerter is not None and source == "operator":
+            self.alerter.send_alert(
+                "Drift halt manually cleared by operator", level="WARNING"
+            )

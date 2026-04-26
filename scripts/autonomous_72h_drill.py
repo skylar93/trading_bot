@@ -246,6 +246,13 @@ class AutonomousDrill:
         self._feed_stale_triggered: bool = False
         self._reconcile_drift_pct: float = 0.0
 
+        # I11: fault injection flags
+        self._fake_exchange_503: bool = False   # exchange_outage: submit raises 503
+        self._fake_spread_multiplier: float = 1.0  # spread_blowout: fill price offset
+
+        # I9-b: active feed type for snapshot reporting
+        self._active_feed: str = "unknown"
+
     # ------------------------------------------------------------------
     # Public orchestration
     # ------------------------------------------------------------------
@@ -334,17 +341,24 @@ class AutonomousDrill:
         self._price_queue.put(None)  # sentinel
 
     def _select_feed(self) -> Generator[float, None, None]:
-        if self._force_feed == "csv" or self._force_feed == "gbm":
+        if self._force_feed == "csv":
+            self._active_feed = "csv"
+            return self._fallback_feed()
+        if self._force_feed == "gbm":
+            self._active_feed = "gbm"
             return self._fallback_feed()
         if self._force_feed == "ws":
+            self._active_feed = "ws"
             return self._ws_to_generator()
 
         # Auto: try WS, fall back after failures
         try:
             import websocket  # type: ignore  # noqa: F401
+            self._active_feed = "ws"
             return self._ws_to_generator()
         except ImportError:
             logger.info("websocket-client not available — using fallback feed")
+            self._active_feed = "csv"
             return self._fallback_feed()
 
     def _ws_to_generator(self) -> Generator[float, None, None]:
@@ -368,6 +382,7 @@ class AutonomousDrill:
                 pass
         else:
             logger.warning("Binance WS failed — switching to fallback")
+            self._on_feed_fallback("ws_initial_fail")
             yield from self._fallback_feed()
             return
 
@@ -380,6 +395,7 @@ class AutonomousDrill:
             ):
                 logger.warning("WS fallback triggered: fails=%d stale=%.0fs",
                                self._ws_fail_counter[0], elapsed_since_tick)
+                self._on_feed_fallback("ws_mid_run_fail")
                 yield from self._fallback_feed()
                 return
             try:
@@ -390,16 +406,34 @@ class AutonomousDrill:
             except queue.Empty:
                 pass
 
+    def _on_feed_fallback(self, reason: str) -> None:
+        """Record WS→fallback transition: update active_feed and log incident."""
+        csv_path = _CSV_DEFAULT
+        new_feed = "csv" if csv_path.exists() else "gbm"
+        self._active_feed = new_feed
+        incident = {
+            "ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "type": "feed_fallback",
+            "detail": {"reason": reason, "new_feed": new_feed},
+        }
+        self._stats.incidents.append(incident)
+        self._alerter.send_alert(
+            f"Feed fallback: {reason} → switched to {new_feed}", level="WARNING"
+        )
+
     def _fallback_feed(self) -> Generator[float, None, None]:
         if self._force_feed == "gbm":
+            self._active_feed = "gbm"
             logger.info("Using GBM feed")
             yield from _gbm_feed()
             return
         csv_path = _CSV_DEFAULT
         if csv_path.exists():
+            self._active_feed = "csv"
             logger.info("Using CSV replay feed: %s", csv_path)
             yield from _csv_replay_feed(csv_path, tick_interval=self._tick_interval)
         else:
+            self._active_feed = "gbm"
             logger.info("CSV not found — using GBM synthetic feed")
             yield from _gbm_feed()
 
@@ -438,18 +472,34 @@ class AutonomousDrill:
                 duration = time.time() - halt_start
                 self._stats.max_halt_duration_s = max(self._stats.max_halt_duration_s, duration)
                 self._halt_event.clear()
-                self._drift_detector.reset_halt()
+                self._drift_detector.reset_halt(source="auto_drill")
                 self._stats.resume_count += 1
                 logger.info("Trader auto-resumed after %.1fs", duration)
 
     def _execute_action(self, action: int, price: float) -> None:
         trade_size = 0.001  # 0.001 BTC per trade
-        if action == 1 and self._portfolio_value > price * trade_size:
+
+        # I11: exchange_outage — simulated 503; skip this tick's order submission
+        if self._fake_exchange_503:
+            logger.warning("Exchange 503 simulated — order skipped this tick")
+            return
+
+        # I11: spread_blowout — widen effective fill price
+        effective_price = price
+        if self._fake_spread_multiplier != 1.0:
+            base_spread = price * 0.0005  # 0.05% default half-spread
+            slippage = base_spread * self._fake_spread_multiplier
+            if action == 1:
+                effective_price = price + slippage
+            elif action == -1:
+                effective_price = price - slippage
+
+        if action == 1 and self._portfolio_value > effective_price * trade_size:
             self._position += trade_size
-            self._portfolio_value -= price * trade_size
+            self._portfolio_value -= effective_price * trade_size
         elif action == -1 and self._position >= trade_size:
             self._position -= trade_size
-            self._portfolio_value += price * trade_size
+            self._portfolio_value += effective_price * trade_size
         total_value = self._portfolio_value + self._position * price
         if total_value > self._peak_portfolio:
             self._peak_portfolio = total_value
@@ -550,6 +600,7 @@ class AutonomousDrill:
             "halt_count": self._stats.halt_count,
             "fault_count": self._stats.fault_count,
             "in_shadow_mode": self._drift_detector.in_shadow_mode,
+            "active_feed": self._active_feed,
         }
         self._stats.snapshots.append(snapshot)
         snap_path = self._log_dir / "drill_snapshots.jsonl"
@@ -600,8 +651,11 @@ class AutonomousDrill:
             "| Fault Type | Count |",
             "|------------|-------|",
         ]
-        for fault_type, count in (fault_summary.items() if fault_summary else [("none", 0)]):
-            lines.append(f"| {fault_type} | {count} |")
+        if fault_summary:
+            for fault_type, count in fault_summary.items():
+                lines.append(f"| {fault_type} | {count} |")
+        else:
+            lines.append("| _no faults injected during run_ | — |")
 
         if self._stats.snapshots:
             lines += [
@@ -634,7 +688,7 @@ class AutonomousDrill:
             "",
             "- [ ] Operator reviewed all incidents",
             "- [ ] Drift calibration run: `python scripts/analyze_drift_baseline.py`",
-            "- [ ] No kill-switch odfires during shadow mode",
+            "- [ ] No kill-switch fires during shadow mode",
         ]
         return "\n".join(lines)
 

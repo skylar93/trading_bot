@@ -69,6 +69,15 @@ class AlertRecord:
         return f"[{ts}] [{self.level}] {self.event}: {self.message}"
 
 
+@dataclass
+class _RLBucket:
+    """Rate-limit bucket for a (event, level) key."""
+    window_start: float
+    count: int = 0
+    suppressed: int = 0
+    cooldown_until: float = 0.0
+
+
 class TradingAlerter:
     """
     Dispatches alerts to one or more notification channels.
@@ -138,6 +147,15 @@ class TradingAlerter:
 
         # Audit log
         self.alert_history: List[AlertRecord] = []
+
+        # I9-a: per-(event, level) rate limiter
+        self._rate_limit_per_minute: int = int(
+            config.get("rate_limit_per_minute", 10)
+        )
+        self._rate_limit_cooldown_s: float = float(
+            config.get("rate_limit_cooldown_s", 300)
+        )
+        self._rl_state: Dict[tuple, "_RLBucket"] = {}
 
         logger.info(
             "TradingAlerter initialised | channels=%s drawdown_thresh=%.1f%% daily_loss=%.0f",
@@ -311,8 +329,60 @@ class TradingAlerter:
     # Dispatch core
     # ------------------------------------------------------------------
 
+    def _check_rate_limit(self, event: str, level: str) -> bool:
+        """Return True if this dispatch should be suppressed by the rate limiter."""
+        key = (event, level)
+        now = time.monotonic()
+        bucket = self._rl_state.get(key)
+
+        if bucket is None:
+            self._rl_state[key] = _RLBucket(window_start=now, count=1)
+            return False
+
+        # Reset window if > 60s have passed and not in cooldown
+        if now - bucket.window_start >= 60.0:
+            if bucket.suppressed > 0:
+                # Emit one summary notice then reset
+                summary = (
+                    f"[rate-limit] {event}/{level}: {bucket.suppressed} suppressed "
+                    f"in the last window"
+                )
+                self._send_console("WARNING", summary)
+            bucket.window_start = now
+            bucket.count = 1
+            bucket.suppressed = 0
+            bucket.cooldown_until = 0.0
+            return False
+
+        if now < bucket.cooldown_until:
+            bucket.suppressed += 1
+            return True
+
+        bucket.count += 1
+        if bucket.count > self._rate_limit_per_minute:
+            bucket.suppressed += 1
+            bucket.cooldown_until = now + self._rate_limit_cooldown_s
+            # Emit one "rate-limited" summary dispatch (not suppressed itself)
+            summary_msg = (
+                f"Alert rate-limit reached for {event}/{level} "
+                f"({bucket.count - 1} fired); suppressing for "
+                f"{self._rate_limit_cooldown_s:.0f}s"
+            )
+            self._send_console("WARNING", summary_msg)
+            if "file" in self._channels:
+                self._send_file(
+                    "WARNING", "rate_limited", summary_msg,
+                    datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
+                )
+            return True
+
+        return False
+
     def _dispatch(self, level: str, event: str, message: str) -> None:
         """Route an alert to all configured channels and record it."""
+        if self._check_rate_limit(event, level):
+            return
+
         timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
         full_message = f"[{timestamp}] [{level}] {event}: {message}"
 

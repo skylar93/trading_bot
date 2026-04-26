@@ -192,3 +192,80 @@ def test_schema_drift_sets_halt_outside_shadow(tmp_path: pathlib.Path) -> None:
     fi = FaultInjector(drill=drill, log_path=tmp_path / "faults.jsonl")
     fi.inject_now("schema_drift")
     assert drill._drift_detector.halt_requested
+
+
+# ---------------------------------------------------------------------------
+# I11: exchange_outage / spread_blowout
+# ---------------------------------------------------------------------------
+
+class _MockDrillI11(_MockDrill):
+    """Extended mock with I11 flags."""
+
+    def __init__(self, tmp_path):
+        super().__init__(tmp_path)
+        self._fake_exchange_503: bool = False
+        self._fake_spread_multiplier: float = 1.0
+
+
+def test_inject_exchange_outage_sets_and_clears_flag(tmp_path: pathlib.Path) -> None:
+    """exchange_outage: sets _fake_exchange_503=True for ~0s (fast in test)."""
+    import threading
+    from deployment.testing.fault_injector import FaultInjector
+
+    drill = _MockDrillI11(tmp_path)
+    fi = FaultInjector(drill=drill, log_path=tmp_path / "faults.jsonl",
+                       intervals={"exchange_outage": 999 * 3600})
+
+    # Override sleep so the test finishes quickly
+    captured: list[bool] = []
+    original_sleep = __import__("time").sleep
+
+    def fast_sleep(s):
+        captured.append(drill._fake_exchange_503)
+        # Don't actually sleep — just return
+        drill._fake_exchange_503 = False  # simulate end of outage
+
+    import time as _time_module
+    old_sleep = _time_module.sleep
+    _time_module.sleep = fast_sleep
+    try:
+        evt = fi.inject_now("exchange_outage")
+    finally:
+        _time_module.sleep = old_sleep
+
+    assert evt.safety_net_triggered
+    assert not drill._fake_exchange_503  # cleared after injection
+
+
+def test_inject_spread_blowout_sets_and_clears_flag(tmp_path: pathlib.Path) -> None:
+    """spread_blowout: sets _fake_spread_multiplier=10 then resets to 1."""
+    import time as _time_module
+    from deployment.testing.fault_injector import FaultInjector
+
+    drill = _MockDrillI11(tmp_path)
+    fi = FaultInjector(drill=drill, log_path=tmp_path / "faults.jsonl",
+                       intervals={"spread_blowout": 999 * 3600})
+
+    old_sleep = _time_module.sleep
+
+    def fast_sleep(s):
+        drill._fake_spread_multiplier = 1.0
+
+    _time_module.sleep = fast_sleep
+    try:
+        evt = fi.inject_now("spread_blowout")
+    finally:
+        _time_module.sleep = old_sleep
+
+    assert evt.safety_net_triggered
+    assert drill._fake_spread_multiplier == 1.0
+
+
+def test_exchange_outage_and_spread_blowout_in_default_intervals() -> None:
+    """I11: Both faults appear in DEFAULT_INTERVALS with expected intervals."""
+    from deployment.testing.fault_injector import FaultInjector
+
+    assert "exchange_outage" in FaultInjector.DEFAULT_INTERVALS
+    assert "spread_blowout" in FaultInjector.DEFAULT_INTERVALS
+    assert FaultInjector.DEFAULT_INTERVALS["exchange_outage"] == 18 * 3600
+    assert FaultInjector.DEFAULT_INTERVALS["spread_blowout"] == 9 * 3600

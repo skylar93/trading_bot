@@ -244,6 +244,7 @@ class PaperTrader:
         feature_drift_detector: Optional[FeatureDriftDetector] = None,
         on_regime_change: Optional[Callable[[int, int, np.ndarray], None]] = None,
         exchange_snapshot: Optional[ExchangeSnapshot] = None,  # F7/F8/F9
+        deployment_drift_detector=None,  # I7: Optional[DeploymentDriftDetector]
     ) -> None:
         self.agent = agent
         self.config = config
@@ -305,6 +306,16 @@ class PaperTrader:
         self.regime_detector = regime_detector
         self.on_regime_change = on_regime_change
         self._current_regime: int = -1
+
+        # I7: deployment-side drift coordinator (shadow mode aware).
+        if deployment_drift_detector is None:
+            from deployment.monitoring.drift_detector import DeploymentDriftDetector
+            self._dep_drift = DeploymentDriftDetector(
+                config=config.get("alerts", {}),
+                alerter=self.alerter,
+            )
+        else:
+            self._dep_drift = deployment_drift_detector
 
         pipeline_cfg = config.get("data_pipeline_safety", {}) or {}
         self._staleness_enabled: bool = bool(pipeline_cfg.get("staleness_enabled", True))
@@ -778,11 +789,18 @@ class PaperTrader:
             prev_pv = history[-2]
             if prev_pv > 0 and self.drift_detector is not None:
                 step_return = (history[-1] - prev_pv) / prev_pv
-                if self.drift_detector.update(step_return) and self.alerter is not None:
-                    self.alerter.notify_drift(
+                if self.drift_detector.update(step_return):
+                    # I7-b: delegate to deployment drift coordinator (shadow-aware)
+                    self._dep_drift.report_drift(
                         detector=self.drift_detector.method,
-                        signal_name="portfolio_return",
+                        signal_name="reward",
+                        details=f"step_return={step_return:.4f}",
                     )
+
+        # I7-c: halt check — triggers shutdown after shadow period expires
+        if self._dep_drift.halt_requested:
+            self._trigger_shutdown(reason="deployment_drift_halt")
+            return
 
         # S56: per-feature drift check using latest raw observation
         if self.feature_drift_detector is not None:
@@ -793,12 +811,12 @@ class PaperTrader:
                 alarms = self.feature_drift_detector.update(obs[:n])
                 fired = [name for name, flag in alarms.items() if flag]
                 if fired:
-                    if self.alerter is not None:
-                        for name in fired:
-                            self.alerter.notify_drift(
-                                detector=self.feature_drift_detector._method,
-                                signal_name=name,
-                            )
+                    for name in fired:
+                        # I7-b: delegate feature drift to deployment coordinator
+                        self._dep_drift.report_drift(
+                            detector=self.feature_drift_detector._method,
+                            signal_name=name,
+                        )
                     if self.audit_logger is not None:
                         self.audit_logger.log_risk_event({
                             "type": "feature_drift_alarm",

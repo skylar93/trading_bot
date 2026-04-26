@@ -125,6 +125,39 @@ def test_reset_halt_clears_flag() -> None:
     assert not detector.halt_requested
 
 
+def test_reset_halt_operator_sends_alert() -> None:
+    """I8-d: source='operator' triggers a WARNING alert."""
+    from unittest.mock import MagicMock
+    alerter = MagicMock()
+    past = time.time() - 10
+    detector = DeploymentDriftDetector(
+        {"drift": {"shadow_mode_hours": 0}},
+        alerter=alerter,
+        _start_time=past,
+    )
+    detector.halt_requested = True
+    detector.reset_halt(source="operator")
+    assert not detector.halt_requested
+    alerter.send_alert.assert_called_once()
+    assert alerter.send_alert.call_args[1].get("level") == "WARNING"
+
+
+def test_reset_halt_auto_drill_no_alert() -> None:
+    """I8-d: source='auto_drill' clears halt silently."""
+    from unittest.mock import MagicMock
+    alerter = MagicMock()
+    past = time.time() - 10
+    detector = DeploymentDriftDetector(
+        {"drift": {"shadow_mode_hours": 0}},
+        alerter=alerter,
+        _start_time=past,
+    )
+    detector.halt_requested = True
+    detector.reset_halt(source="auto_drill")
+    assert not detector.halt_requested
+    alerter.send_alert.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # Default config / threshold values
 # ---------------------------------------------------------------------------

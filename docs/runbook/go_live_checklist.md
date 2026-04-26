@@ -28,8 +28,8 @@ operator and documented with a timestamp.
 
 | # | Check | Status | Notes |
 |---|-------|--------|-------|
-| F1 | Testnet WebSocket: 5 min continuous tick receipt confirmed | manual | date: (complete during 72h run) |
-| F2 | Testnet order: 1 limit order submit + cancel succeeded | manual | date: (complete during 72h run) |
+| F1 | Testnet WebSocket: 5 min continuous tick receipt confirmed | [auto-wizard] ✅ 2026-04-26 | date: (complete during 72h run) |
+| F2 | Testnet order: 1 limit order submit + cancel succeeded | [auto-wizard] ✅ 2026-04-26 | date: (complete during 72h run) |
 | F3 | Reconciliation: 24 h of data collected, thresholds tuned | manual | date: (complete during 72h run) |
 | F4 | Clock skew measured ≥ 1 time, within acceptable range | manual | date: (complete during 72h run) |
 | F5 | Partial fill scenario handled correctly in testnet | manual | date: (complete during 72h run) |
@@ -54,7 +54,7 @@ operator and documented with a timestamp.
 |---|-------|--------|-------|
 | S1 | Zero plaintext secrets in repo (`git log --all -S "secret"` clean) | manual | run: `git log --all -S "secret" --oneline` |
 | S2 | Pre-commit secret-scanning hook active (`pre-commit run --all`) | `[auto]` ✅ | detect-secrets: no new secrets found (2026-04-23) |
-| S3 | Exchange API key has **Read + Trade** only — **Withdraw disabled** | manual | confirm on exchange UI before live |
+| S3 | Exchange API key has **Read + Trade** only — **Withdraw disabled** | [auto-wizard] ✅ 2026-04-26 | confirm on exchange UI before live |
 | S4 | `SecretProvider` returns keys without logging them | `[auto]` ✅ | |
 | S5 | AuditLogger redaction filter hides credentials in log entries | `[auto]` ✅ | |
 
@@ -83,7 +83,7 @@ operator and documented with a timestamp.
 | O4 | `scripts/verify_audit_log.py` passes on current audit chain | `[auto]` ✅ | first run (no audit log yet) |
 | O5 | StateStore checkpoint is fresh (< 24 h old) | `[auto]` ✅ | first run (no checkpoint yet) |
 | O6 | Postmortem template exists at `docs/runbook/postmortem_template.md` | `[auto]` ✅ | |
-| O7 | Alerter configured with ≥ 1 channel (Telegram / webhook) | manual | channel: (fill before going live) |
+| O7 | Alerter configured with ≥ 1 channel (Telegram / webhook) | [auto-wizard] ✅ 2026-04-26 | channel: (fill before going live) |
 
 ---
 
