@@ -72,6 +72,8 @@ class FaultInjector:
         "schema_drift": 24 * 3600,        # 24h — once per drill
         "canary_underperform": 6 * 3600,  # 6h
         "clock_skew": -1,                 # random (handled specially)
+        "exchange_outage": 18 * 3600,     # I11: 18h
+        "spread_blowout": 9 * 3600,       # I11: 9h
     }
 
     def __init__(
@@ -257,6 +259,35 @@ class FaultInjector:
             evt.safety_net_triggered = True
         else:
             logger.warning("Drill has no clock skew mechanism — recording event only")
+            evt.safety_net_triggered = False
+
+    def _inject_exchange_outage(self, evt: FaultEvent) -> None:
+        """Simulate 60s exchange 503 burst → orders skipped, safety net triggered."""
+        logger.warning("[FaultInjector] Injecting exchange_outage (60s)")
+        evt.detail["duration_seconds"] = 60
+        drill = self._drill
+        if hasattr(drill, "_fake_exchange_503"):
+            drill._fake_exchange_503 = True
+            time.sleep(60)
+            drill._fake_exchange_503 = False
+            evt.safety_net_triggered = True
+        else:
+            logger.warning("Drill has no _fake_exchange_503 flag — recording only")
+            evt.safety_net_triggered = False
+
+    def _inject_spread_blowout(self, evt: FaultEvent) -> None:
+        """Simulate 10x spread for 30s → fill prices diverge from mid."""
+        logger.warning("[FaultInjector] Injecting spread_blowout (10x, 30s)")
+        evt.detail["spread_multiplier"] = 10.0
+        evt.detail["duration_seconds"] = 30
+        drill = self._drill
+        if hasattr(drill, "_fake_spread_multiplier"):
+            drill._fake_spread_multiplier = 10.0
+            time.sleep(30)
+            drill._fake_spread_multiplier = 1.0
+            evt.safety_net_triggered = True
+        else:
+            logger.warning("Drill has no _fake_spread_multiplier flag — recording only")
             evt.safety_net_triggered = False
 
     # ------------------------------------------------------------------

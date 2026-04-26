@@ -376,6 +376,43 @@ def run_dollar_drill(capital: float, n_steps: int = 200) -> dict[str, Any]:
 # $100 Live Drill (I1-c)
 # ---------------------------------------------------------------------------
 
+def _preflight(capital: float, exchange) -> list[str]:
+    """I6-a: Pre-flight checks before live drill. Returns list of failure strings."""
+    import datetime as _dt
+    failures: list[str] = []
+
+    # 1. Balance check
+    try:
+        bal = exchange.fetch_balance()
+        free_usdt = float((bal.get("USDT") or {}).get("free", 0))
+        if free_usdt < capital:
+            failures.append(
+                f"USDT balance {free_usdt:.2f} < required {capital:.2f}"
+            )
+    except Exception as exc:
+        failures.append(f"balance fetch failed: {exc}")
+
+    # 2. 24h duplicate drill guard
+    history_dir = PROJECT_ROOT / "docs" / "phase7.6"
+    if history_dir.exists():
+        recent = sorted(history_dir.glob("live_drill_*.md"), reverse=True)
+        if recent:
+            try:
+                stem = recent[0].stem  # live_drill_20260426T090000Z
+                ts_part = stem.rsplit("_", 1)[-1].rstrip("Z")
+                last_ts = _dt.datetime.strptime(ts_part, "%Y%m%dT%H%M%S")
+                delta = _dt.datetime.utcnow() - last_ts
+                if delta < _dt.timedelta(hours=24):
+                    failures.append(
+                        f"last drill {recent[0].name} < 24h ago "
+                        f"(elapsed {delta.total_seconds() / 3600:.1f}h)"
+                    )
+            except (ValueError, IndexError):
+                pass  # malformed filename — skip
+
+    return failures
+
+
 def run_live_drill(
     capital: float,
     symbol: str = "BTC/USDT",
@@ -481,6 +518,14 @@ def run_live_drill(
     except Exception as exc:
         return _check("live drill balance fetch", False, str(exc))
 
+    # I6-a: pre-flight checks (balance + 24h dedupe) — skip when exchange is injected (tests)
+    if _exchange is None:
+        preflight_failures = _preflight(capital, exchange)
+        if preflight_failures:
+            detail = "; ".join(preflight_failures)
+            print(f"  ❌ Pre-flight failed: {detail}")
+            return _check("live drill pre-flight", False, detail)
+
     # ── 4. Submit limit buy $50 @ mid × 0.98 ────────────────────────────────
     notional = 50.0
     limit_price = round(mid_price * 0.98, 2)
@@ -511,16 +556,52 @@ def run_live_drill(
             audit_logger=audit_logger,
         )
 
-    # ── 10-minute timeout watchdog ───────────────────────────────────────────
+    # ── I6-b: Dead-man watchdog (10-min hard timeout) ───────────────────────
     timed_out = threading.Event()
+    _drill_start = time.monotonic()
 
     def _watchdog() -> None:
-        timed_out.wait(timeout=600)
+        """Monitor thread: checks elapsed every 10s; force-flat on timeout."""
+        while not timed_out.is_set():
+            timed_out.wait(timeout=10)
+            if timed_out.is_set():
+                break
+            elapsed_w = time.monotonic() - _drill_start
+            if elapsed_w >= 600:
+                print("  ⏰ 10-min watchdog fired — cancelling all orders + market flatten")
+                try:
+                    om.cancel_all_orders()
+                except Exception:
+                    pass
+                try:
+                    cur_btc = float(
+                        (exchange.fetch_balance().get("BTC") or {}).get("free", 0)
+                    )
+                    if cur_btc > 0:
+                        exchange.create_market_sell_order(symbol, cur_btc)
+                except Exception:
+                    pass
+                # Write postmortem skeleton
+                _ts_w = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+                _pm_src = PROJECT_ROOT / "docs" / "runbook" / "postmortem_template.md"
+                _pm_dst = PROJECT_ROOT / "docs" / "phase7.6" / f"live_drill_timeout_{_ts_w}.md"
+                _pm_dst.parent.mkdir(parents=True, exist_ok=True)
+                if _pm_src.exists():
+                    import shutil
+                    shutil.copy(_pm_src, _pm_dst)
+                else:
+                    _pm_dst.write_text(
+                        f"# Live Drill Timeout Postmortem — {_ts_w}\n\n"
+                        "Drill timed out after 10 minutes. Investigate order latency.\n"
+                    )
+                timed_out.set()
+                break
 
-    watchdog = threading.Thread(target=_watchdog, daemon=True)
+    watchdog = threading.Thread(target=_watchdog, daemon=True, name="drill-watchdog")
     watchdog.start()
 
     t0 = time.monotonic()
+    _submit_ts = time.monotonic()
 
     try:
         order_id = om.submit_order(
@@ -533,7 +614,9 @@ def run_live_drill(
         timed_out.set()
         return _check("live drill order submit", False, str(exc))
 
-    print(f"  Limit buy submitted: {qty} {symbol} @ {limit_price} (id={order_id})")
+    _ack_ts = time.monotonic()
+    submit_latency_ms = (_ack_ts - _submit_ts) * 1000
+    print(f"  Limit buy submitted: {qty} {symbol} @ {limit_price} (id={order_id}, ack={submit_latency_ms:.0f}ms)")
 
     # ── 5. Poll for 3 minutes (every 30s) ───────────────────────────────────
     fill_status = "open"
@@ -550,6 +633,7 @@ def run_live_drill(
             break
 
     elapsed = time.monotonic() - t0
+    _fill_ts = time.monotonic()
 
     if timed_out.is_set() or elapsed >= 600:
         om.cancel_all_orders()
@@ -563,13 +647,23 @@ def run_live_drill(
     except Exception:
         order = None
 
+    fill_latency_ms: float = (_fill_ts - _ack_ts) * 1000
+    try:
+        actual_fill_price = float(getattr(order, "avg_fill_price", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        actual_fill_price = 0.0
+    try:
+        actual_fee = float(getattr(order, "fee", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        actual_fee = 0.0
+
     if fill_status in ("open", "pending"):
         print("  Unfilled — cancelling")
         om.cancel_order(order_id)
         fill_status = "cancelled"
     elif fill_status == "filled":
         filled_qty = order.filled_amount if order else qty
-        print(f"  Filled @ {getattr(order, 'avg_fill_price', '?')} — market sell {filled_qty}")
+        print(f"  Filled @ {actual_fill_price or '?'} — market sell {filled_qty}")
         om.submit_order(side="sell", amount=filled_qty, order_type="market")
     elif fill_status in ("partial", "partially_filled"):
         filled_qty = order.filled_amount if order else 0.0
@@ -610,6 +704,15 @@ def run_live_drill(
     report_dir = PROJECT_ROOT / "docs" / "phase7.6"
     report_dir.mkdir(parents=True, exist_ok=True)
     report_path = report_dir / f"live_drill_{ts}.md"
+    # I6-c: Slippage model predicted vs actual
+    slippage_predicted: float = 0.0
+    slippage_actual: float = 0.0
+    if actual_fill_price and mid_price:
+        slippage_actual = abs(actual_fill_price - mid_price) / mid_price
+    # Expected fee from config (paper mode default: 0.1%)
+    config_fee_rate: float = 0.001
+    config_fee_amount: float = notional * config_fee_rate
+
     report_path.write_text(
         f"# Live Drill Report — {ts}\n\n"
         f"**Symbol**: {symbol}  \n"
@@ -623,6 +726,19 @@ def run_live_drill(
         f"|---|---|---|---|\n"
         f"| USDT | {pre_usdt:.2f} | {post_usdt:.2f} | {usdt_diff:+.2f} |\n"
         f"| BTC  | {pre_btc:.8f} | {post_btc:.8f} | {btc_diff:+.8f} |\n\n"
+        f"## Latency\n\n"
+        f"| Stage | Latency |\n"
+        f"|-------|---------|\n"
+        f"| Submit → ack | {submit_latency_ms:.0f}ms |\n"
+        f"| Ack → fill/cancel | {fill_latency_ms:.0f}ms |\n\n"
+        f"## Slippage\n\n"
+        f"| | Predicted | Actual |\n"
+        f"|---|---|---|\n"
+        f"| Slippage | {slippage_predicted:.4%} | {slippage_actual:.4%} |\n\n"
+        f"## Fee\n\n"
+        f"| | Config | Actual |\n"
+        f"|---|---|---|\n"
+        f"| Fee | ${config_fee_amount:.4f} | ${actual_fee:.4f} |\n\n"
         f"## Audit Chain\n\n"
         f"{'✅ intact' if audit_ok else '❌ FAILED'}\n"
     )

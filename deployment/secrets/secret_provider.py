@@ -15,8 +15,8 @@ Config integration
 ------------------
 Config files should use:
     secret_ref: "EXCHANGE_BINANCE_KEY"
-instead of:
-    api_key: "actual-key-here"
+instead of embedding the value directly:
+    exchange_key: "actual-key-here"
 
 The config loader (deployment/secrets/config_resolver.py) resolves secret_refs
 at load time via the active provider.
@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import subprocess
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -107,6 +108,36 @@ class KeychainSecretProvider(SecretProvider):
                 f"python -c \"import keyring; keyring.set_password('{self._SERVICE}', '{key}', '<value>')\""
             )
         return value
+
+    def set(self, key: str, value: str) -> None:
+        """Store *value* in macOS Keychain under service 'trading_bot'."""
+        subprocess.run(
+            [
+                "security", "add-generic-password",
+                "-s", self._SERVICE,
+                "-a", key,
+                "-w", value,
+                "-U",  # update if exists
+            ],
+            check=True,
+            capture_output=True,
+        )
+        logger.info("Keychain: set key=%s", key)
+
+    def delete(self, key: str) -> None:
+        """Delete *key* from macOS Keychain. Silently ignores if not found."""
+        result = subprocess.run(
+            [
+                "security", "delete-generic-password",
+                "-s", self._SERVICE,
+                "-a", key,
+            ],
+            capture_output=True,
+        )
+        if result.returncode not in (0, 44):  # 44 = item not found
+            logger.warning("Keychain delete returned rc=%d for key=%s", result.returncode, key)
+        else:
+            logger.info("Keychain: deleted key=%s", key)
 
 
 class FileSecretProvider(SecretProvider):
