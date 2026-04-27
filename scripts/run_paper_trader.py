@@ -100,6 +100,36 @@ def main() -> None:
     config.setdefault("execution", {})["exchange_mode"] = args.exchange_mode
     config.setdefault("paper_trading", {})["exchange_mode"] = args.exchange_mode
 
+    # ── [A0.5] Live signal gate — block live mode until evidence passes ──────
+    if args.exchange_mode == "live":
+        try:
+            from deployment.governance.live_signal_gate import LiveSignalGate
+            gate_cfg = config.get("live_signal_gate", {})
+            evidence_pack = Path(
+                gate_cfg.get("evidence_pack", "docs/phase8/strategy_evidence_v1.md")
+            )
+            max_age = float(gate_cfg.get("max_evidence_age_days", 30))
+            thresholds = gate_cfg.get("thresholds", {})
+            gate = LiveSignalGate(
+                evidence_pack=evidence_pack,
+                thresholds=thresholds,
+                max_evidence_age_days=max_age,
+            )
+            result = gate.check()
+            if not result.passed:
+                logger.error(
+                    "❌ Live signal gate FAILED — live mode blocked:\n%s",
+                    "\n".join(f"  • {f}" for f in result.failures),
+                )
+                sys.exit(2)
+            logger.info(
+                "✅ Live signal gate PASSED (evidence age %.1f days)",
+                result.evidence_pack_age_days,
+            )
+        except ImportError as exc:
+            logger.error("Failed to import live_signal_gate: %s", exc)
+            sys.exit(1)
+
     duration_seconds: Optional[float] = (
         args.duration_hours * 3600.0 if args.duration_hours is not None else None
     )

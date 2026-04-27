@@ -47,6 +47,19 @@ sandbox:
   api_key_ref: "EXCHANGE_BINANCE_TESTNET_KEY"
   api_secret_ref: "EXCHANGE_BINANCE_TESTNET_SECRET"
 
+# ── Live Signal Gate (A0.5) ───────────────────────────────────
+# Blocks exchange_mode: live until strategy evidence passes all thresholds.
+# Parsed by deployment/governance/live_signal_gate.py.
+live_signal_gate:
+  evidence_pack: "docs/phase8/strategy_evidence_v1.md"
+  max_evidence_age_days: 30
+  thresholds:
+    min_sharpe_net: 0.5
+    min_dsr: 0.0
+    min_bootstrap_ci_lower: 0.0
+    max_permutation_p: 0.05
+    max_regime_dd: 0.30
+
 # ── LLM Review Panel ──────────────────────────────────────────
 llm_review:
   enabled: false
