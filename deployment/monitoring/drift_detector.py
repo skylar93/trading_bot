@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import Any, Dict, Literal, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from deployment.monitoring.alerter import TradingAlerter
@@ -143,7 +143,7 @@ class DeploymentDriftDetector:
         if effective_on_drift == "halt":
             self.halt_requested = True
 
-    def reset_halt(self, *, source: str = "operator") -> None:
+    def reset_halt(self, *, source: Literal["auto_drill", "operator"] = "operator") -> None:
         """Clear halt flag.
 
         source='auto_drill' — automated 30s resume from drill (silent).
