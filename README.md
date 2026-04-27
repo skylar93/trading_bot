@@ -12,13 +12,14 @@ First-dollar live trading is gated by an operator-driven checklist — see
 
 | Metric | Value |
 |---|---|
-| pytest baseline | 2458 passed / 41 skipped / 0 failed |
+| pytest baseline | 2505 passed / 27 skipped / 12 pre-existing failed |
 | `pytest.ini` ignores | 4 entries (audit) |
 | Live-readiness checklist | 15/15 auto-checks PASS (Week 85) |
 | First-dollar drill | 17/17 PASS (simulation) |
 | Kill switch | < 5s halt verified (0.01s observed) |
-| 72h autonomous drill | In progress (see Phase 7.6) |
-| Last merged PR | #108 (Phase 7.6 I5–I12 sign-off) |
+| 72h autonomous drill | In progress (see Phase 7.6, ~ends 2026-04-27 22:33 PT) |
+| Last merged PR | #110 (Phase 7.6 I5–I12 continuation) |
+| Phase 8 A0 evidence pack | [docs/phase8/strategy_evidence_v1.md](docs/phase8/strategy_evidence_v1.md) |
 
 ---
 
@@ -159,9 +160,24 @@ See [docs/USER_GUIDE.md](docs/USER_GUIDE.md) for the full reading guide on these
 This is the part that took the most engineering and is what separates this repo from a
 generic RL backtester.
 
+### Strategy evidence bar
+
+Before `exchange_mode: live` is allowed, the strategy must produce a statistical evidence pack:
+
+- **Evidence pack**: [`docs/phase8/strategy_evidence_v1.md`](docs/phase8/strategy_evidence_v1.md)
+  — walk-forward OOS Sharpe, bootstrap 95% CI, permutation p-value, DSR, regime-conditional
+  breakdown, and baseline comparisons.
+- **Automated GO thresholds** (enforced by `deployment/governance/live_signal_gate.py` — A0.5):
+  net Sharpe > 0.5, DSR > 0, CI lower > 0, permutation p < 0.05, crisis DD < 30%.
+- **Reward audit**: [`docs/phase8/reward_audit.md`](docs/phase8/reward_audit.md) — confirms
+  reward is net-of-cost (fees + slippage deducted before log-return computation).
+- Run `python scripts/generate_evidence_pack.py --walk-forward-runs runs/wf_*.json` to
+  regenerate from new walk-forward results.
+
 ### Test bar
 
-- **2458 passed / 41 skipped / 0 failed** on `pytest -q` (Phase 7.6 baseline, main).
+- **2505 passed / 27 skipped / 12 pre-existing failed** on `pytest -q` (Phase 8 P0-a baseline, 2026-04-27).
+  12 failures are in `test_live_trading_advanced.py` / `test_live_websocket.py` — pre-existing on main, not caused by Phase 8 changes.
 - `pytest.ini` ignore list audited down to **4 entries** ([docs/phase7/ignore_audit.md](docs/phase7/ignore_audit.md)).
 - NaN canary suite (100 seeds × 100 steps) — 100% pass.
 - Numeric warning count budget: < 500 across full suite.

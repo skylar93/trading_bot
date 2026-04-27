@@ -28,8 +28,10 @@ operator and documented with a timestamp.
 
 | # | Check | Status | Notes |
 |---|-------|--------|-------|
-| F1 | Testnet WebSocket: 5 min continuous tick receipt confirmed | [auto-wizard] ✅ 2026-04-26 | date: (complete during 72h run) |
-| F2 | Testnet order: 1 limit order submit + cancel succeeded | [auto-wizard] ✅ 2026-04-26 | date: (complete during 72h run) |
+| F1a | `setup_testnet --dry-run` wizard PASS (config + credentials validated) | [auto-wizard] ✅ 2026-04-26 | `python scripts/setup_testnet.py --dry-run` → exit 0 |
+| F1b | Testnet WebSocket: 5 min continuous tick receipt **actually observed** | manual | date: ________ (operator verifies live feed in testnet session) |
+| F2a | Testnet wizard: mock submit/cancel round-trip PASS | [auto-wizard] ✅ 2026-04-26 | wizard mock exchange flow verified |
+| F2b | Testnet order: 1 real limit order submit + cancel via actual testnet creds | manual | date: ________ (operator runs with real TESTNET keys, confirms fill in exchange UI) |
 | F3 | Reconciliation: 24 h of data collected, thresholds tuned | manual | date: (complete during 72h run) |
 | F4 | Clock skew measured ≥ 1 time, within acceptable range | manual | date: (complete during 72h run) |
 | F5 | Partial fill scenario handled correctly in testnet | manual | date: (complete during 72h run) |
@@ -54,7 +56,8 @@ operator and documented with a timestamp.
 |---|-------|--------|-------|
 | S1 | Zero plaintext secrets in repo (`git log --all -S "secret"` clean) | manual | run: `git log --all -S "secret" --oneline` |
 | S2 | Pre-commit secret-scanning hook active (`pre-commit run --all`) | `[auto]` ✅ | detect-secrets: no new secrets found (2026-04-23) |
-| S3 | Exchange API key has **Read + Trade** only — **Withdraw disabled** | [auto-wizard] ✅ 2026-04-26 | confirm on exchange UI before live |
+| S3a | Exchange API key scope probe (`verify_exchange_key_scope.py`) PASS | [auto-wizard] ✅ 2026-04-26 | `python scripts/verify_exchange_key_scope.py --dry-run` |
+| S3b | Exchange API key scope **confirmed on exchange UI**: Read + Trade only, Withdraw disabled | manual | date: ________ (operator checks exchange web UI directly before live) |
 | S4 | `SecretProvider` returns keys without logging them | `[auto]` ✅ | |
 | S5 | AuditLogger redaction filter hides credentials in log entries | `[auto]` ✅ | |
 
@@ -83,7 +86,8 @@ operator and documented with a timestamp.
 | O4 | `scripts/verify_audit_log.py` passes on current audit chain | `[auto]` ✅ | first run (no audit log yet) |
 | O5 | StateStore checkpoint is fresh (< 24 h old) | `[auto]` ✅ | first run (no checkpoint yet) |
 | O6 | Postmortem template exists at `docs/runbook/postmortem_template.md` | `[auto]` ✅ | |
-| O7 | Alerter configured with ≥ 1 channel (Telegram / webhook) | [auto-wizard] ✅ 2026-04-26 | channel: (fill before going live) |
+| O7a | Alerter config validated by wizard (channel field non-empty) | [auto-wizard] ✅ 2026-04-26 | wizard confirms config structure |
+| O7b | Alerter end-to-end: **test message received** on actual Telegram / webhook channel | manual | date: ________ (operator sends `python scripts/run_paper_trader.py --test-alert` and confirms receipt) |
 
 ---
 

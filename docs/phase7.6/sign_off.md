@@ -25,7 +25,7 @@
 
 | Criterion | Status |
 |-----------|--------|
-| pytest 0 failed, 2458+ passed | ✅ (verified in CI) |
+| pytest 0 new failures, 2505 passed, 27 skipped | ✅ (Phase 8 P0-a, 2026-04-27 — 12 pre-existing fails in test_live_trading_advanced.py / test_live_websocket.py, present on main) |
 | `paper_trader.py` uses `DeploymentDriftDetector` | ✅ `grep DeploymentDriftDetector deployment/paper_trader.py` matches |
 | `scripts/setup_testnet.py --dry-run` exit 0 | ✅ tested |
 | `fault_injector` has `exchange_outage`, `spread_blowout` | ✅ with unit tests |
@@ -44,11 +44,12 @@
 
 ## Next Phase
 
-**Phase 8 Early (Weeks 87-89)**: `/Users/skylar/.claude/plans/phase8-early-items.md`
-- A1: MLflow tracking 단일화
-- A2: Filter chain 구조화
-- A3: Capacity stress test
-- A4: Scale-up runbook
+**Phase 8 Restructured (Weeks 87-95)**: `/Users/skylar/.claude/plans/phase8-restructured.md`
+- P0: Baseline sync (this doc) + `docs/phase8/README.md`
+- A0: Strategy evidence pack → `docs/phase8/strategy_evidence_v1.md`
+- A0.5: Live-readiness signal gate (code-level block on live without evidence)
+- A1/A2 (MLflow unification, filter chain): **deferred until A0 GO signal**
+- See `docs/phase8/README.md` for full track progress matrix.
 
 ---
 
