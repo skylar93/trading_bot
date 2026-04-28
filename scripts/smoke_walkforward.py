@@ -48,7 +48,7 @@ result = validator.validate(
     env_factory=env_factory,
     data=df,
     total_timesteps=512,
-    eval_episodes=1,
+    eval_episodes=5,
 )
 
 print()
