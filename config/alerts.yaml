@@ -29,3 +29,19 @@ drift:
   # Auto-tune: propose new thresholds after N samples
   auto_tune_after_samples: 500
   auto_tune_output: "docs/phase7.6/drift_calibration.md"
+
+model_drift:
+  # Dim 1: action distribution KL divergence (yesterday vs today)
+  action_kl_threshold: 0.5
+  # Dim 2: meta-controller weight collapse
+  meta_weight_collapse_pct: 0.80
+  meta_weight_collapse_window_h: 6
+  # Dim 3: predicted vs realized return Spearman correlation
+  pred_realized_corr_min: 0.05
+  pred_realized_window: 100
+  # Dim 4: per-regime hit rate drop vs training baseline
+  hit_rate_drop_pct: 0.20
+  # Shared: shadow mode (WARNING only, no halt)
+  shadow_mode_hours: 72
+  # Internal: assume 60 steps/hour for meta-collapse window sizing
+  steps_per_hour: 60

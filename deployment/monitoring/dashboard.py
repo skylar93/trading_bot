@@ -22,12 +22,18 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
-def start_dashboard(metrics_exporter, port: int = 8080) -> threading.Thread:
+def start_dashboard(
+    metrics_exporter,
+    port: int = 8080,
+    model_drift_detector=None,
+) -> threading.Thread:
     """Start dashboard HTTP server in a daemon thread.
 
     Args:
         metrics_exporter: MetricsExporter instance
         port: HTTP port (default 8080)
+        model_drift_detector: Optional ModelDriftDetector (A5). When supplied,
+            exposes a ``/model-drift`` endpoint with current snapshot.
 
     Returns:
         threading.Thread: The daemon thread running the server
@@ -51,6 +57,11 @@ def start_dashboard(metrics_exporter, port: int = 8080) -> threading.Thread:
                     for s in history
                 ]
                 self._json_response(200, data)
+            elif self.path == "/model-drift":
+                if model_drift_detector is not None:
+                    self._json_response(200, model_drift_detector.snapshot())
+                else:
+                    self._json_response(200, {"status": "disabled"})
             elif self.path == "/health":
                 self._json_response(200, {"status": "ok"})
             else:
