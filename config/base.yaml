@@ -16,6 +16,7 @@ env:
   normalize: true
   max_position_size: 1.0
   sharpe_lookback: 60
+  sharpe_weight: 0.1
   reward_function: "sharpe_ratio"
   action_type: "continuous"
   include_technical_indicators: true

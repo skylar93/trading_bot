@@ -226,22 +226,22 @@ def split_data_from_config(
 def load_data(data_path: str) -> pd.DataFrame:
     """
     Load data from a file path.
-    
+
     Args:
         data_path: Path to the data file
-        
+
     Returns:
         DataFrame with the loaded data
-        
+
     Raises:
         FileNotFoundError: If the data file cannot be found
     """
     if not os.path.exists(data_path):
         raise FileNotFoundError(f"Data file not found: {data_path}")
-    
+
     # Determine file type from extension
     ext = os.path.splitext(data_path)[1].lower()
-    
+
     if ext == '.csv':
         df = pd.read_csv(data_path)
     elif ext in ['.pkl', '.pickle']:
@@ -250,7 +250,7 @@ def load_data(data_path: str) -> pd.DataFrame:
         df = pd.read_parquet(data_path)
     else:
         raise ValueError(f"Unsupported file extension: {ext}")
-    
+
     # Process datetime columns: convert to numeric or drop
     for col in df.columns:
         # Check for datetime-like string columns
@@ -265,38 +265,38 @@ def load_data(data_path: str) -> pd.DataFrame:
             except Exception:
                 # If conversion fails, leave as is
                 pass
-    
+
     # Reset datetime index if present
     if isinstance(df.index, pd.DatetimeIndex):
         logger.info("Converting datetime index to numeric index")
         df = df.reset_index(drop=True)
-    
+
     # Ensure column names have '$' prefix for OHLCV data
     rename_dict = {}
     for col in ["open", "high", "low", "close", "volume"]:
         if col in df.columns:
             rename_dict[col] = f"${col}"
-    
+
     if rename_dict:
         df = df.rename(columns=rename_dict)
         logger.info(f"Renamed columns: {rename_dict}")
-    
+
     logger.info(f"Loaded data from {data_path} with shape {df.shape}")
     return df
 
 def normalize_data_format(data: Any) -> pd.DataFrame:
     """
     Normalize data into a pandas DataFrame with proper format.
-    
+
     Args:
         data: Data in various formats (DataFrame, list of dicts, etc.)
-        
+
     Returns:
         Normalized DataFrame
     """
     if isinstance(data, pd.DataFrame):
         return data
-    
+
     # Handle list of dictionaries
     if isinstance(data, (list, tuple)) and all(isinstance(d, dict) for d in data):
         max_len = max(
@@ -310,7 +310,7 @@ def normalize_data_format(data: Any) -> pd.DataFrame:
                 v = [v] * max_len
             normalized_data[k] = v
         return pd.DataFrame(normalized_data)
-    
+
     raise ValueError("Unsupported data format. Expected DataFrame or list of dicts.")
 
 def create_env(
@@ -372,7 +372,7 @@ def create_env(
             logger.info("Feature engineering applied: %s", fe_config.enabled_features)
         except ImportError:
             logger.warning("ta library not available; feature engineering skipped")
-    
+
     # Create environment based on type
     if env_type == "single_asset_rl":
         # Create single-asset environment with only supported parameters
@@ -385,17 +385,17 @@ def create_env(
             # Risk reward parameters
             risk_adjusted_reward=env_config.get("risk_adjusted_reward", True),
             sharpe_lookback=env_config.get("sharpe_lookback", 30),
-            sharpe_weight=env_config.get("sharpe_weight", 0.5),
+            sharpe_weight=env_config.get("sharpe_weight", 0.1),
             drawdown_penalty=env_config.get("drawdown_penalty", True),
             # Friction parameters
             apply_slippage=env_config.get("apply_slippage", True),
             slippage_factor=env_config.get("slippage_factor", 0.0005),
             partial_fills=env_config.get("partial_fills", True)
         )
-        
+
         logger.info(f"Created single-agent environment: {env}")
         return env
-    
+
     elif env_type == "multi_asset_rl":
         # Create multi-asset environment with only supported parameters
         env = MultiAssetTradingEnv(
@@ -408,27 +408,27 @@ def create_env(
             allow_short=env_config.get("allow_short", False),
             rebalance_freq=env_config.get("rebalance_freq", 1)
         )
-        
+
         logger.info(f"Created multi-asset environment with {len(env.assets)} assets")
         return env
-    
+
     elif env_type == "multi_agent_rl":
         # Get multi-agent configurations
         multi_agent_configs = env_config.get("multi_agent_configs", [])
-        
+
         if not multi_agent_configs:
             raise ValueError("No agent configurations provided for multi-agent environment")
-        
+
         # Get total environment balance
         total_balance = env_config.get("initial_balance", 10000.0)
-        
+
         # Convert configurations to format expected by MultiAgentTradingEnv
         agent_configs = []
         for agent_cfg in multi_agent_configs:
             # Calculate agent's initial balance based on percentage
             initial_capital_percentage = agent_cfg.get("initial_capital_percentage", 1.0)
             agent_balance = total_balance * initial_capital_percentage
-            
+
             agent_configs.append({
                 "id": agent_cfg["id"],
                 "type": agent_cfg.get("agent_type", "ppo"),  # Changed from type to agent_type
@@ -438,7 +438,7 @@ def create_env(
                 "priority": agent_cfg.get("priority", 1),
                 # Additional environment-related agent parameters
             })
-        
+
         # Create multi-agent environment
         env = MultiAgentTradingEnv(
             data=data,
@@ -448,30 +448,30 @@ def create_env(
             shared_capital=env_config.get("shared_capital", False),
             capital_reallocation_freq=env_config.get("capital_reallocation_freq", 20)
         )
-        
+
         logger.info(f"Created multi-agent environment with {len(agent_configs)} agents")
         return env
-    
+
     elif env_type == "multi_asset_multi_agent_rl":
         # Get multi-agent configurations
         multi_agent_configs = env_config.get("multi_agent_configs", [])
-        
+
         if not multi_agent_configs:
             raise ValueError("No agent configurations provided for multi-agent environment")
-        
+
         # Get total environment balance
         total_balance = env_config.get("initial_balance", 10000.0)
-        
+
         # Convert configurations to format expected by MultiAgentMultiAssetEnv
         agent_configs = []
         for agent_cfg in multi_agent_configs:
             # Calculate agent's initial balance based on percentage
             initial_capital_percentage = agent_cfg.get("initial_capital_percentage", 1.0)
             agent_balance = total_balance * initial_capital_percentage
-            
+
             # Get asset assignment for this agent (if specified)
             assigned_assets = agent_cfg.get("assigned_assets", None)
-            
+
             agent_configs.append({
                 "id": agent_cfg["id"],
                 "type": agent_cfg.get("agent_type", "ppo"),
@@ -481,12 +481,12 @@ def create_env(
                 "priority": agent_cfg.get("priority", 1),
                 "assigned_assets": assigned_assets  # Assets this agent is responsible for
             })
-        
+
         logger.warning("MultiAgentMultiAssetEnv not yet implemented - importing placeholder implementation")
         try:
             # Try to import MultiAgentMultiAssetEnv
             from envs.multi_agent_multi_asset_env import MultiAgentMultiAssetEnv
-            
+
             # Create multi-agent multi-asset environment
             env = MultiAgentMultiAssetEnv(
                 data=data,
@@ -497,14 +497,14 @@ def create_env(
                 shared_capital=env_config.get("shared_capital", True),
                 capital_reallocation_freq=env_config.get("capital_reallocation_freq", 20)
             )
-            
+
             logger.info(f"Created multi-agent multi-asset environment with {len(agent_configs)} agents")
             return env
-            
+
         except ImportError:
             logger.error("MultiAgentMultiAssetEnv not found - falling back to MultiAssetTradingEnv with warning")
             logger.warning("Using MultiAssetTradingEnv as fallback - multi-agent functionality will not be available")
-            
+
             # Create multi-asset environment as fallback
             env = MultiAssetTradingEnv(
                 df=data,
@@ -513,9 +513,9 @@ def create_env(
                 trading_fee=env_config.get("trading_fee", 0.001),
                 action_type=env_config.get("action_type", "portfolio_weights")
             )
-            
+
             return env
-    
+
     else:
         raise ValueError(f"Unsupported environment type: {env_type}")
 
@@ -535,11 +535,11 @@ def create_eval_env(
         An environment instance for evaluation.
     """
     eval_config = copy.deepcopy(config)
-    
+
     # Turn off normalization and stacking for evaluation if present
     # This ensures we get raw observations and rewards for accurate evaluation
     if "env" in eval_config and "normalize" in eval_config["env"]:
         eval_config["env"]["normalize"] = False
-    
+
     # Create the environment with evaluation data
-    return create_env(eval_config, data) 
+    return create_env(eval_config, data)
