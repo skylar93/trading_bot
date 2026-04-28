@@ -256,10 +256,44 @@ class WalkForwardValidator:
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _agent_action(agent, obs, deterministic: bool = False):
+        """Get an action from either a custom-wrapper agent (get_action)
+        or a raw SB3 model (predict). SB3's predict returns (action, state)."""
+        if hasattr(agent, "get_action"):
+            return agent.get_action(obs, deterministic=deterministic) if deterministic \
+                else agent.get_action(obs)
+        # SB3 BaseAlgorithm path
+        action, _ = agent.predict(obs, deterministic=deterministic)
+        return action
+
+    @staticmethod
     def _train_and_collect_returns(
         agent, env, total_timesteps: int, eval_episodes: int
     ) -> np.ndarray:
-        """Train agent and return IS episode returns."""
+        """Train agent and return IS episode returns.
+
+        Two supported agent APIs:
+          * custom-wrapper:  agent.get_action(obs) + agent.train_step(...)
+                             (manual step-by-step gradient updates per env step)
+          * SB3 BaseAlgorithm: agent.learn(total_timesteps) + agent.predict(obs)
+                             (SB3 owns the rollout/optimisation loop)
+        SB3 agents do their own rollout, so we call learn() once for training
+        and then run a separate evaluation loop to collect IS episode returns.
+        """
+        is_sb3 = not hasattr(agent, "train_step")
+
+        if is_sb3:
+            # SB3 owns the env it was constructed with; rebind to our train_env
+            # so it actually trains on the fold's data.
+            try:
+                agent.set_env(env)
+            except Exception:  # noqa: BLE001
+                pass
+            agent.learn(total_timesteps=total_timesteps, progress_bar=False)
+            # After training, roll out a few episodes to score IS Sharpe.
+            return WalkForwardValidator._evaluate(agent, env, max(1, eval_episodes))
+
+        # Legacy custom-wrapper path
         episode_returns = []
         obs, _ = env.reset()
         ep_reward = 0.0
@@ -293,7 +327,7 @@ class WalkForwardValidator:
             ep_reward = 0.0
             done = False
             while not done:
-                action = agent.get_action(obs, deterministic=True)
+                action = WalkForwardValidator._agent_action(agent, obs, deterministic=True)
                 obs, reward, done, truncated, _ = env.step(action)
                 ep_reward += reward
                 if truncated:
