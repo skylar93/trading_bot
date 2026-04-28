@@ -108,6 +108,26 @@ operator and documented with a timestamp.
 
 ---
 
+## Track Z — Strategy Signal Gate (A0.5)
+
+**All Z-items must be ✅ before any operational item matters. This track is code-enforced:
+`run_paper_trader.py --exchange-mode live` exits 2 if Z1–Z3 are not satisfied.**
+
+| # | Check | How | Status | Notes |
+|---|-------|-----|--------|-------|
+| Z1 | Signal gate CLI exits 0 | `python scripts/check_signal_gate.py --config config/deployment.yaml` | ☐ | Auto-enforced at live startup |
+| Z2 | Evidence pack age < 30 days | Checked by Z1 | ☐ | Regenerate if stale: `scripts/generate_evidence_pack.py` |
+| Z3 | All thresholds pass: net Sharpe > 0.5, DSR > 0, CI lower > 0, permutation p < 0.05, regime DD < 30% | Checked by Z1 | ☐ | See `docs/phase8/strategy_evidence_v1.md` |
+| Z4 | Reward audit doc exists | `ls docs/phase8/reward_audit.md` | ☐ | Required: confirms net-of-cost training |
+
+> **Z1 command (copy-paste)**:
+> ```bash
+> python scripts/check_signal_gate.py --config config/deployment.yaml
+> # Exit 0 → GO. Exit 2 → FAIL (see output). Exit 1 → config/import error.
+> ```
+
+---
+
 ## Kill Switch Keyboard Shortcut
 
 Document your kill shortcut here before going live:
