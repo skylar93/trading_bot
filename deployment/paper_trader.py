@@ -245,6 +245,7 @@ class PaperTrader:
         on_regime_change: Optional[Callable[[int, int, np.ndarray], None]] = None,
         exchange_snapshot: Optional[ExchangeSnapshot] = None,  # F7/F8/F9
         deployment_drift_detector=None,  # I7: Optional[DeploymentDriftDetector]
+        model_drift_detector=None,  # A5: Optional[ModelDriftDetector]
     ) -> None:
         self.agent = agent
         self.config = config
@@ -316,6 +317,9 @@ class PaperTrader:
             )
         else:
             self._dep_drift = deployment_drift_detector
+
+        # A5: model prediction-quality drift detector (optional, WARNING only).
+        self._model_drift = model_drift_detector  # None → disabled
 
         pipeline_cfg = config.get("data_pipeline_safety", {}) or {}
         self._staleness_enabled: bool = bool(pipeline_cfg.get("staleness_enabled", True))
@@ -441,6 +445,7 @@ class PaperTrader:
             self._check_risk(price)
             self._check_drift()
             self._check_regime()
+            self._check_model_drift(action, price)
             self._run_canary_agent(obs, step, price)
             self._maybe_daily_report()
             # F9: periodic exchange reconciliation
@@ -824,6 +829,28 @@ class PaperTrader:
                             "step": self.state.step,
                             "total_detections": self.feature_drift_detector.total_detections,
                         })
+
+    def _check_model_drift(self, action: Any, price: float) -> None:
+        """A5: Feed current step into ModelDriftDetector (no-op if not wired)."""
+        if self._model_drift is None:
+            return
+        history = self.state.portfolio_history
+        realized_return: Optional[float] = None
+        if len(history) >= 2 and history[-2] > 0:
+            realized_return = (history[-1] - history[-2]) / history[-2]
+
+        # Scalar action (SB3 returns ndarray; flatten to float)
+        action_scalar: Optional[float] = None
+        try:
+            action_scalar = float(np.asarray(action).flat[0])
+        except Exception:
+            pass
+
+        self._model_drift.update(
+            action=action_scalar,
+            realized_return=realized_return,
+            regime=self._current_regime if self._current_regime >= 0 else None,
+        )
 
     def _check_regime(self) -> None:
         """S57: Evaluate market regime at each step when regime_detector is set.
