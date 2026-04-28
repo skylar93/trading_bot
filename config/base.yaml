@@ -34,6 +34,7 @@ env:
 
 # ── 에이전트 ─────────────────────────────────────────────────
 agent:
+  type: "sb3_cvar_ppo"
   algo_type: "sb3_cvar_ppo"
   feature_extractor: "conv1d"
   learning_rate: 3.0e-4
@@ -126,7 +127,7 @@ data:
   symbols: ["BTC/USDT"]
   timeframe: "1h"
   cache_dir: "data/raw"
-  data_path: "test_data.csv"
+  data_path: "data/BTCUSDT_1h.csv"
   column_map:
     open: "$open"
     high: "$high"
