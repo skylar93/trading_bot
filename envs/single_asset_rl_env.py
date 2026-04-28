@@ -51,7 +51,7 @@ class SingleAssetRLTradingEnv(gym.Env):
         # Risk reward shaping parameters
         risk_adjusted_reward: bool = True,
         sharpe_lookback: int = 60,
-        sharpe_weight: float = 0.5,
+        sharpe_weight: float = 0.1,
         drawdown_penalty: bool = True,
         max_drawdown_penalty_threshold: float = 0.1,
         # Friction parameters
