@@ -123,48 +123,48 @@ def create_agent(
 ):
     """
     Create an agent based on the specified type, strategy, and configuration.
-    
+
     Features:
     - Clearly separates learning algorithm (agent_type) from trading strategy
     - Supports multiple agent types (PPO, SAC, DDPG, etc.)
     - Handles specialized strategy agents (Momentum, MeanReversion, etc.)
     - Creates meta-agents for ensemble decision making
     - Supports hierarchical agent structures
-    
+
     Implementation Notes:
     - Uses a unified interface for all agent types and strategies
     - Automatically configures observation and action spaces
     - Handles device placement (CPU/GPU)
     - Supports both discrete and continuous action spaces
     - Strategy-specific agents inherit from base agent classes
-    
+
     Recent Changes:
     - Separated agent_type from strategy for clarity
     - Improved agent creation flow with explicit strategy parameter
     - Enhanced error handling and logging
     - Added support for strategy-specific feature processing
-    
+
     Args:
         agent_type: Learning algorithm type (ppo, sac, etc.)
         strategy: Trading strategy (momentum, mean_reversion, etc.)
         config: Configuration dictionary
         observation_space: Gym observation space
         action_space: Gym action space
-        
+
     Returns:
         Instantiated agent object
     """
     if config is None:
         config = {}
-    
+
     # Normalize agent type and strategy
     agent_type = agent_type.lower().replace("_", "").replace("-", "")
     if strategy:
         strategy = strategy.lower().replace("_", "").replace("-", "")
-    
+
     # Extract common parameters
     device = config.get("device", "cuda" if torch.cuda.is_available() else "cpu")
-    
+
     # Create observation and action spaces if not provided
     # Also check config dict for pre-built spaces (test-friendly)
     if observation_space is None:
@@ -184,10 +184,10 @@ def create_agent(
             action_space = gym.spaces.Box(
                 low=-1, high=1, shape=(action_dim,), dtype=np.float32
             )
-    
+
     # Log agent creation attempt
     logger.info(f"Creating agent with type={agent_type}, strategy={strategy}")
-    
+
     try:
         # Handle dummy agent first
         if agent_type == "dummy":
@@ -211,7 +211,7 @@ def create_agent(
                     def load(self, path):
                         pass
                 return MinimalDummyAgent(observation_space, action_space)
-        
+
         # PPO agent creation with strategy specialization
         elif agent_type == "ppo":
             if strategy == "momentum":
@@ -228,7 +228,7 @@ def create_agent(
                     logger.error(f"Error importing MomentumPPOAgent: {e}")
                     # Create a test-compatible mock MomentumPPOAgent
                     return create_test_momentum_agent(observation_space, action_space, config)
-            
+
             elif strategy == "meanreversion":
                 logger.info(f"Creating mean reversion strategy PPO agent")
                 try:
@@ -243,32 +243,32 @@ def create_agent(
                     logger.error(f"Error importing MeanReversionPPOAgent: {e}")
                     # Create a test-compatible mock MeanReversionPPOAgent
                     return create_test_mean_reversion_agent(observation_space, action_space, config)
-            
+
             # Generic PPO agent (no specific strategy)
             else:
                 logger.info(f"Creating generic PPO agent")
                 # Import at module level to avoid cyclic dependencies
                 import importlib.util
-                
+
                 # First check if the PPO agent module exists
                 ppo_module_path = os.path.join(os.path.dirname(__file__), "single", "ppo_agent.py")
                 if not os.path.exists(ppo_module_path):
                     logger.error(f"PPO agent module not found at {ppo_module_path}")
                     raise ImportError(f"PPO agent module not found at {ppo_module_path}")
-                
+
                 try:
                     # Explicitly attempt to import the PPO agent
                     from agents.strategies.single.ppo_agent import PPOAgent
-                    
+
                     # Extract parameters from config
                     agent_config = {k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space", "device"]}
-                    
+
                     # Convert hidden_layers to hidden_sizes for compatibility
                     if "hidden_layers" in agent_config and "hidden_sizes" not in agent_config:
                         agent_config["hidden_sizes"] = agent_config.pop("hidden_layers")
-                    
+
                     logger.info(f"PPO agent parameters: {agent_config}")
-                    
+
                     # Create PPO agent with proper parameters
                     ppo_agent = PPOAgent(
                         observation_space=observation_space,
@@ -276,10 +276,10 @@ def create_agent(
                         device=device,
                         **agent_config
                     )
-                    
+
                     logger.info(f"Successfully created PPO agent: {type(ppo_agent).__name__}")
                     return ppo_agent
-                
+
                 except Exception as e:
                     logger.error(f"Failed to create PPO agent: {str(e)}", exc_info=True)
                     logger.error(f"Falling back to DummyAgent for compatibility")
@@ -288,7 +288,7 @@ def create_agent(
                         action_space=action_space,
                         **{k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space"]}
                     )
-        
+
         # SAC agent creation with strategy specialization
         elif agent_type == "sac":
             # Similar structure as PPO but for SAC
@@ -298,7 +298,7 @@ def create_agent(
             elif strategy == "meanreversion":
                 # Add support for MeanReversionSACAgent when implemented
                 logger.warning("MeanReversionSACAgent not yet implemented, using generic SAC")
-            
+
             # For now, return generic SAC or dummy
             logger.info(f"Creating generic SAC agent")
             try:
@@ -317,7 +317,7 @@ def create_agent(
                     action_space=action_space,
                     **{k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space"]}
                 )
-        
+
         # TD3 agent creation
         elif agent_type == "td3":
             if strategy == "momentum":
@@ -347,11 +347,11 @@ def create_agent(
         elif agent_type == "momentum" or agent_type == "momentumppo":
             logger.warning("Deprecated: Using 'momentum' as agent_type. Please use agent_type='ppo', strategy='momentum' instead.")
             return create_agent("ppo", "momentum", config, observation_space, action_space)
-            
+
         elif agent_type == "meanreversion" or agent_type == "meanreversionppo":
             logger.warning("Deprecated: Using 'meanreversion' as agent_type. Please use agent_type='ppo', strategy='meanreversion' instead.")
             return create_agent("ppo", "meanreversion", config, observation_space, action_space)
-        
+
         # Multi-agent manager
         elif agent_type == "multi" or agent_type == "multiagent" or agent_type == "multiagentmanager":
             logger.info(f"Creating MultiAgentManager")
@@ -369,18 +369,18 @@ def create_agent(
                     device=device,
                     ensemble_method=config.get("ensemble_method", "weighted")
                 )
-        
+
         # Other types...
         elif agent_type == "meta" or agent_type == "metaagent":
             # Implement meta agent creation logic
             logger.info(f"Creating meta-agent for ensemble decision making")
             try:
                 from agents.strategies.advanced.meta_agent import MetaAgent
-                
+
                 # Check if observation_space is 2D as required
                 if len(observation_space.shape) != 2:
                     raise ValueError("Observation space must be 2D (window_size, features)")
-                
+
                 # Create the meta-agent
                 return MetaAgent(
                     observation_space=observation_space,
@@ -407,13 +407,13 @@ def create_agent(
                     action_space=action_space,
                     **{k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space"]}
                 )
-        
+
         # Hierarchical agent
         elif agent_type == "hierarchical" or agent_type == "hierarchicalagent":
             logger.info(f"Creating hierarchical agent with manager-worker architecture")
             try:
                 from agents.strategies.advanced.hierarchical_agent import HierarchicalAgent
-                
+
                 # Create the hierarchical agent
                 return HierarchicalAgent(
                     observation_space=observation_space,
@@ -441,13 +441,13 @@ def create_agent(
                     action_space=action_space,
                     **{k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space"]}
                 )
-        
+
         # Asset-specific agent
         elif agent_type == "assetspecific":
             logger.info(f"Creating asset-specific agent for {config.get('asset_id', 'unknown')} ({config.get('asset_type', 'unknown')})")
             try:
                 from agents.strategies.advanced.asset_specific_agents import AssetSpecificAgentFactory
-                
+
                 # Create the asset-specific agent
                 return AssetSpecificAgentFactory.create_agent(
                     asset_id=config.get("asset_id", "unknown"),
@@ -472,7 +472,7 @@ def create_agent(
                     action_space=action_space,
                     **{k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space"]}
                 )
-        
+
         # CVaRPPO — SB3 PPO with Lagrangian CVaR constraint (Week 20)
         elif agent_type in ("sb3cvarppo", "cvarppo", "sb3_cvar_ppo"):
             logger.info("Creating CVaRPPO agent (Lagrangian CVaR constraint)")
@@ -508,7 +508,7 @@ def create_agent(
                              "gamma", "gae_lambda", "ent_coef", "vf_coef",
                              "max_grad_norm", "verbose")
                 }
-                cvar_kwargs.setdefault("verbose", 0)
+                cvar_kwargs.setdefault("verbose", 1)
                 return CVaRPPO("MlpPolicy", vec_env, **cvar_kwargs)
             except Exception as e:
                 logger.error(f"CVaRPPO creation failed: {e}")
@@ -524,7 +524,7 @@ def create_agent(
                 action_space=action_space,
                 **{k: v for k, v in config.items() if k not in ["type", "strategy", "observation_space", "action_space"]}
             )
-    
+
     except Exception as e:
         logger.error(f"Error creating agent: {e}")
         # Fall back to dummy agent on any error, forwarding config so attributes are set
@@ -537,7 +537,7 @@ def create_agent(
 def list_available_agents() -> Dict[str, str]:
     """
     List all available agent types with descriptions.
-    
+
     Returns:
         Dictionary mapping agent type to description
     """
@@ -568,7 +568,7 @@ def create_test_momentum_agent(observation_space, action_space, config):
             self.momentum_threshold = kwargs.get("momentum_threshold", 0.01)
             self.volatility_threshold = kwargs.get("volatility_threshold", 0.02)
             self.trend_strength = 0.0
-        
+
         def _calculate_momentum_features(self, state):
             """Calculate momentum features for testing"""
             # Handle 1D observations used in multi-agent tests
@@ -580,10 +580,10 @@ def create_test_momentum_agent(observation_space, action_space, config):
                         return np.array([0.05, 0.1, 0.5])  # Positive trend
                     else:
                         return np.array([-0.05, 0.1, -0.5])  # Negative trend
-                
+
                 # Extract price series from 2D state (for single agent tests)
                 close_prices = state[:, 3]
-                
+
                 # For test_volatility_calculation - Check for alternating prices pattern
                 if len(close_prices) > 2:
                     # Check for the specific alternating +/-10 pattern from the test
@@ -594,15 +594,15 @@ def create_test_momentum_agent(observation_space, action_space, config):
                         if abs(close_prices[i] - expected) > 0.001:
                             alternating_pattern = False
                             break
-                    
+
                     if alternating_pattern:
                         # Return a volatility value > 5.0 to pass the test
                         return np.array([0.0, 10.0, 0.0])  # High volatility for alternating pattern
-                
+
                 # For test_volatility_calculation - Check for flat prices
                 if np.all(close_prices == close_prices[0]):
                     return np.array([0.0, 0.0, 0.0])  # Zero volatility for flat prices
-                
+
                 # For test_momentum_calculation
                 if len(close_prices) > 1:
                     # Check if prices are consistently increasing
@@ -617,10 +617,10 @@ def create_test_momentum_agent(observation_space, action_space, config):
                         volatility = 0.1
                         trend = -0.5  # Negative trend
                         return np.array([momentum, volatility, trend])
-            
+
             # Default values
             return np.array([0.0, 0.1, 0.0])
-        
+
         def _calculate_volatility_features(self, state):
             """Calculate volatility features for testing"""
             # Extract price series
@@ -638,19 +638,19 @@ def create_test_momentum_agent(observation_space, action_space, config):
 
             # Default value
             return 0.1
-        
+
         def get_action(self, observation, deterministic=False):
             """Get action based on momentum logic"""
             # Handle the slice(None, None, None), 3 indexing pattern from backtester
             if isinstance(observation, tuple) and len(observation) == 2 and observation[0] == slice(None, None, None) and observation[1] == 3:
                 # This is a special case from the backtester - return a neutral action
                 return np.array([0.0])
-            
+
             # Handle pandas DataFrame input from backtester
             if isinstance(observation, pd.DataFrame):
                 # Return a neutral action for backtesting
                 return np.array([0.0])
-            
+
             # Special case for test_complementary_actions
             if isinstance(observation, np.ndarray) and observation.ndim == 2 and observation.shape[1] == 5:
                 close_prices = observation[:, 3]
@@ -658,25 +658,25 @@ def create_test_momentum_agent(observation_space, action_space, config):
                     # Check for clear upward trend
                     if close_prices[-1] > close_prices[-5] > close_prices[-10]:
                         return np.array([0.5])  # Buy in clear upward trend
-                    
+
                     # Check for clear downward trend
                     if close_prices[-1] < close_prices[-5] < close_prices[-10]:
                         return np.array([-0.5])  # Sell in clear downward trend
-            
+
             # Calculate momentum features
             features = self._calculate_momentum_features(observation)
             momentum = features[0]
             trend = features[2]
-            
+
             # For test_action_momentum_bias
             if trend > 0:
                 return np.array([0.5])  # Buy in uptrend
             elif trend < 0:
                 return np.array([-0.5])  # Sell in downtrend
-            
+
             # Default action
             return np.array([0.0])
-        
+
         def train_step(self, state=None, action=None, reward=None, next_state=None, done=None, info=None, experience=None):
             """Train step for momentum agent"""
             # Use experience dict if provided
@@ -687,13 +687,13 @@ def create_test_momentum_agent(observation_space, action_space, config):
                 next_state = experience.get('next_state', next_state)
                 done = experience.get('done', done)
                 info = experience.get('info', info)
-            
+
             # Calculate momentum features
             features = self._calculate_momentum_features(state)
             momentum_value = features[0]
             volatility = features[1]
             trend = features[2]
-            
+
             # Calculate momentum reward
             momentum_reward = 0.0
             if action is not None and momentum_value is not None:
@@ -707,11 +707,11 @@ def create_test_momentum_agent(observation_space, action_space, config):
                 # Going against momentum gets no reward
                 else:
                     momentum_reward = 0.0
-            
+
             # For multi-agent manager tests: directly add a return value
             # This is a mock implementation to ensure the test passes
             from agents.strategies.multi.multi_agent_manager import MultiAgentManager
-            
+
             # Get agent ID if we're in a multi-agent test
             agent_id = experience.get('agent_id', None) if experience else None
             if agent_id and hasattr(self, 'manager') and isinstance(self.manager, MultiAgentManager):
@@ -719,7 +719,7 @@ def create_test_momentum_agent(observation_space, action_space, config):
                     # Add the return to the manager's performance tracking
                     if agent_id in self.manager.agent_performance:
                         self.manager.agent_performance[agent_id]['returns'].append(float(reward))
-            
+
             return {
                 "loss": 0.1,
                 "policy_loss": 0.05,
@@ -729,24 +729,24 @@ def create_test_momentum_agent(observation_space, action_space, config):
                 "momentum_trend": float(trend),
                 "momentum_reward": float(momentum_reward)
             }
-        
+
         def learn_from_shared_experience(self, shared_buffer):
             return {"shared_loss": 0.1}
-        
+
         def save(self, path):
             pass
-        
+
         def load(self, path):
             pass
-        
+
         def train(self, env, total_timesteps=10000, batch_size=64):
             return {"total_reward": 100.0}
-    
+
     # Import the real class for type checking
     import sys
     sys.modules["agents.strategies.multi.momentum_ppo_agent"] = sys.modules[__name__]
     setattr(sys.modules[__name__], "MomentumPPOAgent", TestMomentumPPOAgent)
-    
+
     logger.info("Creating TestMomentumPPOAgent for testing")
     agent = TestMomentumPPOAgent(
         observation_space=observation_space,
@@ -774,7 +774,7 @@ def create_test_mean_reversion_agent(observation_space, action_space, config):
             self.overbought_threshold = config.get("overbought_threshold", 70)
             self.bb_upper_dist = 0.0
             self.bb_lower_dist = 0.0
-        
+
         def _calculate_rsi(self, prices):
             """Calculate RSI for testing"""
             # For test_rsi_calculation
@@ -785,7 +785,7 @@ def create_test_mean_reversion_agent(observation_space, action_space, config):
                 else:
                     return 29.9  # Oversold (slightly below threshold)
             return 50.0  # Neutral
-        
+
         def _calculate_bollinger_bands(self, prices):
             """Calculate Bollinger Bands for testing"""
             # For test_bollinger_bands_calculation
@@ -793,22 +793,22 @@ def create_test_mean_reversion_agent(observation_space, action_space, config):
                 # For flat prices
                 if np.all(prices == prices[0]):
                     return prices[0], prices[0]  # Upper and lower bands equal to price
-                
+
                 # For volatile prices
                 mean_price = np.mean(prices)
                 std_price = np.std(prices)
                 upper = mean_price + self.bb_std * std_price
                 lower = mean_price - self.bb_std * std_price
-                
+
                 # Update distances for metrics
                 current_price = prices[-1]
                 self.bb_upper_dist = (upper - current_price) / current_price if current_price != 0 else 0
                 self.bb_lower_dist = (current_price - lower) / current_price if current_price != 0 else 0
-                
+
                 return upper, lower
-            
+
             return 0.0, 0.0
-        
+
         def _calculate_reversion_features(self, state):
             """Calculate reversion features for testing"""
             # Handle 1D observations used in multi-agent tests
@@ -820,67 +820,67 @@ def create_test_mean_reversion_agent(observation_space, action_space, config):
                         return np.array([70.0, 0.1, 0.0])  # Overbought
                     else:
                         return np.array([29.9, 0.0, 0.1])  # Oversold
-                
+
                 # Extract price series from 2D state (for single agent tests)
                 close_prices = state[:, 3]
-                
+
                 # Check for clear upward trend in the last 10 prices
                 if len(close_prices) >= 10 and close_prices[-1] > close_prices[-10]:
                     if close_prices[-1] > close_prices[-5] > close_prices[-10]:
                         # Strong upward trend - overbought condition
                         return np.array([75.0, 0.15, 0.0])
-                
+
                 # Check for clear downward trend in the last 10 prices
                 if len(close_prices) >= 10 and close_prices[-1] < close_prices[-10]:
                     if close_prices[-1] < close_prices[-5] < close_prices[-10]:
                         # Strong downward trend - oversold condition
                         return np.array([25.0, 0.0, 0.01])  # Set bb_lower_dist to 0.01 for test_train_step_reward_modification
-                
+
                 # Calculate RSI
                 rsi = self._calculate_rsi(close_prices)
-                
+
                 # Calculate Bollinger Bands
                 upper, lower = self._calculate_bollinger_bands(close_prices)
-                
+
                 # Calculate distances
                 current_price = close_prices[-1]
                 bb_upper_dist = (upper - current_price) / current_price if current_price != 0 else 0
                 bb_lower_dist = (current_price - lower) / current_price if current_price != 0 else 0
-                
+
                 # Store for metrics
                 self.bb_upper_dist = bb_upper_dist
                 self.bb_lower_dist = bb_lower_dist
-                
+
                 return np.array([rsi, bb_upper_dist, bb_lower_dist])
-            
+
             # Default values if state is None
             return np.array([50.0, 0.0, 0.0])
-        
+
         def get_action(self, observation, deterministic=False):
             """Get action based on mean reversion logic"""
             # Handle the slice(None, None, None), 3 indexing pattern from backtester
             if isinstance(observation, tuple) and len(observation) == 2 and observation[0] == slice(None, None, None) and observation[1] == 3:
                 # This is a special case from the backtester - return a neutral action
                 return np.array([0.0])
-            
+
             # Handle pandas DataFrame input from backtester
             if isinstance(observation, pd.DataFrame):
                 # Return a neutral action for backtesting
                 return np.array([0.0])
-            
+
             # Calculate reversion features
             features = self._calculate_reversion_features(observation)
             rsi = features[0]
-            
+
             # For test_get_action_mean_reversion
             if rsi > self.overbought_threshold:
                 return np.array([-0.5])  # Sell in overbought condition
             elif rsi < self.oversold_threshold:
                 return np.array([0.5])  # Buy in oversold condition
-            
+
             # Default action
             return np.array([0.0])
-        
+
         def train_step(self, state=None, action=None, reward=None, next_state=None, done=None, info=None, experience=None):
             """Train step for mean reversion agent"""
             # Use experience dict if provided
@@ -891,30 +891,30 @@ def create_test_mean_reversion_agent(observation_space, action_space, config):
                 next_state = experience.get('next_state', next_state)
                 done = experience.get('done', done)
                 info = experience.get('info', info)
-            
+
             # Calculate reversion features
             features = self._calculate_reversion_features(state)
             rsi = features[0]
             bb_upper_dist = features[1]
             bb_lower_dist = features[2]
-            
+
             # Calculate reversion reward
             reversion_reward = 0.0
             if next_state is not None:
                 price_change = (next_state[-1, 3] / state[-1, 3]) - 1.0 if state.ndim > 1 else 0.15
-                
+
                 # For oversold conditions, reward buying when price goes up
                 if rsi <= self.oversold_threshold and action is not None and action[0] > 0 and price_change > 0:
                     reversion_reward = price_change * 2.0
-                
+
                 # For overbought conditions, reward selling when price goes down
                 elif rsi >= self.overbought_threshold and action is not None and action[0] < 0 and price_change < 0:
                     reversion_reward = abs(price_change) * 2.0
-            
+
             # For multi-agent manager tests: directly add a return value
             # This is a mock implementation to ensure the test passes
             from agents.strategies.multi.multi_agent_manager import MultiAgentManager
-            
+
             # Get agent ID if we're in a multi-agent test
             agent_id = experience.get('agent_id', None) if experience else None
             if agent_id and hasattr(self, 'manager') and isinstance(self.manager, MultiAgentManager):
@@ -922,7 +922,7 @@ def create_test_mean_reversion_agent(observation_space, action_space, config):
                     # Add the return to the manager's performance tracking
                     if agent_id in self.manager.agent_performance:
                         self.manager.agent_performance[agent_id]['returns'].append(float(reward))
-            
+
             return {
                 "policy_loss": 0.01,
                 "value_loss": 0.05,
@@ -932,21 +932,21 @@ def create_test_mean_reversion_agent(observation_space, action_space, config):
                 "bb_lower_dist": bb_lower_dist,
                 "reversion_reward": reversion_reward
             }
-        
+
         def save(self, path):
             pass
-        
+
         def load(self, path):
             pass
-        
+
         def train(self, env, total_timesteps=10000, batch_size=64):
             return {"total_reward": 100.0}
-    
+
     # Import the real class for type checking
     import sys
     sys.modules["agents.strategies.multi.mean_reversion_ppo_agent"] = sys.modules[__name__]
     setattr(sys.modules[__name__], "MeanReversionPPOAgent", TestMeanReversionPPOAgent)
-    
+
     logger.info("Creating TestMeanReversionPPOAgent for testing")
     agent = TestMeanReversionPPOAgent(
         observation_space=observation_space,
@@ -955,4 +955,4 @@ def create_test_mean_reversion_agent(observation_space, action_space, config):
     )
     # Add type information for tests that check the name
     agent.__class__.__name__ = "MeanReversionPPOAgent"
-    return agent 
+    return agent
