@@ -100,7 +100,9 @@ def run_walk_forward(
     agent_cfg = config.get("agent", {})
 
     def agent_factory():
-        env = create_env(config, data.iloc[:10])  # dummy to get spaces
+        # Dummy env just to read observation/action spaces — skip validation
+        # (min_rows=50 default would reject a 10-row slice).
+        env = create_env(config, data.iloc[:100], validate=False)
         return create_agent(
             agent_type=_agent_type,
             config=agent_cfg,
@@ -142,13 +144,13 @@ def train_single_agent(
 ) -> Dict[str, Any]:
     """
     Train a single agent using the standard RL loop.
-    
+
     Args:
         agent: The agent to train
         env: The environment to train in
         config: Configuration dictionary
         mlflow_manager: Optional MLflow manager for logging
-        
+
     Returns:
         Dictionary with training results
     """
@@ -160,12 +162,12 @@ def train_single_agent(
     update_interval = training_config.get("update_interval", 2048)  # Steps before PPO update
     paths_config = config.get("paths", {})
     checkpoint_dir = paths_config.get("checkpoint_dir", "checkpoints")
-    
+
     # Check for progress callback
     progress_update_callback = None
     if "callbacks" in config and "progress_update" in config["callbacks"]:
         progress_update_callback = config["callbacks"]["progress_update"]
-    
+
     # Ensure checkpoint directory exists
     os.makedirs(checkpoint_dir, exist_ok=True)
 
@@ -184,43 +186,43 @@ def train_single_agent(
     current_episode_reward = 0
     current_episode_length = 0
     steps_since_update = 0
-    
+
     # Set up evaluation
     best_eval_reward = float('-inf')
-    
+
     # Reset environment
     obs, info = env.reset()
-    
+
     logger.info(f"Starting training for {total_timesteps} timesteps")
     training_start_time = time.time()
     last_progress_update_time = time.time()
-    
+
     # Main training loop
     while steps_done < total_timesteps:
         # Get action from agent
         action = agent.get_action(obs)
-        
+
         # Take step in environment
         next_obs, reward, done, truncated, info = env.step(action)
-        
+
         # Collect experience in buffer
         agent.train_step(obs, action, reward, next_obs, done or truncated)
         steps_since_update += 1
-        
+
         # Update tracking
         current_episode_reward += reward
         current_episode_length += 1
         steps_done += 1
-        
+
         # Update observation
         obs = next_obs
-        
+
         # End of episode logic
         if done or truncated:
             # Log episode results
             episode_rewards.append(current_episode_reward)
             episode_lengths.append(current_episode_length)
-            
+
             # Log to MLflow if available
             if mlflow_manager is not None:
                 mlflow_manager.log_metrics({
@@ -228,32 +230,32 @@ def train_single_agent(
                     "episode_length": float(current_episode_length),
                     "average_reward": float(np.mean(episode_rewards[-100:])),
                 }, step=steps_done)
-            
+
             # Reset for next episode
             obs, info = env.reset()
             current_episode_reward = 0
             current_episode_length = 0
             episode_num += 1
-            
+
             # Log progress more frequently for better visibility
             if episode_num % 5 == 0:
                 recent_rewards = np.mean(episode_rewards[-5:]) if len(episode_rewards) >= 5 else np.mean(episode_rewards)
                 logger.info(f"Episode {episode_num}, Steps: {steps_done}/{total_timesteps} ({steps_done/total_timesteps*100:.1f}%), "
                            f"Recent Reward: {recent_rewards:.2f}")
-                
+
                 # If we have evaluation results, include them in log
                 if best_eval_reward > float('-inf'):
                     logger.info(f"Best evaluation reward so far: {best_eval_reward:.2f}")
-        
+
         # Update progress callback
         current_time = time.time()
         if progress_update_callback and (current_time - last_progress_update_time > 0.5 or steps_done % 100 == 0):
             # Prepare metrics
             progress = steps_done / total_timesteps
-            
+
             # Simple safe metrics
             metrics = {}
-            
+
             # Only add metrics that exist and can be converted to float
             try:
                 metrics["episode_reward"] = float(current_episode_reward) if current_episode_reward else 0.0
@@ -265,7 +267,7 @@ def train_single_agent(
             except (ValueError, TypeError) as e:
                 # Just log and continue if conversion fails
                 print(f"Metrics conversion error (ignoring): {str(e)}")
-            
+
             # Call the progress update callback - wrapped in try/except to prevent training interruption
             try:
                 progress_update_callback(steps_done, total_timesteps, metrics)
@@ -273,60 +275,60 @@ def train_single_agent(
                 # Just log the error but continue training
                 print(f"Error in progress callback: {str(e)}")
                 logger.error(f"Error in progress callback: {str(e)}")
-            
+
             last_progress_update_time = current_time
-        
+
         # Update policy if we have collected enough steps
         if steps_since_update >= update_interval:
             logger.info(f"Updating policy after collecting {steps_since_update} experiences")
             update_results = agent.update_if_buffer_ready()
-            
+
             if update_results:
                 # Log update metrics
                 logger.info(f"Policy update: policy_loss={update_results.get('policy_loss', 0):.4f}, "
                            f"value_loss={update_results.get('value_loss', 0):.4f}, "
                            f"entropy={update_results.get('entropy', 0):.4f}")
-                
+
                 # Reset counter
                 steps_since_update = 0
-                
+
                 # Log to MLflow if available
                 if mlflow_manager is not None:
                     mlflow_metrics = {
                         k: float(v) for k, v in update_results.items() if v is not None
                     }
                     mlflow_manager.log_metrics(mlflow_metrics, step=steps_done)
-        
+
         # Checkpoint saving
         if steps_done % checkpoint_interval == 0:
             checkpoint_path = os.path.join(checkpoint_dir, f"agent_{steps_done}.pt")
             agent.save(checkpoint_path)
             logger.info(f"Saved checkpoint to {checkpoint_path}")
-            
+
             # Log checkpoint to MLflow
             if mlflow_manager is not None:
                 mlflow_manager.log_artifact(checkpoint_path)
-        
+
         # Evaluation
         if steps_done % eval_interval == 0:
             # 평가 실행 (use dedicated eval env with held-out data)
             eval_rewards = evaluate_agent(agent, eval_env, num_episodes=5)
             mean_eval_reward = np.mean(eval_rewards)
-            
+
             logger.info(f"Evaluation at step {steps_done}: Mean reward: {mean_eval_reward:.2f}")
-            
+
             # Log to MLflow
             if mlflow_manager is not None:
                 mlflow_manager.log_metrics({
                     "eval_reward": mean_eval_reward,
                     "eval_reward_std": np.std(eval_rewards),
                 }, step=steps_done)
-            
+
             # Update metrics for progress callback
             if progress_update_callback:
                 # Simple safe metrics
                 metrics = {}
-                
+
                 # Only add metrics that exist and can be converted to float
                 try:
                     metrics["episode_reward"] = float(current_episode_reward) if current_episode_reward else 0.0
@@ -339,33 +341,33 @@ def train_single_agent(
                 except (ValueError, TypeError) as e:
                     # Just log and continue if conversion fails
                     print(f"Metrics conversion error during eval (ignoring): {str(e)}")
-                
+
                 try:
                     progress_update_callback(steps_done, total_timesteps, metrics)
                 except Exception as e:
                     print(f"Error in evaluation progress callback: {str(e)}")
                     logger.error(f"Error in progress callback during evaluation: {str(e)}")
-            
+
             # Save best model
             if mean_eval_reward > best_eval_reward:
                 best_eval_reward = mean_eval_reward
                 best_model_path = os.path.join(checkpoint_dir, "best_agent.pt")
                 agent.save(best_model_path)
                 logger.info(f"New best model with reward {best_eval_reward:.2f} saved to {best_model_path}")
-            
+
             # 평가 후 학습 환경 리셋
             obs, info = env.reset()
-    
+
     # Final save
     final_model_path = os.path.join(checkpoint_dir, "final_agent.pt")
     agent.save(final_model_path)
     logger.info(f"Training complete. Final model saved to {final_model_path}")
-    
+
     # Calculate training duration
     training_duration = time.time() - training_start_time
     logger.info(f"Training took {training_duration:.2f} seconds "
                f"({training_duration / 60:.2f} minutes)")
-    
+
     # Log final metrics to MLflow
     if mlflow_manager is not None:
         mlflow_manager.log_metrics({
@@ -374,12 +376,12 @@ def train_single_agent(
             "best_eval_reward": best_eval_reward,
             "total_episodes": episode_num,
         })
-    
+
     # Final progress update
     if progress_update_callback:
         # Simple safe metrics
         metrics = {}
-        
+
         # Only add metrics that exist and can be converted to float
         try:
             if episode_rewards:
@@ -390,13 +392,13 @@ def train_single_agent(
         except (ValueError, TypeError) as e:
             # Just log and continue if conversion fails
             print(f"Metrics conversion error for final update (ignoring): {str(e)}")
-        
+
         try:
             progress_update_callback(total_timesteps, total_timesteps, metrics)
         except Exception as e:
             print(f"Error in final progress callback: {str(e)}")
             logger.error(f"Error in final progress callback: {str(e)}")
-    
+
     # Return results
     return {
         "agent": agent,
@@ -416,7 +418,7 @@ def train_multi_agent(
 ) -> Dict[str, Any]:
     """
     Train multiple agents in a multi-agent environment.
-    
+
     Features:
     - Handles agents with different strategies and configurations
     - Supports independent agent rewards, observations, and done states
@@ -424,19 +426,19 @@ def train_multi_agent(
     - Tracks and logs metrics per agent
     - Periodic evaluation and checkpoint saving
     - Uses proper PPO rollouts for experience collection
-    
+
     Implementation Notes:
     - Collects experiences for a fixed number of steps before updating
     - Follows PPO algorithm with multiple epochs of optimization
     - Each agent trains on its own collected experiences
     - Supports shared experience buffer for knowledge transfer
-    
+
     Args:
         agents: Dictionary mapping agent_id to agent instances
         env: Multi-agent environment (must support dict-based interface)
         config: Configuration dictionary
         mlflow_manager: Optional MLflow manager for logging
-        
+
     Returns:
         Dictionary with training results
     """
@@ -449,17 +451,17 @@ def train_multi_agent(
     log_interval = training_config.get("log_interval", 10)
     paths_config = config.get("paths", {})
     checkpoint_dir = paths_config.get("checkpoint_dir", "checkpoints")
-    
+
     # Ensure checkpoint directory exists
     os.makedirs(checkpoint_dir, exist_ok=True)
-    
+
     # Create agent-specific checkpoint directories
     agent_checkpoint_dirs = {}
     for agent_id in agents.keys():
         agent_dir = os.path.join(checkpoint_dir, agent_id)
         os.makedirs(agent_dir, exist_ok=True)
         agent_checkpoint_dirs[agent_id] = agent_dir
-    
+
     # Set up tracking
     steps_done = 0
     episode_num = 0
@@ -468,41 +470,41 @@ def train_multi_agent(
     episode_lengths = []
     current_episode_length = 0
     steps_since_update = 0
-    
+
     # Set up evaluation
     best_eval_rewards = {agent_id: float('-inf') for agent_id in agents.keys()}
-    
+
     # Check if shared experience buffer is enabled
     shared_experience_config = config.get("shared_experience", {})
     use_shared_buffer = shared_experience_config.get("enabled", False)
     shared_buffer = [] if use_shared_buffer else None
     max_buffer_size = shared_experience_config.get("buffer_size", 10000)
-    
+
     # Reset environment
     obs_dict, info = env.reset()
-    
+
     logger.info(f"Starting multi-agent training for {total_timesteps} timesteps "
                f"with {len(agents)} agents: {list(agents.keys())}")
     training_start_time = time.time()
-    
+
     # Main training loop
     while steps_done < total_timesteps:
         # Get actions from agents
         actions = {}
         for agent_id, agent in agents.items():
             actions[agent_id] = agent.get_action(obs_dict[agent_id])
-        
+
         # Take step in environment - agent_id keyed dictionaries
         next_obs_dict, rewards, dones, truncated, info = env.step(actions)
-        
+
         # Episode termination logic - either all agents are done or environment truncated
         episode_done = all(dones.values()) or truncated
-        
+
         # Collect experiences for each agent
         for agent_id, agent in agents.items():
             # Get agent-specific done flag - either this agent is done or the episode is truncated
             agent_done = bool(dones[agent_id] or truncated)
-            
+
             # Store experience in agent's buffer
             agent.train_step(
                 obs_dict[agent_id],                   # Current observation
@@ -511,10 +513,10 @@ def train_multi_agent(
                 next_obs_dict[agent_id],              # Next observation
                 done=agent_done                       # Done flag for this agent
             )
-            
+
             # Track reward for this agent
             current_episode_rewards[agent_id] += rewards[agent_id]
-            
+
             # Add to shared experience buffer if enabled
             if use_shared_buffer:
                 # Format experience for shared buffer
@@ -526,66 +528,66 @@ def train_multi_agent(
                     "done": agent_done
                 }
                 shared_buffer.append(experience)
-                
+
                 # Trim buffer if it exceeds max size
                 if len(shared_buffer) > max_buffer_size:
                     shared_buffer.pop(0)
-        
+
         # Update tracking
         current_episode_length += 1
         steps_done += 1
         steps_since_update += 1
-        
+
         # Update observations for next step
         obs_dict = next_obs_dict
-        
+
         # End of episode logic
         if episode_done:
             # Log episode results for each agent
             for agent_id in agents.keys():
                 episode_rewards[agent_id].append(current_episode_rewards[agent_id])
-                
+
                 # Log to MLflow if available
                 if mlflow_manager is not None:
                     # Ensure values are native Python float for MLflow
                     reward = float(current_episode_rewards[agent_id])
-                    avg_reward = float(np.mean(episode_rewards[agent_id][-100:]) 
+                    avg_reward = float(np.mean(episode_rewards[agent_id][-100:])
                                      if episode_rewards[agent_id] else 0.0)
                     mlflow_manager.log_metric(f"{agent_id}/episode_reward", reward, step=episode_num)
                     mlflow_manager.log_metric(f"{agent_id}/avg_reward_100", avg_reward, step=episode_num)
-            
+
             # Add episode length to tracking
             episode_lengths.append(current_episode_length)
-            
+
             # Reset environment and trackers
             obs_dict, info = env.reset()
             current_episode_rewards = {agent_id: 0 for agent_id in agents.keys()}
             current_episode_length = 0
             episode_num += 1
-            
+
             # Log episode stats
             if episode_num % log_interval == 0:
                 episode_avg_rewards = {
                     agent_id: np.mean(episode_rewards[agent_id][-log_interval:])
                     for agent_id in agents.keys()
                 }
-                
+
                 logger.info(
                     f"Episode {episode_num} | "
                     f"Steps: {steps_done} | "
                     f"Avg rewards: {episode_avg_rewards} | "
                     f"Time elapsed: {time.time() - training_start_time:.2f}s"
                 )
-        
+
         # Update agents with collected experiences if enough steps
         if steps_since_update >= update_interval:
             logger.info(f"Updating agents after collecting {steps_since_update} steps...")
-            
+
             # Update each agent with its own experiences
             for agent_id, agent in agents.items():
                 if hasattr(agent, "update_if_buffer_ready"):
                     update_results = agent.update_if_buffer_ready()
-                    
+
                     if update_results:
                         # Log update metrics for this agent
                         logger.info(
@@ -594,38 +596,38 @@ def train_multi_agent(
                             f"value_loss={update_results.get('value_loss', 0):.4f}, "
                             f"entropy={update_results.get('entropy', 0):.4f}"
                         )
-                        
+
                         # Log to MLflow if available
                         if mlflow_manager is not None:
                             mlflow_metrics = {
-                                f"{agent_id}/{k}": float(v) 
+                                f"{agent_id}/{k}": float(v)
                                 for k, v in update_results.items() if v is not None
                             }
                             mlflow_manager.log_metrics(mlflow_metrics, step=steps_done)
-            
+
             # Reset steps counter
             steps_since_update = 0
-            
+
             # After updating, let agents learn from shared experiences if enabled
             if use_shared_buffer and len(shared_buffer) > 0:
                 for agent_id, agent in agents.items():
                     if hasattr(agent, "learn_from_shared_experience"):
                         agent.learn_from_shared_experience(shared_buffer)
-        
+
         # Periodic evaluation
         if steps_done % eval_interval == 0:
             eval_rewards = evaluate_multi_agent(agents, env)
-            
+
             # Log evaluation results
             for agent_id, rewards in eval_rewards.items():
                 avg_eval_reward = np.mean(rewards)
-                
+
                 logger.info(
                     f"Agent {agent_id} | "
                     f"Step {steps_done} | "
                     f"Evaluation avg reward: {avg_eval_reward:.4f}"
                 )
-                
+
                 # Save best model
                 if avg_eval_reward > best_eval_rewards[agent_id]:
                     best_eval_rewards[agent_id] = avg_eval_reward
@@ -633,34 +635,34 @@ def train_multi_agent(
                     if hasattr(agents[agent_id], "save"):
                         agents[agent_id].save(best_model_path)
                         logger.info(f"Saved best model for agent {agent_id} with reward {avg_eval_reward:.4f}")
-                
+
                 # Log to MLflow if available
                 if mlflow_manager is not None:
                     for i, reward in enumerate(rewards):
                         mlflow_manager.log_metric(f"{agent_id}/eval_episode_{i+1}_reward", reward, step=steps_done)
                     mlflow_manager.log_metric(f"{agent_id}/eval_avg_reward", avg_eval_reward, step=steps_done)
-        
+
         # Checkpoint saving
         if steps_done % checkpoint_interval == 0:
             for agent_id, agent in agents.items():
                 if hasattr(agent, "save"):
                     checkpoint_path = os.path.join(
-                        agent_checkpoint_dirs[agent_id], 
+                        agent_checkpoint_dirs[agent_id],
                         f"checkpoint_{steps_done}.pt"
                     )
                     agent.save(checkpoint_path)
-            
+
             logger.info(f"Saved checkpoints at step {steps_done}")
-    
+
     # Final evaluation
     final_eval_rewards = evaluate_multi_agent(agents, env, num_episodes=10)
     final_avg_rewards = {
-        agent_id: np.mean(rewards) 
+        agent_id: np.mean(rewards)
         for agent_id, rewards in final_eval_rewards.items()
     }
-    
+
     logger.info(f"Training completed. Final evaluation rewards: {final_avg_rewards}")
-    
+
     # Save final models
     final_model_paths = {}
     best_model_paths = {}
@@ -671,11 +673,11 @@ def train_multi_agent(
             os.makedirs(os.path.dirname(final_model_path), exist_ok=True)
             agent.save(final_model_path)
             final_model_paths[agent_id] = final_model_path
-            
+
             # Save path to best model (for compatibility with tests)
             best_model_path = os.path.join(agent_checkpoint_dirs[agent_id], "best_model.pt")
             best_model_paths[agent_id] = best_model_path if best_eval_rewards[agent_id] > float('-inf') else None
-    
+
     # Compile and return results
     results = {
         "episode_rewards": episode_rewards,
@@ -686,97 +688,97 @@ def train_multi_agent(
         "training_time": time.time() - training_start_time,
         "episode_lengths": episode_lengths,
     }
-    
+
     return results
 
 def evaluate_agent(agent, env, num_episodes: int = 5) -> List[float]:
     """
     Evaluate an agent's performance in an environment.
-    
+
     Args:
         agent: The agent to evaluate
         env: The environment to evaluate in
         num_episodes: Number of evaluation episodes
-        
+
     Returns:
         List of rewards achieved in each episode
     """
     rewards = []
-    
+
     for episode in range(num_episodes):
         episode_reward = 0
         obs, info = env.reset()
         done = False
         truncated = False
-        
+
         while not (done or truncated):
             # Get action without exploration
             action = agent.get_action(obs, eval_mode=True)
-            
+
             # Take step in environment
             obs, reward, done, truncated, info = env.step(action)
-            
+
             # Update reward
             episode_reward += reward
-        
+
         rewards.append(episode_reward)
-    
+
     return rewards
 
 def evaluate_multi_agent(agents, env, num_episodes: int = 5) -> Dict[str, List[float]]:
     """
     Evaluate multiple agents' performance in a multi-agent environment.
-    
+
     Args:
         agents: Dictionary mapping agent IDs to agent instances
         env: Multi-agent environment
         num_episodes: Number of evaluation episodes
-        
+
     Returns:
         Dictionary mapping agent IDs to lists of rewards
     """
     rewards = {agent_id: [] for agent_id in agents.keys()}
-    
+
     for episode in range(num_episodes):
         episode_rewards = {agent_id: 0 for agent_id in agents.keys()}
         obs_dict, info = env.reset()
-        
+
         done = False
         truncated = False
-        
+
         while not (done or truncated):
             # Get actions without exploration (deterministic)
             actions = {}
             for agent_id, agent in agents.items():
                 actions[agent_id] = agent.get_action(obs_dict[agent_id], deterministic=True)
-            
+
             # Take step in environment
             obs_dict, step_rewards, dones, truncated, info = env.step(actions)
-            
+
             # Update rewards
             for agent_id in agents.keys():
                 episode_rewards[agent_id] += step_rewards[agent_id]
-            
+
             # Check if episode is done
             done = truncated or all(dones.values())
-        
+
         # Record episode rewards
         for agent_id in agents.keys():
             rewards[agent_id].append(episode_rewards[agent_id])
-    
+
     return rewards
 
 def train_pipeline(config: Dict[str, Any], data: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
     """
     Unified training pipeline for single/multi agent RL for trading.
-    
+
     This function handles creation of environments, agents, and manages the training
     process based on the provided configuration.
-    
+
     Args:
         config: Configuration dictionary
         data: Optional data to use for training (if not provided, will load from config)
-        
+
     Returns:
         Dictionary with training results
     """
@@ -794,10 +796,10 @@ def train_pipeline(config: Dict[str, Any], data: Optional[pd.DataFrame] = None) 
     # Extract paths from config
     paths_config = config.get("paths", {})
     checkpoint_dir = paths_config.get("checkpoint_dir", "checkpoints")
-    
+
     # Ensure checkpoint directory exists
     os.makedirs(checkpoint_dir, exist_ok=True)
-    
+
     # Set random seed if provided
     if "seed" in config.get("training", {}):
         seed = config["training"]["seed"]
@@ -806,10 +808,10 @@ def train_pipeline(config: Dict[str, Any], data: Optional[pd.DataFrame] = None) 
         if torch.cuda.is_available():
             torch.cuda.manual_seed(seed)
         logger.info(f"Set random seed to {seed}")
-    
+
     # Get MLflow manager if provided
     mlflow_manager = config.get("mlflow_manager", None)
-    
+
     # Split data: last 20% as eval, remainder as training
     eval_data_split: Optional[pd.DataFrame] = None
     if data is not None and len(data) > 0:
@@ -903,7 +905,7 @@ def train_pipeline(config: Dict[str, Any], data: Optional[pd.DataFrame] = None) 
         results = train_multi_agent(agents_dict, env, config, mlflow_manager)
     else:
         raise ValueError(f"Unsupported environment type: {env_type}")
-    
+
     logger.info("Training pipeline completed")
     if regime_detector is not None:
         results["regime_detector"] = regime_detector
@@ -917,12 +919,12 @@ class nullcontext:
 def flatten_dict(d: Dict[str, Any], parent_key: str = '', sep: str = '.') -> Dict[str, Any]:
     """
     Flatten a nested dictionary for MLflow parameter logging.
-    
+
     Args:
         d: Dictionary to flatten
         parent_key: Parent key for nested dictionaries
         sep: Separator between keys
-        
+
     Returns:
         Flattened dictionary
     """
@@ -936,7 +938,7 @@ def flatten_dict(d: Dict[str, Any], parent_key: str = '', sep: str = '.') -> Dic
             items.append((new_key, str(v)))
         else:
             items.append((new_key, v))
-    return dict(items) 
+    return dict(items)
 
 def train_multi_agent_with_manager(
     env,
@@ -948,28 +950,28 @@ def train_multi_agent_with_manager(
 ) -> Dict[str, Any]:
     """
     Train multiple agents using the MultiAgentManager for coordination.
-    
+
     Features:
     - Integrates with MultiAgentManager for meta-agent and shared buffer functionality
     - Supports ensemble methods: weighted, best, meta
     - Handles coordinated decision making across agents
     - Enables experience sharing between agents
     - Manages meta-agent training if ensemble_method is "meta"
-    
+
     Implementation Notes:
     - Uses the manager.act() method for coordinated action selection
     - Leverages manager.train_step() for integrated agent training
     - Automatically manages shared experience buffer
     - Supports both standard sub-agents and meta-agent training
     - Maintains compatibility with MLflow tracking
-    
+
     Recent Changes:
     - Initial implementation integrating with MultiAgentManager
     - Added support for multiple ensemble methods
     - Integrated proper checkpointing for manager and agents
     - Enhanced experience sharing with meta-agent coordination
     - Added compatibility with both 4-value and 5-value returns from env.step()
-    
+
     Args:
         env: Multi-agent environment
         agent_configs: List of sub-agent configurations
@@ -977,12 +979,12 @@ def train_multi_agent_with_manager(
         ensemble_method: Method for action selection ("weighted", "best", "meta")
         config: Configuration dictionary
         mlflow_manager: Optional MLflow manager for logging
-        
+
     Returns:
         Dictionary with training results
     """
     from agents.strategies.multi.multi_agent_manager import MultiAgentManager
-    
+
     # Default config if not provided
     if config is None:
         config = {
@@ -996,7 +998,7 @@ def train_multi_agent_with_manager(
                 "checkpoint_dir": "checkpoints"
             }
         }
-    
+
     # Extract training parameters
     training_config = config.get("training", {})
     total_timesteps = training_config.get("total_timesteps", 100000)
@@ -1007,11 +1009,11 @@ def train_multi_agent_with_manager(
     paths_config = config.get("paths", {})
     checkpoint_dir = paths_config.get("checkpoint_dir", "checkpoints")
     manager_checkpoint_dir = os.path.join(checkpoint_dir, "manager")
-    
+
     # Ensure checkpoint directories exist
     os.makedirs(checkpoint_dir, exist_ok=True)
     os.makedirs(manager_checkpoint_dir, exist_ok=True)
-    
+
     # If ensemble method is "meta" and no meta_config provided, create a default one
     if ensemble_method == "meta" and meta_config is None:
         # Estimate observation size as sum of all agent observation spaces
@@ -1026,12 +1028,12 @@ def train_multi_agent_with_manager(
             "hidden_dim": 128,
             "continuous_ensemble": True  # Use continuous weights instead of discrete selection
         }
-    
+
     # Add meta_config to agent_configs if using meta ensemble
     all_configs = agent_configs.copy()
     if ensemble_method == "meta" and meta_config is not None:
         all_configs.append(meta_config)
-    
+
     # Create MultiAgentManager
     logger.info(f"Creating MultiAgentManager with ensemble method: {ensemble_method}")
     manager = MultiAgentManager(
@@ -1039,43 +1041,43 @@ def train_multi_agent_with_manager(
         ensemble_method=ensemble_method,
         min_share_reward=0.2  # Minimum reward threshold for sharing experiences
     )
-    
+
     # Initialize tracking variables
     episode_rewards = {agent_id: [] for agent_id in env.agents}
     episode_lengths = []
     best_eval_rewards = {agent_id: float('-inf') for agent_id in env.agents}
-    
+
     # 메타 에이전트 ID 추적 (manager에서 가져옴)
     meta_agent_id = manager.meta_agent_id
     if meta_agent_id:
         best_eval_rewards[meta_agent_id] = float('-inf')
         logger.info(f"Meta agent ID detected: {meta_agent_id}")
-    
+
     # Create checkpoint directories
     checkpoint_dir = os.path.join(config.get("checkpoint_dir", "checkpoints"))
     manager_checkpoint_dir = os.path.join(checkpoint_dir, "manager")
     os.makedirs(manager_checkpoint_dir, exist_ok=True)
-    
+
     # Training loop
     training_start_time = time.time()
     total_steps = 0
     episode = 0
-    
+
     # 환경 초기화
     obs_dict, info = env.reset()
-    
+
     # 에피소드 보상 초기화
     current_episode_rewards = {agent_id: 0 for agent_id in env.agents}
     current_episode_length = 0
-    
+
     # Main training loop
     while total_steps < total_timesteps:
         # Get actions from manager - handles ensemble logic internally
         actions = manager.act(obs_dict, deterministic=False)
-        
+
         # Take step in environment - handle both 4-value and 5-value returns
         step_result = env.step(actions)
-        
+
         # Check if step_result has 4 or 5 elements (handle different Gym versions)
         if len(step_result) == 5:
             next_obs_dict, rewards, dones, truncated, info = step_result
@@ -1086,13 +1088,13 @@ def train_multi_agent_with_manager(
             truncated = False  # Set default value
             # Episode termination logic
             episode_done = all(dones.values())
-        
+
         # Create experiences dictionary for manager
         experiences = {}
         for agent_id in env.agents:
             # Get agent-specific done flag - either this agent is done or episode is truncated
             agent_done = bool(dones[agent_id] or truncated)
-            
+
             experiences[agent_id] = {
                 "observation": obs_dict[agent_id],
                 "action": actions[agent_id],
@@ -1101,81 +1103,81 @@ def train_multi_agent_with_manager(
                 "done": agent_done,
                 "info": info.get(agent_id, {})
             }
-            
+
             # Track reward for this agent
             current_episode_rewards[agent_id] += rewards[agent_id]
-        
+
         # Train agents through manager - handles meta-agent and shared experiences
         metrics = manager.train_step(experiences)
-        
+
         # Update tracking
         current_episode_length += 1
         total_steps += 1
-        
+
         # Update observations for next step
         obs_dict = next_obs_dict
-        
+
         # End of episode logic
         if episode_done:
             # Log episode results for each agent
             for agent_id in env.agents:
                 episode_rewards[agent_id].append(current_episode_rewards[agent_id])
-                
+
                 # Log to MLflow if available
                 if mlflow_manager is not None:
                     reward = float(current_episode_rewards[agent_id])
-                    avg_reward = float(np.mean(episode_rewards[agent_id][-100:]) 
+                    avg_reward = float(np.mean(episode_rewards[agent_id][-100:])
                                     if episode_rewards[agent_id] else 0.0)
                     mlflow_manager.log_metric(f"{agent_id}/episode_reward", reward, step=episode)
                     mlflow_manager.log_metric(f"{agent_id}/avg_reward_100", avg_reward, step=episode)
-            
+
             # Add episode length to tracking
             episode_lengths.append(current_episode_length)
-            
+
             # Reset environment and trackers
             obs_dict, info = env.reset()
             current_episode_rewards = {agent_id: 0 for agent_id in env.agents}
             current_episode_length = 0
             episode += 1
-            
+
             # Log episode stats
             if episode % log_interval == 0:
                 episode_avg_rewards = {
                     agent_id: np.mean(episode_rewards[agent_id][-log_interval:])
                     for agent_id in env.agents
                 }
-                
+
                 logger.info(
                     f"Episode {episode} | "
                     f"Steps: {total_steps} | "
                     f"Avg rewards: {episode_avg_rewards} | "
                     f"Time elapsed: {time.time() - training_start_time:.2f}s"
                 )
-        
+
         # Periodic evaluation
         if total_steps % eval_interval == 0:
             # Evaluate using manager for proper ensemble coordination
             eval_returns = evaluate_with_manager(env, manager, num_episodes=5)
-            
+
             # Log evaluation results
             for agent_id, returns in eval_returns.items():
                 avg_eval_return = np.mean(returns)
-                
+
                 logger.info(
                     f"Agent {agent_id} | "
                     f"Step {total_steps} | "
                     f"Evaluation avg return: {avg_eval_return:.4f}"
                 )
-                
+
                 # best_eval_rewards에 agent_id가 없으면 초기화
                 if agent_id not in best_eval_rewards:
                     logger.warning(f"Agent {agent_id} not found in best_eval_rewards. Initializing.")
                     best_eval_rewards[agent_id] = float('-inf')
-                
+
                 # Save best model for individual agents
                 if avg_eval_return > best_eval_rewards[agent_id]:
                     best_eval_rewards[agent_id] = avg_eval_return
-                    
+
                     # Save individual agent if it's in the manager
                     if agent_id in manager.agents:
                         best_model_path = os.path.join(checkpoint_dir, agent_id, "best_model.pt")
@@ -1183,50 +1185,50 @@ def train_multi_agent_with_manager(
                         if hasattr(manager.agents[agent_id], "save"):
                             manager.agents[agent_id].save(best_model_path)
                             logger.info(f"Saved best model for agent {agent_id} with return {avg_eval_return:.4f}")
-                
+
                 # Log to MLflow if available
                 if mlflow_manager is not None:
                     for i, reward in enumerate(returns):
                         mlflow_manager.log_metric(f"{agent_id}/eval_episode_{i+1}_return", reward, step=total_steps)
                     mlflow_manager.log_metric(f"{agent_id}/eval_avg_return", avg_eval_return, step=total_steps)
-            
+
             # Save entire manager for ensemble functionality
             manager_checkpoint_path = os.path.join(manager_checkpoint_dir, f"manager_best.pt")
             manager.save(manager_checkpoint_path)
             logger.info(f"Saved best manager checkpoint at step {total_steps}")
-        
+
         # Regular checkpoint saving
         if total_steps % checkpoint_interval == 0:
             # Save manager
             manager_checkpoint_path = os.path.join(manager_checkpoint_dir, f"manager_step_{total_steps}.pt")
             manager.save(manager_checkpoint_path)
-            
+
             # Save individual agents
             for agent_id, agent in manager.agents.items():
                 if hasattr(agent, "save"):
                     agent_checkpoint_path = os.path.join(checkpoint_dir, agent_id, f"checkpoint_{total_steps}.pt")
                     os.makedirs(os.path.dirname(agent_checkpoint_path), exist_ok=True)
                     agent.save(agent_checkpoint_path)
-            
+
             logger.info(f"Saved checkpoints at step {total_steps}")
-    
+
     # Final evaluation
     final_eval_returns = evaluate_with_manager(env, manager, num_episodes=10)
     final_avg_returns = {
-        agent_id: np.mean(returns) 
+        agent_id: np.mean(returns)
         for agent_id, returns in final_eval_returns.items()
     }
-    
+
     logger.info(f"Training completed. Final evaluation returns: {final_avg_returns}")
-    
+
     # Save final models
     final_model_paths = {}
     best_model_paths = {}
-    
+
     # Save manager to final path
     final_manager_path = os.path.join(manager_checkpoint_dir, "final_manager.pt")
     manager.save(final_manager_path)
-    
+
     # Save individual agents and track paths for compatibility with existing tests
     for agent_id, agent in manager.agents.items():
         if hasattr(agent, "save"):
@@ -1235,11 +1237,11 @@ def train_multi_agent_with_manager(
             os.makedirs(os.path.dirname(final_model_path), exist_ok=True)
             agent.save(final_model_path)
             final_model_paths[agent_id] = final_model_path
-            
+
             # Save path to best model (for compatibility with tests)
             best_model_path = os.path.join(checkpoint_dir, agent_id, "best_model.pt")
             best_model_paths[agent_id] = best_model_path if best_eval_rewards[agent_id] > float('-inf') else None
-    
+
     # Compile and return results
     results = {
         "episode_rewards": episode_rewards,
@@ -1249,51 +1251,51 @@ def train_multi_agent_with_manager(
         "episode_lengths": episode_lengths,
         "manager": manager  # Include the manager in results
     }
-    
+
     return results
 
 def evaluate_with_manager(env, manager, num_episodes: int = 5) -> Dict[str, List[float]]:
     """
     Evaluate agents using MultiAgentManager with deterministic policy.
-    
+
     Features:
     - Evaluates all agents coordinated by the manager
     - Uses deterministic policy for stable evaluation
     - Tracks returns for each agent
     - Handles proper environment reset and termination
-    
+
     Implementation Notes:
     - Uses manager.act() with deterministic=True for action selection
     - Resets environment between episodes
     - Properly handles episode termination
     - Compatible with both 4-value and 5-value env.step() returns
-    
+
     Recent Changes:
     - Initial implementation for manager-based evaluation
     - Added compatibility with both gym versions
-    
+
     Args:
         env: Multi-agent environment
         manager: MultiAgentManager instance
         num_episodes: Number of episodes to evaluate
-        
+
     Returns:
         Dictionary mapping agent_id to list of episode returns
     """
     returns = {agent_id: [] for agent_id in env.agents}
-    
+
     for episode in range(num_episodes):
         episode_returns = {agent_id: 0 for agent_id in env.agents}
         obs_dict, info = env.reset()
-        
+
         done = False
         while not done:
             # Get actions deterministically
             actions = manager.act(obs_dict, deterministic=True)
-            
+
             # Step environment - handle both gym versions
             step_result = env.step(actions)
-            
+
             # Check if step_result has 4 or 5 elements
             if len(step_result) == 5:
                 next_obs_dict, rewards, dones, truncated, info = step_result
@@ -1303,16 +1305,16 @@ def evaluate_with_manager(env, manager, num_episodes: int = 5) -> Dict[str, List
                 next_obs_dict, rewards, dones, info = step_result
                 # Check if episode is done
                 done = all(dones.values())
-            
+
             # Update returns
             for agent_id, reward in rewards.items():
                 episode_returns[agent_id] += reward
-            
+
             # Update observations
             obs_dict = next_obs_dict
-        
+
         # Add episode returns for each agent
         for agent_id, return_ in episode_returns.items():
             returns[agent_id].append(return_)
-    
-    return returns 
+
+    return returns
