@@ -293,65 +293,99 @@ class WalkForwardValidator:
             # After training, roll out a few episodes to score IS Sharpe.
             return WalkForwardValidator._evaluate(agent, env, max(1, eval_episodes))
 
-        # Legacy custom-wrapper path
-        episode_returns = []
+        # Legacy custom-wrapper path: collect per-episode portfolio % returns
+        # while training step-by-step.
+        episode_returns: List[float] = []
         obs, _ = env.reset()
-        ep_reward = 0.0
+        last_info: Dict[str, Any] = {}
         steps = 0
 
         while steps < total_timesteps:
             action = agent.get_action(obs)
-            next_obs, reward, done, truncated, info = env.step(action)
+            next_obs, reward, done, truncated, last_info = env.step(action)
             agent.train_step(obs, action, reward, next_obs, done or truncated)
-            ep_reward += reward
             obs = next_obs
             steps += 1
 
             if done or truncated:
-                episode_returns.append(ep_reward)
-                ep_reward = 0.0
+                episode_returns.append(
+                    WalkForwardValidator._episode_pv_return(env, last_info)
+                )
                 obs, _ = env.reset()
+                last_info = {}
 
-        # Final incomplete episode
-        if ep_reward != 0.0:
-            episode_returns.append(ep_reward)
+        # Final incomplete episode — only count if we actually took steps
+        if last_info:
+            episode_returns.append(
+                WalkForwardValidator._episode_pv_return(env, last_info)
+            )
 
         return np.array(episode_returns, dtype=np.float64)
 
     @staticmethod
+    def _episode_pv_return(env, info_at_end) -> float:
+        """Per-episode % return from portfolio value, falling back to env attr.
+
+        SingleAssetRLTradingEnv exposes ``portfolio_value`` both as an attribute
+        and via the info dict. Episodes can end via truncation/early termination,
+        so we trust info first and fall back to the env attribute.
+        """
+        end_pv = None
+        if isinstance(info_at_end, dict):
+            end_pv = info_at_end.get("portfolio_value")
+        if end_pv is None:
+            end_pv = getattr(env, "portfolio_value", None)
+        start_pv = getattr(env, "initial_capital", None)
+        if end_pv is None or start_pv is None or start_pv <= 0:
+            return 0.0
+        return float((end_pv - start_pv) / start_pv)
+
+    @staticmethod
     def _evaluate(agent, env, n_episodes: int) -> np.ndarray:
-        """Evaluate agent without training. Returns per-episode returns."""
+        """Evaluate agent without training. Returns per-episode % returns
+        based on portfolio value, NOT raw reward sums (which are scaled and
+        clipped and so do not have %-return semantics).
+
+        Uses stochastic policy sampling (deterministic=False). Our env always
+        resets to the same starting step, so a deterministic policy would
+        produce N identical episodes — std ≈ 0 → Sharpe explodes to ±∞.
+        Sampling from the policy distribution restores meaningful variance.
+        """
         returns = []
         for _ in range(n_episodes):
             obs, _ = env.reset()
-            ep_reward = 0.0
             done = False
+            last_info: Dict[str, Any] = {}
             while not done:
-                action = WalkForwardValidator._agent_action(agent, obs, deterministic=True)
-                obs, reward, done, truncated, _ = env.step(action)
-                ep_reward += reward
+                action = WalkForwardValidator._agent_action(agent, obs, deterministic=False)
+                obs, _reward, done, truncated, last_info = env.step(action)
                 if truncated:
                     break
-            returns.append(ep_reward)
+            returns.append(WalkForwardValidator._episode_pv_return(env, last_info))
         return np.array(returns, dtype=np.float64)
 
     @staticmethod
     def _compute_sharpe(returns: np.ndarray, risk_free: float = 0.0) -> float:
-        """Annualised Sharpe ratio (assumes daily returns for episodes)."""
+        """Sharpe ratio of per-episode % returns. NOT annualised — episodes
+        do not have a fixed calendar mapping (they end on capital-floor
+        breach, truncation, or end-of-data), so a sqrt(252) factor would be
+        meaningless. Multiply externally if a calibrated time mapping exists."""
         if len(returns) < 2:
             return 0.0
         excess = returns - risk_free
         std = np.std(excess, ddof=1)
         if std < 1e-8:
             return 0.0
-        return float(np.mean(excess) / std * np.sqrt(252))
+        return float(np.mean(excess) / std)
 
     @staticmethod
     def _max_drawdown(returns: np.ndarray) -> float:
-        """Maximum drawdown from cumulative returns."""
+        """Max drawdown of the cumulative-product equity curve, as a
+        fraction in [0, 1] (0.30 means a 30 % peak-to-trough decline)."""
         if len(returns) == 0:
             return 0.0
-        cumulative = np.cumsum(returns)
-        running_max = np.maximum.accumulate(cumulative)
-        drawdowns = running_max - cumulative
-        return float(np.max(drawdowns)) if len(drawdowns) > 0 else 0.0
+        nav = np.cumprod(1.0 + returns)
+        running_max = np.maximum.accumulate(nav)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            dd = np.where(running_max > 0, (running_max - nav) / running_max, 0.0)
+        return float(np.max(dd)) if len(dd) > 0 else 0.0
