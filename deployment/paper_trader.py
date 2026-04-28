@@ -685,9 +685,10 @@ class PaperTrader:
         if cost > self.state.pos.cash:
             return
         self.state.pos.apply_buy(quantity=quantity, price=price, fee=fee)
+        _buy_ts = datetime.utcnow()
         self.state.trades.append(
             Trade(
-                timestamp=datetime.utcnow(),
+                timestamp=_buy_ts,
                 side="buy",
                 price=price,
                 quantity=quantity,
@@ -695,6 +696,18 @@ class PaperTrader:
             )
         )
         logger.debug("BUY qty=%.6f price=%.2f fee=%.4f", quantity, price, fee)
+        # A6: log fill to audit chain for cost decomposition
+        if self.audit_logger is not None:
+            self.audit_logger.log_fill({
+                "fill_id": f"buy_{_buy_ts.strftime('%Y%m%dT%H%M%S%f')}",
+                "side": "buy",
+                "price": price,
+                "mid_price": price,
+                "quantity": quantity,
+                "fee": fee,
+                "pnl": 0.0,
+                "entry_price": 0.0,
+            })
 
         if self.order_manager is not None:
             try:
@@ -721,10 +734,12 @@ class PaperTrader:
         if sell_qty < 1e-8:
             return
         fee = sell_qty * price * self.trading_fee
+        _entry_price = self.state.pos.entry_price  # capture before apply_sell clears it
         pnl = self.state.pos.apply_sell(quantity=sell_qty, price=price, fee=fee)
+        _sell_ts = datetime.utcnow()
         self.state.trades.append(
             Trade(
-                timestamp=datetime.utcnow(),
+                timestamp=_sell_ts,
                 side="sell",
                 price=price,
                 quantity=sell_qty,
@@ -733,6 +748,18 @@ class PaperTrader:
             )
         )
         logger.debug("SELL qty=%.6f price=%.2f pnl=%.4f", sell_qty, price, pnl)
+        # A6: log fill to audit chain for cost decomposition
+        if self.audit_logger is not None:
+            self.audit_logger.log_fill({
+                "fill_id": f"sell_{_sell_ts.strftime('%Y%m%dT%H%M%S%f')}",
+                "side": "sell",
+                "price": price,
+                "mid_price": price,
+                "quantity": sell_qty,
+                "fee": fee,
+                "pnl": pnl,
+                "entry_price": _entry_price,
+            })
 
         if self.order_manager is not None:
             try:

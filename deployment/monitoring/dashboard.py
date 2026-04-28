@@ -4,6 +4,8 @@ Minimal HTTP dashboard for real-time trading metrics.
 Serves:
   GET /metrics          → JSON snapshot of current trading state
   GET /metrics/history  → JSON array of recent snapshots (last 100)
+  GET /model-drift      → ModelDriftDetector snapshot (A5; disabled if not wired)
+  GET /cost-breakdown   → CostDecomposer cumulative 4-axis summary (A6; disabled if not wired)
   GET /health           → {"status": "ok"}
 
 Usage:
@@ -26,6 +28,7 @@ def start_dashboard(
     metrics_exporter,
     port: int = 8080,
     model_drift_detector=None,
+    cost_decomposer=None,
 ) -> threading.Thread:
     """Start dashboard HTTP server in a daemon thread.
 
@@ -34,6 +37,8 @@ def start_dashboard(
         port: HTTP port (default 8080)
         model_drift_detector: Optional ModelDriftDetector (A5). When supplied,
             exposes a ``/model-drift`` endpoint with current snapshot.
+        cost_decomposer: Optional CostDecomposer (A6). When supplied,
+            exposes a ``/cost-breakdown`` endpoint with cumulative 4-axis summary.
 
     Returns:
         threading.Thread: The daemon thread running the server
@@ -60,6 +65,36 @@ def start_dashboard(
             elif self.path == "/model-drift":
                 if model_drift_detector is not None:
                     self._json_response(200, model_drift_detector.snapshot())
+                else:
+                    self._json_response(200, {"status": "disabled"})
+            elif self.path == "/cost-breakdown":
+                if cost_decomposer is not None:
+                    summary = cost_decomposer.cumulative_summary()
+                    daily = cost_decomposer.all_daily_summaries()
+                    data = {
+                        "cumulative": {
+                            "num_fills": summary.num_fills,
+                            "total_signal_pnl": summary.total_signal_pnl,
+                            "total_slippage_pnl": summary.total_slippage_pnl,
+                            "total_fee_pnl": summary.total_fee_pnl,
+                            "total_funding_pnl": summary.total_funding_pnl,
+                            "total_pnl": summary.total_pnl,
+                            "avg_slippage_per_fill": summary.avg_slippage_per_fill,
+                        },
+                        "daily": [
+                            {
+                                "date": str(s.date),
+                                "num_fills": s.num_fills,
+                                "total_signal_pnl": s.total_signal_pnl,
+                                "total_slippage_pnl": s.total_slippage_pnl,
+                                "total_fee_pnl": s.total_fee_pnl,
+                                "total_funding_pnl": s.total_funding_pnl,
+                                "total_pnl": s.total_pnl,
+                            }
+                            for s in daily
+                        ],
+                    }
+                    self._json_response(200, data)
                 else:
                     self._json_response(200, {"status": "disabled"})
             elif self.path == "/health":
