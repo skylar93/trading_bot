@@ -47,7 +47,7 @@ class _DummyEnv:
         self.data = data
         self._step = 0
 
-    def reset(self):
+    def reset(self, seed=None, options=None):
         self._step = 0
         return np.zeros(4), {}
 

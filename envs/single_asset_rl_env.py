@@ -309,7 +309,18 @@ class SingleAssetRLTradingEnv(gym.Env):
             raise ValueError("No data provided to environment")
 
         # Reset state variables
-        self.current_step = self.window_size  # Start at window_size
+        options = options or {}
+        ds_len = self._ds_len()
+        if (
+            options.get("random_start")
+            and ds_len > self.window_size + self.min_episode_steps + 1
+        ):
+            max_start = ds_len - self.min_episode_steps - 1
+            self.current_step = int(
+                self.np_random.integers(self.window_size, max_start + 1)
+            )
+        else:
+            self.current_step = self.window_size
         self.current_position = 0.0
         self.current_capital = self.initial_capital
         self.portfolio_value = self.initial_capital

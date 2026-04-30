@@ -36,6 +36,9 @@ class FoldResult:
     oos_returns: np.ndarray = field(repr=False, default_factory=lambda: np.array([]))
     oos_max_drawdown: float = 0.0
     oos_total_return: float = 0.0
+    # random-start eval fields (populated only when random_start_eval=True)
+    oos_sharpe_random: float = 0.0
+    oos_total_return_random: float = 0.0
     metrics: Dict[str, float] = field(default_factory=dict)
 
 
@@ -71,6 +74,14 @@ class WalkForwardResult:
     def mean_max_drawdown(self) -> float:
         return float(np.mean([f.oos_max_drawdown for f in self.folds])) if self.folds else 0.0
 
+    @property
+    def oos_total_return_mean(self) -> float:
+        return float(np.mean([f.oos_total_return for f in self.folds])) if self.folds else 0.0
+
+    @property
+    def oos_total_return_random_mean(self) -> float:
+        return float(np.mean([f.oos_total_return_random for f in self.folds])) if self.folds else 0.0
+
     def summary(self) -> Dict[str, float]:
         return {
             "oos_sharpe_mean": self.oos_sharpe,
@@ -79,6 +90,8 @@ class WalkForwardResult:
             "stability_ratio": self.stability_ratio,
             "mean_max_drawdown": self.mean_max_drawdown,
             "n_folds": len(self.folds),
+            "oos_total_return_mean": self.oos_total_return_mean,
+            "oos_total_return_random_mean": self.oos_total_return_random_mean,
         }
 
 
@@ -178,6 +191,7 @@ class WalkForwardValidator:
         data: pd.DataFrame,
         total_timesteps: int = 10000,
         eval_episodes: int = 5,
+        random_start_eval: bool = False,
     ) -> WalkForwardResult:
         """Run full walk-forward validation.
 
@@ -211,12 +225,22 @@ class WalkForwardValidator:
             )
             is_sharpe = self._compute_sharpe(is_returns)
 
-            # Test (out-of-sample)
+            # Test (out-of-sample) — fixed start
             test_env = env_factory(test_df)
-            oos_returns = self._evaluate(agent, test_env, eval_episodes)
+            oos_returns = self._evaluate(agent, test_env, eval_episodes, random_start=False)
             oos_sharpe = self._compute_sharpe(oos_returns)
             oos_dd = self._max_drawdown(oos_returns)
-            oos_total = float(np.sum(oos_returns)) if len(oos_returns) > 0 else 0.0
+            oos_total = float(np.mean(oos_returns)) if len(oos_returns) > 0 else 0.0
+
+            # Test (out-of-sample) — random start (optional)
+            oos_sharpe_random = 0.0
+            oos_total_random = 0.0
+            if random_start_eval:
+                oos_returns_random = self._evaluate(
+                    agent, test_env, eval_episodes, random_start=True
+                )
+                oos_sharpe_random = self._compute_sharpe(oos_returns_random)
+                oos_total_random = float(np.mean(oos_returns_random)) if len(oos_returns_random) > 0 else 0.0
 
             fold = FoldResult(
                 fold_idx=i,
@@ -227,12 +251,15 @@ class WalkForwardValidator:
                 oos_returns=oos_returns,
                 oos_max_drawdown=oos_dd,
                 oos_total_return=oos_total,
+                oos_sharpe_random=oos_sharpe_random,
+                oos_total_return_random=oos_total_random,
             )
             folds.append(fold)
 
+            _rand_suffix = (f" | random-start OOS return={oos_total_random:.4f}") if random_start_eval else ""
             logger.info(
-                "Fold %d result — IS Sharpe=%.3f, OOS Sharpe=%.3f, OOS DD=%.3f",
-                i + 1, is_sharpe, oos_sharpe, oos_dd,
+                "Fold %d result — IS Sharpe=%.3f, OOS Sharpe=%.3f, OOS DD=%.3f%s",
+                i + 1, is_sharpe, oos_sharpe, oos_dd, _rand_suffix,
             )
 
             if is_sharpe > 0 and oos_sharpe > 0:
@@ -341,7 +368,7 @@ class WalkForwardValidator:
         return float((end_pv - start_pv) / start_pv)
 
     @staticmethod
-    def _evaluate(agent, env, n_episodes: int) -> np.ndarray:
+    def _evaluate(agent, env, n_episodes: int, random_start: bool = False) -> np.ndarray:
         """Evaluate agent without training. Returns per-episode % returns
         based on portfolio value, NOT raw reward sums (which are scaled and
         clipped and so do not have %-return semantics).
@@ -350,10 +377,15 @@ class WalkForwardValidator:
         resets to the same starting step, so a deterministic policy would
         produce N identical episodes — std ≈ 0 → Sharpe explodes to ±∞.
         Sampling from the policy distribution restores meaningful variance.
+
+        random_start=True passes options={"random_start": True} to env.reset(),
+        randomising the episode start step across the OOS window so that N
+        episodes sample different trajectory slices.
         """
+        reset_options = {"random_start": True} if random_start else None
         returns = []
         for _ in range(n_episodes):
-            obs, _ = env.reset()
+            obs, _ = env.reset(options=reset_options)
             done = False
             last_info: Dict[str, Any] = {}
             while not done:
