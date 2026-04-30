@@ -72,3 +72,15 @@ llm_review:
     downside_risk: 0.15
     drawdown: 0.15
     transaction_cost: 0.10
+
+# ── A6 Cost Decomposition (Week 90) ──────────────────────────
+# 4-axis P&L breakdown: signal / slippage / fee / funding
+# audit_log path is read by generate_daily_cost_report.py and
+# the CostDecomposer.from_audit_log() factory.
+cost_decomposition:
+  audit_log: "audit_log/audit.jsonl"
+  output_dir: "docs/reports"
+  # Set true only when trading perpetual futures (funding payments tracked)
+  enable_funding_tracking: false
+  # launchd schedule: 00:30 UTC daily (see deployment/launchd/*.plist)
+  report_schedule_utc: "00:30"

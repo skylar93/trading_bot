@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  A6 Daily Cost Report — launchd plist (Week 90)
+
+  Runs generate_daily_cost_report.py at 00:30 UTC every day.
+  macOS local time offset must be accounted for:
+    UTC 00:30  =  19:30 PDT (UTC-7)  =  20:30 PST (UTC-8)
+
+  Installation (run once):
+    cp deployment/launchd/com.tradingbot.daily-cost-report.plist \
+        ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.tradingbot.daily-cost-report.plist
+
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.tradingbot.daily-cost-report.plist
+    rm ~/Library/LaunchAgents/com.tradingbot.daily-cost-report.plist
+
+  Manual test run:
+    launchctl start com.tradingbot.daily-cost-report
+
+  IMPORTANT: Update WorkingDirectory and the python path if the repo is moved.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.tradingbot.daily-cost-report</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <!-- Use the project-specific Python interpreter -->
+        <string>/Users/skylar/anaconda3/bin/python</string>
+        <string>scripts/generate_daily_cost_report.py</string>
+    </array>
+
+    <!-- Working directory = repo root so relative paths resolve correctly -->
+    <key>WorkingDirectory</key>
+    <string>/Users/skylar/Desktop/trading_bot</string>
+
+    <!--
+      00:30 UTC daily.
+      Adjust Hour/Minute for your local timezone:
+        PDT (UTC-7): Hour=17, Minute=30
+        PST (UTC-8): Hour=16, Minute=30
+      Using UTC-7 (PDT) as the default here.
+    -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>17</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/tradingbot-daily-cost-report.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/tradingbot-daily-cost-report.err</string>
+
+    <!-- Re-run ASAP if it misses its window (e.g. laptop was sleeping) -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>KeepAlive</key>
+    <false/>
+</dict>
+</plist>
