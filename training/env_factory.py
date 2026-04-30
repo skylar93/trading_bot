@@ -390,7 +390,8 @@ def create_env(
             # Friction parameters
             apply_slippage=env_config.get("apply_slippage", True),
             slippage_factor=env_config.get("slippage_factor", 0.0005),
-            partial_fills=env_config.get("partial_fills", True)
+            partial_fills=env_config.get("partial_fills", True),
+            long_only=env_config.get("long_only", False),
         )
 
         logger.info(f"Created single-agent environment: {env}")

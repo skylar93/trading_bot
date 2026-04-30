@@ -83,6 +83,8 @@ class SingleAssetRLTradingEnv(gym.Env):
         data_frequency: str = "daily",
         # Week 61 (S27): DataSource injection — takes priority over `data` kwarg
         data_source: Optional[DataSource] = None,
+        # Diagnostic: restrict action space to long-only [0, 1]
+        long_only: bool = False,
     ):
         """Initialize environment
 
@@ -164,6 +166,8 @@ class SingleAssetRLTradingEnv(gym.Env):
         self.drawdown_penalty = drawdown_penalty
         self.max_drawdown_penalty_threshold = max_drawdown_penalty_threshold
 
+        self.long_only = long_only
+
         # Friction parameters
         self.apply_slippage = apply_slippage
         self.slippage_factor = slippage_factor
@@ -216,9 +220,10 @@ class SingleAssetRLTradingEnv(gym.Env):
         self._n_features = 5 + self._n_sentiment + self._n_dt_forecast  # OHLCV + optional sentiment + optional DT forecast
 
         # Define action and observation spaces
-        self.action_space = gym.spaces.Box(
-            low=-1.0, high=1.0, shape=(1,), dtype=np.float32
-        )
+        if long_only:
+            self.action_space = gym.spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32)
+        else:
+            self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
 
         # Observation space: OHLCV [+ sentiment] for window_size steps
         self.observation_space = gym.spaces.Box(
@@ -309,7 +314,18 @@ class SingleAssetRLTradingEnv(gym.Env):
             raise ValueError("No data provided to environment")
 
         # Reset state variables
-        self.current_step = self.window_size  # Start at window_size
+        options = options or {}
+        ds_len = self._ds_len()
+        if (
+            options.get("random_start")
+            and ds_len > self.window_size + self.min_episode_steps + 1
+        ):
+            max_start = ds_len - self.min_episode_steps - 1
+            self.current_step = int(
+                self.np_random.integers(self.window_size, max_start + 1)
+            )
+        else:
+            self.current_step = self.window_size
         self.current_position = 0.0
         self.current_capital = self.initial_capital
         self.portfolio_value = self.initial_capital
