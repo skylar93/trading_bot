@@ -325,7 +325,7 @@ class WalkForwardEvaluator:
             is_sharpe = WalkForwardValidator._compute_sharpe(is_returns)
 
             test_env = env_factory(test_df)
-            oos_returns = WalkForwardValidator._evaluate(
+            oos_returns, _ = WalkForwardValidator._evaluate(
                 agent, test_env, self.eval_episodes
             )
             oos_sharpe = WalkForwardValidator._compute_sharpe(oos_returns)

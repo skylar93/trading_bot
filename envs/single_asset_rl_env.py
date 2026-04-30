@@ -332,6 +332,7 @@ class SingleAssetRLTradingEnv(gym.Env):
         self.previous_portfolio_value = self.initial_capital
         self.done = False
         self.trades = []
+        self.trade_count = 0  # diagnostic counter (non-trivial position changes per episode)
 
         # Reset risk tracking variables
         self.returns_buffer.clear()
@@ -592,6 +593,8 @@ class SingleAssetRLTradingEnv(gym.Env):
                 self.current_capital = 0.0
 
             # Record trade
+            if abs(actual_change) > 1e-3:
+                self.trade_count += 1
             self.trades.append({
                 "step": self.current_step,
                 "requested_change": requested_change,
@@ -1280,6 +1283,7 @@ class SingleAssetRLTradingEnv(gym.Env):
             "previous_portfolio_value": self.previous_portfolio_value,
             "portfolio_change_pct": (self.portfolio_value - self.previous_portfolio_value) / max(self.previous_portfolio_value, 1e-8),
             "total_trades": len(self.trades),
+            "trade_count": self.trade_count,
             "peak_portfolio_value": self.peak_portfolio_value,
             "drawdown": drawdown,
             "sharpe_ratio": sharpe_ratio,
