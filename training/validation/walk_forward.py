@@ -39,6 +39,8 @@ class FoldResult:
     # random-start eval fields (populated only when random_start_eval=True)
     oos_sharpe_random: float = 0.0
     oos_total_return_random: float = 0.0
+    oos_trade_count_mean: float = 0.0
+    oos_trade_count_random_mean: float = 0.0
     metrics: Dict[str, float] = field(default_factory=dict)
 
 
@@ -227,20 +229,23 @@ class WalkForwardValidator:
 
             # Test (out-of-sample) — fixed start
             test_env = env_factory(test_df)
-            oos_returns = self._evaluate(agent, test_env, eval_episodes, random_start=False)
+            oos_returns, oos_trades = self._evaluate(agent, test_env, eval_episodes, random_start=False)
             oos_sharpe = self._compute_sharpe(oos_returns)
             oos_dd = self._max_drawdown(oos_returns)
             oos_total = float(np.mean(oos_returns)) if len(oos_returns) > 0 else 0.0
+            oos_trade_count_mean = float(np.mean(oos_trades)) if len(oos_trades) > 0 else 0.0
 
             # Test (out-of-sample) — random start (optional)
             oos_sharpe_random = 0.0
             oos_total_random = 0.0
+            oos_trade_count_random_mean = 0.0
             if random_start_eval:
-                oos_returns_random = self._evaluate(
+                oos_returns_random, oos_trades_random = self._evaluate(
                     agent, test_env, eval_episodes, random_start=True
                 )
                 oos_sharpe_random = self._compute_sharpe(oos_returns_random)
                 oos_total_random = float(np.mean(oos_returns_random)) if len(oos_returns_random) > 0 else 0.0
+                oos_trade_count_random_mean = float(np.mean(oos_trades_random)) if len(oos_trades_random) > 0 else 0.0
 
             fold = FoldResult(
                 fold_idx=i,
@@ -253,6 +258,8 @@ class WalkForwardValidator:
                 oos_total_return=oos_total,
                 oos_sharpe_random=oos_sharpe_random,
                 oos_total_return_random=oos_total_random,
+                oos_trade_count_mean=oos_trade_count_mean,
+                oos_trade_count_random_mean=oos_trade_count_random_mean,
             )
             folds.append(fold)
 
@@ -318,7 +325,8 @@ class WalkForwardValidator:
                 pass
             agent.learn(total_timesteps=total_timesteps, progress_bar=False)
             # After training, roll out a few episodes to score IS Sharpe.
-            return WalkForwardValidator._evaluate(agent, env, max(1, eval_episodes))
+            is_returns, _ = WalkForwardValidator._evaluate(agent, env, max(1, eval_episodes))
+            return is_returns
 
         # Legacy custom-wrapper path: collect per-episode portfolio % returns
         # while training step-by-step.
@@ -368,10 +376,13 @@ class WalkForwardValidator:
         return float((end_pv - start_pv) / start_pv)
 
     @staticmethod
-    def _evaluate(agent, env, n_episodes: int, random_start: bool = False) -> np.ndarray:
-        """Evaluate agent without training. Returns per-episode % returns
-        based on portfolio value, NOT raw reward sums (which are scaled and
-        clipped and so do not have %-return semantics).
+    def _evaluate(
+        agent, env, n_episodes: int, random_start: bool = False
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Evaluate agent without training. Returns (per-episode % returns, per-episode trade counts).
+
+        Returns per-episode % returns based on portfolio value, NOT raw reward sums
+        (which are scaled and clipped and so do not have %-return semantics).
 
         Uses stochastic policy sampling (deterministic=False). Our env always
         resets to the same starting step, so a deterministic policy would
@@ -384,6 +395,7 @@ class WalkForwardValidator:
         """
         reset_options = {"random_start": True} if random_start else None
         returns = []
+        trade_counts = []
         for _ in range(n_episodes):
             obs, _ = env.reset(options=reset_options)
             done = False
@@ -394,7 +406,8 @@ class WalkForwardValidator:
                 if truncated:
                     break
             returns.append(WalkForwardValidator._episode_pv_return(env, last_info))
-        return np.array(returns, dtype=np.float64)
+            trade_counts.append(int(last_info.get("trade_count", getattr(env, "trade_count", 0))))
+        return np.array(returns, dtype=np.float64), np.array(trade_counts, dtype=np.int64)
 
     @staticmethod
     def _compute_sharpe(returns: np.ndarray, risk_free: float = 0.0) -> float:
