@@ -83,6 +83,8 @@ class SingleAssetRLTradingEnv(gym.Env):
         data_frequency: str = "daily",
         # Week 61 (S27): DataSource injection — takes priority over `data` kwarg
         data_source: Optional[DataSource] = None,
+        # Diagnostic: restrict action space to long-only [0, 1]
+        long_only: bool = False,
     ):
         """Initialize environment
 
@@ -164,6 +166,8 @@ class SingleAssetRLTradingEnv(gym.Env):
         self.drawdown_penalty = drawdown_penalty
         self.max_drawdown_penalty_threshold = max_drawdown_penalty_threshold
 
+        self.long_only = long_only
+
         # Friction parameters
         self.apply_slippage = apply_slippage
         self.slippage_factor = slippage_factor
@@ -216,9 +220,10 @@ class SingleAssetRLTradingEnv(gym.Env):
         self._n_features = 5 + self._n_sentiment + self._n_dt_forecast  # OHLCV + optional sentiment + optional DT forecast
 
         # Define action and observation spaces
-        self.action_space = gym.spaces.Box(
-            low=-1.0, high=1.0, shape=(1,), dtype=np.float32
-        )
+        if long_only:
+            self.action_space = gym.spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32)
+        else:
+            self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
 
         # Observation space: OHLCV [+ sentiment] for window_size steps
         self.observation_space = gym.spaces.Box(
