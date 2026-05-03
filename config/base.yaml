@@ -17,6 +17,7 @@ env:
   max_position_size: 1.0
   sharpe_lookback: 60
   sharpe_weight: 0.1
+  cost_model: spot_taker
   reward_function: "sharpe_ratio"
   action_type: "continuous"
   include_technical_indicators: true
@@ -275,6 +276,7 @@ seed_strategy:
 evaluation:
   initial_capital: 10000.0
   trading_fee: 0.001
+  cost_model: spot_taker
   walk_forward_folds: 5
   min_bars: 500
 

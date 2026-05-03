@@ -4,6 +4,7 @@ Verifies the SB3 / custom-wrapper agent dispatch in WalkForwardValidator
 without spending hours of GPU time. Uses 2 folds, a tiny timestep budget,
 and a small slice of BTC data.
 """
+import argparse
 import logging
 import sys
 import warnings
@@ -18,13 +19,33 @@ from agents.strategies.agent_factory import create_agent
 from envs.single_asset_rl_env import SingleAssetRLTradingEnv
 from training.validation.walk_forward import WalkForwardValidator
 
+parser = argparse.ArgumentParser()
+parser.add_argument("--config", default=None, help="Optional YAML config file to override env params")
+args = parser.parse_args()
+
+env_kwargs: dict = {}
+if args.config:
+    import yaml
+    with open(args.config) as f:
+        raw = yaml.safe_load(f)
+    ec = raw.get("env", {})
+    for key in ("trading_fee", "apply_slippage", "slippage_factor", "cost_model",
+                "funding_rate_per_8h", "window_size", "max_position_size"):
+        if key in ec:
+            env_kwargs[key] = ec[key]
+    print(f"Config loaded from {args.config}: {env_kwargs}")
+
 df = pd.read_csv("data/BTCUSDT_1h.csv", index_col=0, parse_dates=True).iloc[:1500].copy()
 print(f"Data: {len(df)} rows")
+
+_wsize = env_kwargs.pop("window_size", 20)
+_maxpos = env_kwargs.pop("max_position_size", 1.0)
 
 
 def env_factory(d):
     return SingleAssetRLTradingEnv(
-        data=d, initial_capital=100000.0, window_size=20, max_position_size=1.0,
+        data=d, initial_capital=100000.0, window_size=_wsize, max_position_size=_maxpos,
+        **env_kwargs,
     )
 
 

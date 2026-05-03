@@ -218,12 +218,12 @@ def test_list_envs_returns_all_env_names() -> None:
 # ────────────────────────────────────────────────────────────
 
 def test_config_file_count_reduced() -> None:
-    """config/ 전체 YAML 파일 수 ≤ 11 (55% 감소, 22 → 10)."""
+    """config/ 전체 YAML 파일 수 ≤ 12 (Phase 8-Alpha: futures_maker.yaml 추가로 +1)."""
     config_dir = PROJECT_ROOT / "config"
     all_yamls = list(config_dir.rglob("*.yaml"))
     count = len(all_yamls)
-    assert count <= 11, (
-        f"Expected ≤11 config YAML files (50%+ reduction from 22), "
+    assert count <= 12, (
+        f"Expected ≤12 config YAML files, "
         f"found {count}: {[str(p.relative_to(config_dir)) for p in all_yamls]}"
     )
 
