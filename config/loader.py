@@ -71,7 +71,7 @@ def load(env: str | None = None) -> dict[str, Any]:
         fpath = _CONFIG_DIR / fname
         if not fpath.exists():
             raise FileNotFoundError(f"Base config not found: {fpath}")
-        with fpath.open() as f:
+        with fpath.open(encoding="utf-8") as f:
             part = yaml.safe_load(f) or {}
         merged = _deep_merge(merged, part)
         logger.debug("Loaded base config: %s", fname)
@@ -83,7 +83,7 @@ def load(env: str | None = None) -> dict[str, Any]:
             f"Env override not found: {env_path}. "
             f"Available envs: {_list_envs()}"
         )
-    with env_path.open() as f:
+    with env_path.open(encoding="utf-8") as f:
         env_override = yaml.safe_load(f) or {}
     merged = _deep_merge(merged, env_override)
     logger.info("Config loaded: env=%s (%d top-level keys)", env, len(merged))
@@ -104,7 +104,7 @@ def load_raw(path: str | Path) -> dict[str, Any]:
     fpath = Path(path)
     if not fpath.exists():
         raise FileNotFoundError(f"Config not found: {fpath}")
-    with fpath.open() as f:
+    with fpath.open(encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
     _validate(raw)
     return raw
