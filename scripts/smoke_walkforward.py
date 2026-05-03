@@ -26,7 +26,7 @@ args = parser.parse_args()
 env_kwargs: dict = {}
 if args.config:
     import yaml
-    with open(args.config) as f:
+    with open(args.config, encoding="utf-8") as f:
         raw = yaml.safe_load(f)
     ec = raw.get("env", {})
     for key in ("trading_fee", "apply_slippage", "slippage_factor", "cost_model",
