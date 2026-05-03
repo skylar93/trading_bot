@@ -392,6 +392,8 @@ def create_env(
             slippage_factor=env_config.get("slippage_factor", 0.0005),
             partial_fills=env_config.get("partial_fills", True),
             long_only=env_config.get("long_only", False),
+            cost_model=env_config.get("cost_model", "spot_taker"),
+            funding_rate_per_8h=env_config.get("funding_rate_per_8h", 0.0001),
         )
 
         logger.info(f"Created single-agent environment: {env}")

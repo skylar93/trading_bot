@@ -85,6 +85,9 @@ class SingleAssetRLTradingEnv(gym.Env):
         data_source: Optional[DataSource] = None,
         # Diagnostic: restrict action space to long-only [0, 1]
         long_only: bool = False,
+        # Phase 8-Alpha: cost model selector
+        cost_model: str = "spot_taker",
+        funding_rate_per_8h: float = 0.0001,
     ):
         """Initialize environment
 
@@ -168,7 +171,21 @@ class SingleAssetRLTradingEnv(gym.Env):
 
         self.long_only = long_only
 
+        # Phase 8-Alpha: cost model
+        _allowed_cost_models = {"spot_taker", "futures_maker"}
+        if cost_model not in _allowed_cost_models:
+            raise ValueError(f"cost_model must be one of {_allowed_cost_models}, got '{cost_model}'")
+        self.cost_model = cost_model
+        self.funding_rate_per_8h = funding_rate_per_8h
+        self._steps_since_funding: int = 0
+
         # Friction parameters
+        if cost_model == "futures_maker" and apply_slippage:
+            logger.warning(
+                "cost_model='futures_maker': overriding apply_slippage=True to False "
+                "(limit-order maker — no taker price impact)"
+            )
+            apply_slippage = False
         self.apply_slippage = apply_slippage
         self.slippage_factor = slippage_factor
         self.partial_fills = partial_fills
@@ -341,6 +358,7 @@ class SingleAssetRLTradingEnv(gym.Env):
         self.last_fill_rate = 1.0
         self.last_slippage = 0.0
         self._entry_price = None
+        self._steps_since_funding = 0
         if self._risk_manager is not None:
             self._risk_manager.reset()
 
@@ -512,6 +530,7 @@ class SingleAssetRLTradingEnv(gym.Env):
             # Cap buy size so capital cannot go negative.
             # A buy debits (trade_value + fee); only allow what the available
             # capital can fund (with a tiny safety margin for fee variability).
+            # 1x leverage: cash-margined cap stays (applies to futures_maker too).
             if actual_change > 0 and executed_price > 0:
                 max_fee_rate = max(self._calculate_dynamic_fee(trade_value), self.trading_fee)
                 affordable_value = self.current_capital / (1.0 + max_fee_rate + 1e-6)
@@ -606,6 +625,10 @@ class SingleAssetRLTradingEnv(gym.Env):
                 "cost": trade_cost,
                 "type": "buy" if actual_change > 0 else "sell"
             })
+
+        # Phase 8-Alpha: apply 8h funding rate for futures_maker cost model
+        if self.cost_model == "futures_maker":
+            self._apply_funding(current_price)
 
         # Check if we should end the episode based on capital (runs every step).
         # Floor breaches are expected during early random training, so log at
@@ -1096,16 +1119,33 @@ class SingleAssetRLTradingEnv(gym.Env):
         Returns:
             float: Fee rate as a fraction
         """
-        # Simple model: larger trades get better rates, up to 50% discount for very large trades
+        # futures_maker: fixed maker tier, no VIP volume discount
+        if self.cost_model == "futures_maker":
+            return self.trading_fee
+
+        # spot_taker: larger trades get up to 50% discount (spot VIP approximation)
         base_fee = self.trading_fee
-
-        # Normalize trade size
         relative_size = min(1.0, trade_value / (self.initial_capital * 0.2))
-
-        # Discount for larger trades (up to 50% discount)
         discount = min(0.5, relative_size * 0.5)
-
         return base_fee * (1.0 - discount)
+
+    def _apply_funding(self, current_price: float) -> float:
+        """Apply Binance-style 8-hour funding rate for futures_maker cost model.
+
+        Called every step; accrues when _steps_since_funding reaches 8 (1h bars × 8 = 8h).
+        Long position pays; short position receives (positive rate assumed).
+
+        Returns:
+            float: funding cost debited this step (0 if no accrual)
+        """
+        self._steps_since_funding += 1
+        if self._steps_since_funding < 8:
+            return 0.0
+        self._steps_since_funding = 0
+        position_notional = self.current_position * current_price
+        funding_cost = position_notional * self.funding_rate_per_8h
+        self.current_capital -= funding_cost
+        return funding_cost
 
     def _get_observation(self) -> np.ndarray:
         """Get current observation (window of OHLCV data)

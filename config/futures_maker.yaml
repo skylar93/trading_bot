@@ -1,0 +1,36 @@
+# config/futures_maker.yaml — Binance USDⓈ-M Futures maker-only override
+# Phase 8-Alpha: fee model migration (spot_taker → futures_maker)
+#
+# Round-trip target: 0.036% (vs 0.30% spot_taker baseline)
+# Binance USDⓈ-M Futures VIP0 maker 0.02% with BNB 10% discount → 0.018%/side
+#
+# All other env/training params inherit from base.yaml via config loader.
+
+env:
+  type: "single_asset_rl"
+  window_size: 20
+  initial_balance: 100000.0
+  trading_fee: 0.00018       # 0.018% maker fee (BNB discount applied)
+  apply_slippage: false      # maker orders: no taker price impact
+  slippage_factor: 0.0       # irrelevant when apply_slippage=false
+  cost_model: futures_maker
+  funding_rate_per_8h: 0.0001  # 0.01%/8h BTC-perp historical mean
+  max_position_size: 1.0
+  sharpe_lookback: 60
+  sharpe_weight: 0.1
+  normalize: true
+  reward_function: "sharpe_ratio"
+  action_type: "continuous"
+  include_technical_indicators: true
+  risk_adjusted: true
+  realistic_slippage: false
+  indicators:
+    - name: "RSI"
+      window: 14
+    - name: "MACD"
+      fast_window: 12
+      slow_window: 26
+      signal_window: 9
+    - name: "Bollinger"
+      window: 20
+      dev: 2

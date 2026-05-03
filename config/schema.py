@@ -43,6 +43,16 @@ class EnvConfig(BaseModel):
             raise ValueError(f"max_position_size must be in (0, 10], got {v}")
         return v
 
+    cost_model: str = "spot_taker"
+
+    @field_validator("cost_model")
+    @classmethod
+    def cost_model_valid(cls, v: str) -> str:
+        allowed = {"spot_taker", "futures_maker"}
+        if v not in allowed:
+            raise ValueError(f"cost_model must be one of {allowed}, got '{v}'")
+        return v
+
 
 class AgentConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
