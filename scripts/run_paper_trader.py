@@ -130,6 +130,21 @@ def main() -> None:
             logger.error("Failed to import live_signal_gate: %s", exc)
             sys.exit(1)
 
+    # ── [E2/E3] Warmup / live-ramp guard ────────────────────────────────────
+    warmup_cfg = config.setdefault("warmup", {})
+    if warmup_cfg.get("enabled", True):
+        warmup_cfg["enabled"] = True
+        warmup_cfg.setdefault("warmup_minutes", 30)
+        warmup_cfg.setdefault("max_qps", 1.0)
+        if args.exchange_mode == "live":
+            # E3: tighter size cap + 1-minute progress alerts
+            warmup_cfg.setdefault("size_fraction", 0.3)
+            warmup_cfg.setdefault("progress_alerts", True)
+        else:
+            # E2: half-size, no progress spam
+            warmup_cfg.setdefault("size_fraction", 0.5)
+            warmup_cfg.setdefault("progress_alerts", False)
+
     duration_seconds: Optional[float] = (
         args.duration_hours * 3600.0 if args.duration_hours is not None else None
     )

@@ -363,6 +363,20 @@ class PaperTrader:
         else:
             self._exchange = None
 
+        # E2/E3: cold-start warmup guard (paper) / live ramp guard (live)
+        from deployment.execution.warmup_guard import WarmupGuard
+        warmup_cfg = config.get("warmup", {}) or {}
+        if warmup_cfg.get("enabled", False):
+            self._warmup_guard: Optional[WarmupGuard] = WarmupGuard(
+                warmup_minutes=int(warmup_cfg.get("warmup_minutes", 30)),
+                size_fraction=float(warmup_cfg.get("size_fraction", 0.5)),
+                max_qps=float(warmup_cfg.get("max_qps", 1.0)),
+                progress_alerts=bool(warmup_cfg.get("progress_alerts", False)),
+                alerter=self.alerter,
+            )
+        else:
+            self._warmup_guard = None
+
         # G13: write PID file so kill_switch.py can locate this process
         pid_cfg = config.get("pid_file", "state/paper_trader.pid")
         self._pid_file = Path(pid_cfg)
@@ -408,6 +422,9 @@ class PaperTrader:
         start_time = time.time()
         step = self.state.step
         _restored_log_pending = getattr(self, "_restored_from_checkpoint", False)
+
+        if self._warmup_guard is not None:
+            self._warmup_guard.start()
 
         for price in self._price_iterator(price_stream):
             if self.state.shutdown_triggered:
@@ -676,6 +693,10 @@ class PaperTrader:
             self._execute_sell(abs(action), price)
 
     def _execute_buy(self, strength: float, price: float) -> None:
+        if self._warmup_guard is not None:
+            allowed, strength = self._warmup_guard.check(strength)
+            if not allowed:
+                return
         max_spend = self.state.pos.cash * min(strength, self.max_position_size)
         if max_spend < price * 1e-6:
             return
@@ -730,6 +751,10 @@ class PaperTrader:
                 )
 
     def _execute_sell(self, strength: float, price: float) -> None:
+        if self._warmup_guard is not None:
+            allowed, strength = self._warmup_guard.check(strength)
+            if not allowed:
+                return
         sell_qty = self.state.pos.position * min(strength, 1.0)
         if sell_qty < 1e-8:
             return

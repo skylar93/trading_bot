@@ -60,6 +60,15 @@ live_signal_gate:
     max_permutation_p: 0.05
     max_regime_dd: 0.30
 
+# ── E2/E3 Warmup / Live-ramp Guard ───────────────────────────
+# E2 (paper/sandbox): size_fraction=0.5, progress_alerts=false
+# E3 (live):          size_fraction=0.3, progress_alerts=true
+# run_paper_trader.py fills in the mode-specific defaults at startup.
+warmup:
+  enabled: true
+  warmup_minutes: 30
+  max_qps: 1.0
+
 # ── LLM Review Panel ──────────────────────────────────────────
 llm_review:
   enabled: false
