@@ -1,0 +1,35 @@
+# config/futures_maker_no_funding.yaml -- futures maker-only without funding cost
+# Phase 8-Alpha ablation: isolate whether funding rate is the binding constraint
+#
+# Same as config/futures_maker.yaml except funding_rate_per_8h = 0.0.
+# Used to diagnose the 1M re-train NO-GO (12 folds negative, ~0 trades in random_start).
+# If model resumes trading here, funding is the cause; if not, fee model itself is too low.
+
+env:
+  type: "single_asset_rl"
+  window_size: 20
+  initial_balance: 100000.0
+  trading_fee: 0.00018       # 0.018% maker fee (BNB discount applied)
+  apply_slippage: false      # maker orders: no taker price impact
+  slippage_factor: 0.0       # irrelevant when apply_slippage=false
+  cost_model: futures_maker
+  funding_rate_per_8h: 0.0   # ABLATION: disable funding to isolate cause
+  max_position_size: 1.0
+  sharpe_lookback: 60
+  sharpe_weight: 0.1
+  normalize: true
+  reward_function: "sharpe_ratio"
+  action_type: "continuous"
+  include_technical_indicators: true
+  risk_adjusted: true
+  realistic_slippage: false
+  indicators:
+    - name: "RSI"
+      window: 14
+    - name: "MACD"
+      fast_window: 12
+      slow_window: 26
+      signal_window: 9
+    - name: "Bollinger"
+      window: 20
+      dev: 2
