@@ -1,25 +1,76 @@
-"""Quick walk-forward driver for end-to-end pipeline verification.
+"""Walk-forward driver for end-to-end pipeline runs.
 
-Reduced scale (3 folds × 50k timesteps × 5000 rows) to finish in ~15-30 min
-on Windows CPU/GPU. Goal is to confirm the pipeline runs end-to-end, not to
-produce a real evidence pack — bump scale back up for real A0 training.
+Phase 8-Alpha (2026-05-04): added argparse so --config / --n_splits /
+--total_timesteps actually take effect. Before this fix the script ignored
+sys.argv and always loaded config/base.yaml with hardcoded n_splits=12 and
+total_timesteps=1_000_000, which silently nullified the futures_maker
+override during the Phase 8-Alpha 1M re-train and the funding ablation.
 """
+import argparse
 import sys
+
 sys.path.insert(0, ".")
 
 import pandas as pd
-from config.loader import load_raw
+import yaml
+
+from config.loader import load_raw, _deep_merge
 from training.train_pipeline import train_pipeline
 
-cfg = load_raw("config/base.yaml")
-cfg["walk_forward"]["enabled"] = True
-cfg["walk_forward"]["n_splits"] = 12
-cfg.setdefault("training", {})["total_timesteps"] = 1000000
 
-df = pd.read_csv("data/BTCUSDT_1h.csv", index_col=0, parse_dates=True)
-df = df
-print(f"Data: {len(df)} rows, {df.index[0]} -> {df.index[-1]}")
+def _load_config(override_path: str | None) -> dict:
+    cfg = load_raw("config/base.yaml")
+    if override_path:
+        with open(override_path, encoding="utf-8") as f:
+            override = yaml.safe_load(f) or {}
+        cfg = _deep_merge(cfg, override)
+        print(f"Config: base.yaml + override from {override_path}")
+    else:
+        print("Config: base.yaml (no override)")
+    return cfg
 
-result = train_pipeline(config=cfg, data=df)
-print("=== RESULT ===")
-print(result)
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Optional YAML config file deep-merged on top of base.yaml.",
+    )
+    parser.add_argument("--n_splits", type=int, default=12)
+    parser.add_argument("--total_timesteps", type=int, default=1_000_000)
+    parser.add_argument(
+        "--data",
+        default="data/BTCUSDT_1h.csv",
+        help="CSV path with OHLCV bars (index=timestamp).",
+    )
+    args = parser.parse_args()
+
+    cfg = _load_config(args.config)
+    cfg["walk_forward"]["enabled"] = True
+    cfg["walk_forward"]["n_splits"] = args.n_splits
+    cfg.setdefault("training", {})["total_timesteps"] = args.total_timesteps
+
+    env_cfg = cfg.get("env", {})
+    print(
+        f"Effective env: cost_model={env_cfg.get('cost_model', 'spot_taker')}, "
+        f"trading_fee={env_cfg.get('trading_fee', 0.001)}, "
+        f"apply_slippage={env_cfg.get('apply_slippage', True)}, "
+        f"slippage_factor={env_cfg.get('slippage_factor', 0.0005)}, "
+        f"funding_rate_per_8h={env_cfg.get('funding_rate_per_8h', 0.0001)}"
+    )
+    print(
+        f"Effective walk-forward: n_splits={args.n_splits}, "
+        f"total_timesteps={args.total_timesteps}"
+    )
+
+    df = pd.read_csv(args.data, index_col=0, parse_dates=True)
+    print(f"Data: {len(df)} rows, {df.index[0]} -> {df.index[-1]}")
+
+    result = train_pipeline(config=cfg, data=df)
+    print("=== RESULT ===")
+    print(result)
+
+
+if __name__ == "__main__":
+    main()
