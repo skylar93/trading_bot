@@ -67,6 +67,18 @@ class _MockDrill:
     def _pause_feed(self, seconds: float) -> None:
         self.injected_calls.append(("feed_stale", seconds))
 
+    def _inject_symbol_delisted(self, symbol: str) -> None:
+        self.injected_calls.append(("symbol_delisted", symbol))
+
+    def _inject_contract_roll(self, contract: str) -> None:
+        self.injected_calls.append(("contract_roll", contract))
+
+    def _inject_data_revision(self, field: str, revision_pct: float) -> None:
+        self.injected_calls.append(("data_revision", field, revision_pct))
+
+    def _inject_time_alignment_break(self, expected_bar_seconds: int, actual_gap_seconds: int) -> None:
+        self.injected_calls.append(("time_alignment_break", expected_bar_seconds, actual_gap_seconds))
+
 
 def _make_alerter(tmp_path: pathlib.Path):
     from deployment.monitoring.alerter import TradingAlerter
@@ -269,3 +281,81 @@ def test_exchange_outage_and_spread_blowout_in_default_intervals() -> None:
     assert "spread_blowout" in FaultInjector.DEFAULT_INTERVALS
     assert FaultInjector.DEFAULT_INTERVALS["exchange_outage"] == 18 * 3600
     assert FaultInjector.DEFAULT_INTERVALS["spread_blowout"] == 9 * 3600
+
+
+# ---------------------------------------------------------------------------
+# E1: symbol_delisted / contract_roll / data_revision / time_alignment_break
+# ---------------------------------------------------------------------------
+
+def test_inject_symbol_delisted(tmp_path: pathlib.Path) -> None:
+    """symbol_delisted: calls drill._inject_symbol_delisted and sets safety_net_triggered."""
+    from deployment.testing.fault_injector import FaultInjector
+
+    drill = _MockDrill(tmp_path)
+    fi = FaultInjector(drill=drill, log_path=tmp_path / "faults.jsonl")
+    evt = fi.inject_now("symbol_delisted")
+    assert evt.safety_net_triggered
+    assert any(c[0] == "symbol_delisted" for c in drill.injected_calls)
+    assert evt.detail["symbol"] == "SYNTHETIC_DELISTED/USDT"
+
+
+def test_inject_contract_roll_futures(tmp_path: pathlib.Path) -> None:
+    """contract_roll: futures instrument triggers _inject_contract_roll on drill."""
+    from deployment.testing.fault_injector import FaultInjector
+
+    drill = _MockDrill(tmp_path)
+    drill._instrument_type = "futures"
+    fi = FaultInjector(drill=drill, log_path=tmp_path / "faults.jsonl")
+    evt = fi.inject_now("contract_roll")
+    assert evt.safety_net_triggered
+    assert any(c[0] == "contract_roll" for c in drill.injected_calls)
+
+
+def test_inject_contract_roll_spot_na(tmp_path: pathlib.Path) -> None:
+    """contract_roll: spot instrument sets na_flag and skips safety net trigger."""
+    from deployment.testing.fault_injector import FaultInjector
+
+    drill = _MockDrill(tmp_path)
+    drill._instrument_type = "spot"
+    fi = FaultInjector(drill=drill, log_path=tmp_path / "faults.jsonl")
+    evt = fi.inject_now("contract_roll")
+    assert not evt.safety_net_triggered
+    assert evt.detail.get("na_flag") is True
+    assert not any(c[0] == "contract_roll" for c in drill.injected_calls)
+
+
+def test_inject_data_revision(tmp_path: pathlib.Path) -> None:
+    """data_revision: calls drill._inject_data_revision with field and revision_pct."""
+    from deployment.testing.fault_injector import FaultInjector
+
+    drill = _MockDrill(tmp_path)
+    fi = FaultInjector(drill=drill, log_path=tmp_path / "faults.jsonl")
+    evt = fi.inject_now("data_revision")
+    assert evt.safety_net_triggered
+    assert any(c[0] == "data_revision" for c in drill.injected_calls)
+    assert evt.detail["field"] == "close"
+    assert evt.detail["revision_pct"] == -1.0
+
+
+def test_inject_time_alignment_break(tmp_path: pathlib.Path) -> None:
+    """time_alignment_break: reports 2h gap in 1h bars via _inject_time_alignment_break."""
+    from deployment.testing.fault_injector import FaultInjector
+
+    drill = _MockDrill(tmp_path)
+    fi = FaultInjector(drill=drill, log_path=tmp_path / "faults.jsonl")
+    evt = fi.inject_now("time_alignment_break")
+    assert evt.safety_net_triggered
+    assert any(c[0] == "time_alignment_break" for c in drill.injected_calls)
+    assert evt.detail["expected_bar_seconds"] == 3600
+    assert evt.detail["actual_gap_seconds"] == 7200
+
+
+def test_e1_faults_in_default_intervals() -> None:
+    """E1: All four new faults appear in DEFAULT_INTERVALS with expected values."""
+    from deployment.testing.fault_injector import FaultInjector
+
+    d = FaultInjector.DEFAULT_INTERVALS
+    assert d["symbol_delisted"] == 48 * 3600
+    assert d["contract_roll"] == 72 * 3600
+    assert d["data_revision"] == 48 * 3600
+    assert d["time_alignment_break"] == 24 * 3600
