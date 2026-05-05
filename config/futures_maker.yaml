@@ -34,3 +34,7 @@ env:
     - name: "Bollinger"
       window: 20
       dev: 2
+
+walk_forward:
+  random_start_eval: true   # measure both fixed and random episode starts
+  eval_episodes: 20         # match regime_and_frequency_check (more reliable mean)
