@@ -119,6 +119,8 @@ def run_walk_forward(
         env_factory=env_factory,
         data=data,
         total_timesteps=total_timesteps,
+        eval_episodes=wf_cfg.get("eval_episodes", 5),
+        random_start_eval=wf_cfg.get("random_start_eval", False),
     )
 
     summary = result.summary()
