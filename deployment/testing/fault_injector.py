@@ -74,6 +74,10 @@ class FaultInjector:
         "clock_skew": -1,                 # random (handled specially)
         "exchange_outage": 18 * 3600,     # I11: 18h
         "spread_blowout": 9 * 3600,       # I11: 9h
+        "symbol_delisted": 48 * 3600,     # E1: 48h
+        "contract_roll": 72 * 3600,       # E1: 72h
+        "data_revision": 48 * 3600,       # E1: 48h
+        "time_alignment_break": 24 * 3600, # E1: 24h
     }
 
     def __init__(
@@ -288,6 +292,99 @@ class FaultInjector:
             evt.safety_net_triggered = True
         else:
             logger.warning("Drill has no _fake_spread_multiplier flag — recording only")
+            evt.safety_net_triggered = False
+
+    def _inject_symbol_delisted(self, evt: FaultEvent) -> None:
+        """Simulate fetch_ticker raising BadSymbol/returning None → position freeze."""
+        logger.warning("[FaultInjector] Injecting symbol_delisted")
+        evt.detail["symbol"] = "SYNTHETIC_DELISTED/USDT"
+        drill = self._drill
+        if hasattr(drill, "_inject_symbol_delisted"):
+            drill._inject_symbol_delisted("SYNTHETIC_DELISTED/USDT")
+            evt.safety_net_triggered = True
+        elif hasattr(drill, "_bad_symbol_flag"):
+            drill._bad_symbol_flag = "SYNTHETIC_DELISTED/USDT"
+            evt.safety_net_triggered = True
+        elif hasattr(drill, "_alerter") and drill._alerter is not None:
+            drill._alerter.notify_error(
+                "BadSymbol: SYNTHETIC_DELISTED/USDT not found on exchange",
+                context="symbol_delisted_fault_inject",
+            )
+            evt.safety_net_triggered = True
+        else:
+            logger.warning("Drill has no symbol delisted mechanism — recording only")
+            evt.safety_net_triggered = False
+
+    def _inject_contract_roll(self, evt: FaultEvent) -> None:
+        """Simulate perp/quarterly contract expiry; N/A flag for spot instruments."""
+        logger.warning("[FaultInjector] Injecting contract_roll")
+        instrument_type = getattr(self._drill, "_instrument_type", "futures")
+        if instrument_type == "spot":
+            evt.detail["skipped_reason"] = "spot_instrument_no_contract_roll"
+            evt.detail["na_flag"] = True
+            evt.safety_net_triggered = False
+            logger.info("[FaultInjector] contract_roll N/A for spot instrument — skipped")
+            return
+        evt.detail["contract"] = "BTCUSDT_quarterly_synthetic"
+        drill = self._drill
+        if hasattr(drill, "_inject_contract_roll"):
+            drill._inject_contract_roll("BTCUSDT_quarterly_synthetic")
+            evt.safety_net_triggered = True
+        elif hasattr(drill, "_fake_contract_roll_flag"):
+            drill._fake_contract_roll_flag = True
+            evt.safety_net_triggered = True
+        elif hasattr(drill, "_alerter") and drill._alerter is not None:
+            drill._alerter.notify_error(
+                "Contract roll detected: BTCUSDT_quarterly_synthetic expiry",
+                context="contract_roll_fault_inject",
+            )
+            evt.safety_net_triggered = True
+        else:
+            logger.warning("Drill has no contract roll mechanism — recording only")
+            evt.safety_net_triggered = False
+
+    def _inject_data_revision(self, evt: FaultEvent) -> None:
+        """Simulate retroactive yfinance price revision (adjusted close −1%)."""
+        logger.warning("[FaultInjector] Injecting data_revision (close −1%)")
+        evt.detail["field"] = "close"
+        evt.detail["revision_pct"] = -1.0
+        drill = self._drill
+        if hasattr(drill, "_inject_data_revision"):
+            drill._inject_data_revision(field="close", revision_pct=-1.0)
+            evt.safety_net_triggered = True
+        elif hasattr(drill, "_fake_price_revision_pct"):
+            drill._fake_price_revision_pct = -1.0
+            evt.safety_net_triggered = True
+        elif hasattr(drill, "_alerter") and drill._alerter is not None:
+            drill._alerter.notify_error(
+                "Retroactive data revision: close adjusted −1.0%",
+                context="data_revision_fault_inject",
+            )
+            evt.safety_net_triggered = True
+        else:
+            logger.warning("Drill has no data revision mechanism — recording only")
+            evt.safety_net_triggered = False
+
+    def _inject_time_alignment_break(self, evt: FaultEvent) -> None:
+        """Simulate holiday forward-fill violation (2h gap in 1h bars)."""
+        logger.warning("[FaultInjector] Injecting time_alignment_break (2h gap in 1h bars)")
+        evt.detail["expected_bar_seconds"] = 3600
+        evt.detail["actual_gap_seconds"] = 7200
+        drill = self._drill
+        if hasattr(drill, "_inject_time_alignment_break"):
+            drill._inject_time_alignment_break(expected_bar_seconds=3600, actual_gap_seconds=7200)
+            evt.safety_net_triggered = True
+        elif hasattr(drill, "_fake_bar_gap_seconds"):
+            drill._fake_bar_gap_seconds = 7200
+            evt.safety_net_triggered = True
+        elif hasattr(drill, "_alerter") and drill._alerter is not None:
+            drill._alerter.notify_error(
+                "Time alignment break: 7200s gap in 1h bars (expected 3600s)",
+                context="time_alignment_break_fault_inject",
+            )
+            evt.safety_net_triggered = True
+        else:
+            logger.warning("Drill has no time alignment mechanism — recording only")
             evt.safety_net_triggered = False
 
     # ------------------------------------------------------------------
