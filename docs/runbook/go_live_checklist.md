@@ -172,4 +172,9 @@ EOF
 
 # Check daily P&L
 grep "daily_pnl" logs/paper_trader.log | tail -5
+
+# Rotate API key (run quarterly; launchd alerts when due)
+python scripts/rotate_keychain_key.py --exchange binance --new-key-from-stdin
+# Load the daily rotation-due checker into launchd (run once after deploy):
+# launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.tradingbot.keyrotation.plist
 ```
