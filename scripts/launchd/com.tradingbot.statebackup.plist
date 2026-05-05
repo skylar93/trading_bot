@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.tradingbot.statebackup</string>
+
+    <!-- Run daily at 02:00 UTC (adjust StartCalendarInterval for your timezone) -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>2</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/skylar/anaconda3/bin/python</string>
+        <string>/Users/skylar/Desktop/trading_bot/scripts/backup_state.py</string>
+        <string>--state-dir</string>
+        <string>/Users/skylar/Desktop/trading_bot/state</string>
+        <string>--keep-days</string>
+        <string>7</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/skylar/Desktop/trading_bot</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/skylar/Desktop/trading_bot/logs/statebackup_stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/skylar/Desktop/trading_bot/logs/statebackup_stderr.log</string>
+
+    <!-- Do not restart on crash — a failed backup should alert, not loop -->
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
