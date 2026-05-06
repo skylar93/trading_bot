@@ -53,6 +53,23 @@ class EnvConfig(BaseModel):
             raise ValueError(f"cost_model must be one of {allowed}, got '{v}'")
         return v
 
+    inactivity_penalty: float = 0.0
+    sharpe_clip_value: float = 10.0
+
+    @field_validator("inactivity_penalty")
+    @classmethod
+    def inactivity_penalty_range(cls, v: float) -> float:
+        if not (0.0 <= v <= 1.0):
+            raise ValueError(f"inactivity_penalty must be in [0, 1], got {v}")
+        return v
+
+    @field_validator("sharpe_clip_value")
+    @classmethod
+    def sharpe_clip_value_range(cls, v: float) -> float:
+        if not (0.0 < v <= 100.0):
+            raise ValueError(f"sharpe_clip_value must be in (0, 100], got {v}")
+        return v
+
 
 class AgentConfig(BaseModel):
     model_config = ConfigDict(extra="allow")

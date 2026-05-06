@@ -1,0 +1,37 @@
+# config/phase8_beta/B1_inactivity.yaml -- Phase 8-Beta variant B1
+# Inactivity penalty: raises cost of holding flat from 0 to -0.0005/step.
+# All other settings inherit from futures_maker.yaml semantics.
+
+env:
+  type: "single_asset_rl"
+  window_size: 20
+  initial_balance: 100000.0
+  trading_fee: 0.00018
+  apply_slippage: false
+  slippage_factor: 0.0
+  cost_model: futures_maker
+  funding_rate_per_8h: 0.0001
+  max_position_size: 1.0
+  sharpe_lookback: 60
+  sharpe_weight: 0.1
+  inactivity_penalty: 0.0005
+  normalize: true
+  reward_function: "sharpe_ratio"
+  action_type: "continuous"
+  include_technical_indicators: true
+  risk_adjusted: true
+  realistic_slippage: false
+  indicators:
+    - name: "RSI"
+      window: 14
+    - name: "MACD"
+      fast_window: 12
+      slow_window: 26
+      signal_window: 9
+    - name: "Bollinger"
+      window: 20
+      dev: 2
+
+walk_forward:
+  random_start_eval: true
+  eval_episodes: 20

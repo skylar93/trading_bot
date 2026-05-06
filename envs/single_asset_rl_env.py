@@ -88,6 +88,9 @@ class SingleAssetRLTradingEnv(gym.Env):
         # Phase 8-Alpha: cost model selector
         cost_model: str = "spot_taker",
         funding_rate_per_8h: float = 0.0001,
+        # Phase 8-Beta: reward shaping knobs
+        inactivity_penalty: float = 0.0,
+        sharpe_clip_value: float = 10.0,
     ):
         """Initialize environment
 
@@ -178,6 +181,14 @@ class SingleAssetRLTradingEnv(gym.Env):
         self.cost_model = cost_model
         self.funding_rate_per_8h = funding_rate_per_8h
         self._steps_since_funding: int = 0
+
+        # Phase 8-Beta: reward shaping knobs
+        if inactivity_penalty < 0:
+            raise ValueError(f"inactivity_penalty must be >= 0, got {inactivity_penalty}")
+        if sharpe_clip_value <= 0:
+            raise ValueError(f"sharpe_clip_value must be > 0, got {sharpe_clip_value}")
+        self.inactivity_penalty = inactivity_penalty
+        self.sharpe_clip_value = sharpe_clip_value
 
         # Friction parameters
         if cost_model == "futures_maker" and apply_slippage:
@@ -941,7 +952,7 @@ class SingleAssetRLTradingEnv(gym.Env):
                 sharpe_proxy = mean_return / std_return * self._annualize_factor
 
                 # Avoid extreme values
-                sharpe_proxy = np.clip(sharpe_proxy, -10.0, 10.0)
+                sharpe_proxy = np.clip(sharpe_proxy, -self.sharpe_clip_value, self.sharpe_clip_value)
                 sharpe_component = sharpe_proxy
 
                 # Mix in the Sharpe component
@@ -993,6 +1004,14 @@ class SingleAssetRLTradingEnv(gym.Env):
                 # Keep the reward without drawdown penalty if there's an error
                 if reward_debug is not None:
                     reward_debug["drawdown_penalty"] = 0.0
+
+        # Phase 8-Beta B1: inactivity penalty — raises cost of holding flat
+        inactivity = 0.0
+        if self.inactivity_penalty > 0 and abs(self.current_position) < 0.1:
+            inactivity = -self.inactivity_penalty
+            final_reward += inactivity
+        if reward_debug is not None:
+            reward_debug["inactivity_penalty"] = inactivity
 
         # Final safety check for reward value
         if np.isnan(final_reward) or np.isinf(final_reward):
