@@ -46,6 +46,17 @@ env = SingleAssetRLTradingEnv(
     max_position_size=env_kwargs.pop("max_position_size", 1.0),
     **env_kwargs,
 )
+print(
+    f"Effective env (incl. defaults): "
+    f"cost_model={getattr(env, 'cost_model', 'spot_taker')}, "
+    f"trading_fee={env.trading_fee}, "
+    f"apply_slippage={getattr(env, 'apply_slippage', False)}, "
+    f"slippage_factor={getattr(env, 'slippage_factor', 0.0)}, "
+    f"funding_rate_per_8h={getattr(env, 'funding_rate_per_8h', 0.0)}, "
+    f"sharpe_weight={getattr(env, 'sharpe_weight', 0.1)}, "
+    f"inactivity_penalty={getattr(env, 'inactivity_penalty', 0.0)}, "
+    f"sharpe_clip_value={getattr(env, 'sharpe_clip_value', 10.0)}"
+)
 
 agent = create_agent(
     agent_type="sb3_cvar_ppo",
