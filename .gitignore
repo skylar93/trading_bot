@@ -1,5 +1,6 @@
 # Python related
 **pycache**/
+__pycache__/
 *.pyc
 *.egg-info/
 .pytest_cache/
@@ -27,6 +28,8 @@ data/
 # tests/data/ is test code, not data — always track
 !tests/data/
 !tests/data/**
+# ...but still ignore bytecode caches inside tests/data/
+tests/data/__pycache__/
 
 # Docker
 docker/
@@ -78,6 +81,11 @@ test_checkpoints_multi/
 
 # Specstory (as requested)
 .specstory/
+
+# Claude Code tooling (worktrees, session state, HUD)
+.claude/worktrees/
+.claire/
+.omx/
 
 # Large files
 *.pt
