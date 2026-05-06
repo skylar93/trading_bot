@@ -299,14 +299,14 @@ def main(argv: Optional[List[str]] = None) -> int:
              "Defaults to the log filename stem.",
     )
     parser.add_argument(
-        "--bull-folds", default="0-4", metavar="RANGE",
+        "--bull-folds", default="0,2,5,8,11", metavar="RANGE",
         help="0-indexed fold indices classified as bull regime "
-             "(default: '0-4'). Accepts 'lo-hi' or comma list.",
+             "(default: '0,2,5,8,11'). Accepts 'lo-hi' or comma list.",
     )
     parser.add_argument(
-        "--bear-folds", default="5-11", metavar="RANGE",
+        "--bear-folds", default="1,3,4,6,7,9,10", metavar="RANGE",
         help="0-indexed fold indices classified as bear regime "
-             "(default: '5-11').",
+             "(default: '1,3,4,6,7,9,10').",
     )
     parser.add_argument(
         "--apply-criterion", action="store_true",

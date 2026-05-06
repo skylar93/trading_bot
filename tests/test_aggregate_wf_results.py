@@ -312,6 +312,18 @@ class TestParseFoldRange:
     def test_single_value(self):
         assert _parse_fold_range("3") == [3]
 
+    def test_bull_folds_default(self):
+        assert _parse_fold_range("0,2,5,8,11") == [0, 2, 5, 8, 11]
+
+    def test_bear_folds_default(self):
+        assert _parse_fold_range("1,3,4,6,7,9,10") == [1, 3, 4, 6, 7, 9, 10]
+
+    def test_bull_bear_defaults_are_disjoint_and_cover_twelve_folds(self):
+        bull = _parse_fold_range("0,2,5,8,11")
+        bear = _parse_fold_range("1,3,4,6,7,9,10")
+        assert set(bull) & set(bear) == set()
+        assert set(bull) | set(bear) == set(range(12))
+
 
 # ---------------------------------------------------------------------------
 # CLI integration (uses tmp_path, writes real log files)
