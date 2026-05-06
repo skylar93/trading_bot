@@ -7,6 +7,7 @@ total_timesteps=1_000_000, which silently nullified the futures_maker
 override during the Phase 8-Alpha 1M re-train and the funding ablation.
 """
 import argparse
+import json
 import sys
 
 sys.path.insert(0, ".")
@@ -30,6 +31,52 @@ def _load_config(override_path: str | None) -> dict:
     return cfg
 
 
+def _write_summary_json(path: str, result, cfg: dict, args) -> None:
+    """Write a structured JSON summary of a completed walk-forward run."""
+    import dataclasses
+    import math
+
+    def _safe_float(v) -> float:
+        """Convert numpy/python float; map nan/inf to None for JSON safety."""
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        return None if (math.isnan(f) or math.isinf(f)) else f
+
+    folds_json = []
+    for fold in result.folds:
+        d = {}
+        for f in dataclasses.fields(fold):
+            if not f.repr:  # skip oos_returns (repr=False, large array)
+                continue
+            val = getattr(fold, f.name)
+            if isinstance(val, dict):
+                d[f.name] = val
+            else:
+                d[f.name] = _safe_float(val) if isinstance(val, float) else val
+        folds_json.append(d)
+
+    summary = {k: _safe_float(v) for k, v in result.summary().items()}
+
+    payload = {
+        "command": sys.argv,
+        "config": {
+            "env": cfg.get("env", {}),
+            "walk_forward": cfg.get("walk_forward", {}),
+            "training": cfg.get("training", {}),
+        },
+        "aggregates": summary,
+        "folds": folds_json,
+    }
+
+    import pathlib
+    pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, default=str)
+    print(f"Summary JSON written to {path}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -43,6 +90,12 @@ def main() -> None:
         "--data",
         default="data/BTCUSDT_1h.csv",
         help="CSV path with OHLCV bars (index=timestamp).",
+    )
+    parser.add_argument(
+        "--summary-json",
+        default=None,
+        metavar="PATH",
+        help="If set, write a JSON summary of the run to this path in addition to stdout.",
     )
     args = parser.parse_args()
 
@@ -70,6 +123,9 @@ def main() -> None:
     result = train_pipeline(config=cfg, data=df)
     print("=== RESULT ===")
     print(result)
+
+    if args.summary_json:
+        _write_summary_json(args.summary_json, result, cfg, args)
 
 
 if __name__ == "__main__":
