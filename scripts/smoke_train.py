@@ -29,7 +29,8 @@ if args.config:
         raw = yaml.safe_load(f)
     ec = raw.get("env", {})
     for key in ("trading_fee", "apply_slippage", "slippage_factor", "cost_model",
-                "funding_rate_per_8h", "window_size", "max_position_size"):
+                "funding_rate_per_8h", "window_size", "max_position_size",
+                "sharpe_weight", "inactivity_penalty", "sharpe_clip_value"):
         if key in ec:
             env_kwargs[key] = ec[key]
     print(f"Config loaded from {args.config}: {env_kwargs}")
