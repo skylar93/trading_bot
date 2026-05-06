@@ -1,8 +1,8 @@
-# API Key Scope Report — 20260423
+# API Key Scope Report — 20260427
 
 **Exchange**: binance  
 **Mode**: sandbox/testnet  
-**Timestamp**: 2026-04-23T16:26:39.468719+00:00  
+**Timestamp**: 2026-04-27T17:57:41.456704+00:00  
 **Result**: ✅ ALL PROBES PASSED
 
 ## Probe Results

@@ -494,7 +494,10 @@ class TradingAlerter:
             req = urllib.request.Request(
                 self._discord_url,
                 data=payload,
-                headers={"Content-Type": "application/json"},
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": "DiscordBot (trading-bot, 1.0)",
+                },
                 method="POST",
             )
             with urllib.request.urlopen(req, timeout=10) as resp:
