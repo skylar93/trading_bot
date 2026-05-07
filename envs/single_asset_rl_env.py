@@ -91,6 +91,11 @@ class SingleAssetRLTradingEnv(gym.Env):
         # Phase 8-Beta: reward shaping knobs
         inactivity_penalty: float = 0.0,
         sharpe_clip_value: float = 10.0,
+        # Phase 8-Gamma G1: HMM regime gate (pre-computed track, bypasses buggy adjust_for_regime)
+        regime_track: Optional[np.ndarray] = None,
+        regime_gate_enabled: bool = False,
+        regime_gate_mode: str = "close",
+        regime_gate_bear_threshold: float = 0.5,
     ):
         """Initialize environment
 
@@ -189,6 +194,19 @@ class SingleAssetRLTradingEnv(gym.Env):
             raise ValueError(f"sharpe_clip_value must be > 0, got {sharpe_clip_value}")
         self.inactivity_penalty = inactivity_penalty
         self.sharpe_clip_value = sharpe_clip_value
+
+        # Phase 8-Gamma G1: HMM regime gate
+        if regime_gate_mode not in ("close", "refuse_entry"):
+            raise ValueError(f"regime_gate_mode must be 'close' or 'refuse_entry', got '{regime_gate_mode}'")
+        if not (0.0 <= regime_gate_bear_threshold <= 1.0):
+            raise ValueError(f"regime_gate_bear_threshold must be in [0, 1], got {regime_gate_bear_threshold}")
+        if regime_gate_enabled and regime_track is None:
+            raise ValueError("regime_gate_enabled=True requires regime_track to be provided")
+        self.regime_track = regime_track
+        self.regime_gate_enabled = regime_gate_enabled
+        self.regime_gate_mode = regime_gate_mode
+        self.regime_gate_bear_threshold = regime_gate_bear_threshold
+        self._gate_fires: int = 0
 
         # Friction parameters
         if cost_model == "futures_maker" and apply_slippage:
@@ -332,6 +350,18 @@ class SingleAssetRLTradingEnv(gym.Env):
         """Week 30: 외부에서 HMM regime 확률을 주입한다. step()에서 position sizing에 반영."""
         self._regime_probs = regime_probs
 
+    def _bear_gate_active(self) -> bool:
+        """Phase 8-Gamma G1: returns True if bear gate should fire at current_step."""
+        if not self.regime_gate_enabled or self.regime_track is None:
+            return False
+        if self.current_step is None or self.current_step >= len(self.regime_track):
+            return False
+        probs = self.regime_track[self.current_step]
+        if self.regime_gate_bear_threshold > 0:
+            return float(probs[0]) > self.regime_gate_bear_threshold  # idx 0 = BEAR
+        # argmax mode (threshold == 0)
+        return int(probs.argmax()) == 0  # BEAR=0
+
     def reset(
         self, seed: Optional[int] = None, options: Optional[dict] = None
     ) -> Tuple[np.ndarray, Dict[str, Any]]:
@@ -370,6 +400,7 @@ class SingleAssetRLTradingEnv(gym.Env):
         self.last_slippage = 0.0
         self._entry_price = None
         self._steps_since_funding = 0
+        self._gate_fires = 0
         if self._risk_manager is not None:
             self._risk_manager.reset()
 
@@ -403,6 +434,23 @@ class SingleAssetRLTradingEnv(gym.Env):
         if current_volume <= 0 or np.isnan(current_volume) or np.isinf(current_volume):
             self.logger.warning(f"❌ EXTREME VOLUME VALUE at step {self.current_step}: volume={current_volume}")
             current_volume = 1.0
+
+        # Phase 8-Gamma G1: HMM regime gate — overrides action before raw_action is read.
+        # Bypasses the buggy RLRiskManager.adjust_for_regime (see plan §1 / §4 for why).
+        if self._bear_gate_active():
+            _raw = float(action[0])
+            if self.regime_gate_mode == "close":
+                if abs(self.current_position) > 1e-6:
+                    action = np.array(
+                        [-self.current_position / max(self.max_position_size, 1e-9)],
+                        dtype=action.dtype,
+                    )
+                elif _raw > 0:
+                    action = np.array([0.0], dtype=action.dtype)
+            elif self.regime_gate_mode == "refuse_entry":
+                if _raw > 0 and self.current_position <= 0:
+                    action = np.array([0.0], dtype=action.dtype)
+            self._gate_fires += 1
 
         # Calculate target position change
         raw_action = float(action[0])
@@ -1349,6 +1397,8 @@ class SingleAssetRLTradingEnv(gym.Env):
             "last_trade_size": self.last_trade_size,
             "last_fill_rate": self.last_fill_rate,
             "last_slippage": self.last_slippage,
+            "regime_gate_fires": self._gate_fires,
+            "regime_gate_active": self._bear_gate_active() if self.regime_gate_enabled else False,
         }
 
     def _calculate_portfolio_value(self, step: int) -> float:

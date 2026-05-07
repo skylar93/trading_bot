@@ -313,6 +313,25 @@ def normalize_data_format(data: Any) -> pd.DataFrame:
 
     raise ValueError("Unsupported data format. Expected DataFrame or list of dicts.")
 
+
+def _compute_regime_track(detector, data: pd.DataFrame) -> np.ndarray:
+    """Compute per-step regime posterior probabilities along a data series.
+
+    Returns (len(data), n_regimes) array. The first `lookback` rows fall
+    back to uniform priors since the HMM needs that many samples.
+    """
+    n = len(data)
+    nr = detector.n_regimes
+    track = np.full((n, nr), 1.0 / nr, dtype=np.float32)
+    if not detector.is_fitted:
+        return track
+    lookback = detector.lookback
+    for i in range(lookback, n):
+        window = data.iloc[i - lookback: i + 1]
+        track[i] = detector.predict_proba(window)
+    return track
+
+
 def create_env(
     config: Dict[str, Any],
     data: Optional[Union[pd.DataFrame, List[Dict]]] = None,
@@ -375,6 +394,25 @@ def create_env(
 
     # Create environment based on type
     if env_type == "single_asset_rl":
+        # Phase 8-Gamma G1: build regime_track if gate is enabled
+        regime_gate_cfg = env_config.get("regime_gate", {}) or {}
+        regime_track = None
+        if regime_gate_cfg.get("enabled", False):
+            detector = env_config.get("_fitted_detector")
+            if detector is None:
+                raise ValueError(
+                    "regime_gate.enabled=true but no fitted detector in "
+                    "env_config['_fitted_detector']. Fit the detector in "
+                    "run_wf.py before calling env_factory."
+                )
+            regime_track = _compute_regime_track(detector, data)
+            logger.info(
+                "Regime track computed: %d steps, mean bear prob %.3f, mean bull prob %.3f",
+                len(regime_track),
+                float(regime_track[:, 0].mean()),
+                float(regime_track[:, 2].mean()),
+            )
+
         # Create single-asset environment with only supported parameters
         env = SingleAssetRLTradingEnv(
             data=data,
@@ -396,6 +434,11 @@ def create_env(
             funding_rate_per_8h=env_config.get("funding_rate_per_8h", 0.0001),
             inactivity_penalty=env_config.get("inactivity_penalty", 0.0),
             sharpe_clip_value=env_config.get("sharpe_clip_value", 10.0),
+            # Phase 8-Gamma G1: regime gate pass-through
+            regime_track=regime_track,
+            regime_gate_enabled=regime_gate_cfg.get("enabled", False),
+            regime_gate_mode=regime_gate_cfg.get("mode", "close"),
+            regime_gate_bear_threshold=regime_gate_cfg.get("bear_threshold", 0.5),
         )
 
         logger.info(f"Created single-agent environment: {env}")

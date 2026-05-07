@@ -67,6 +67,21 @@ def main() -> None:
     df = pd.read_csv(args.data, index_col=0, parse_dates=True)
     print(f"Data: {len(df)} rows, {df.index[0]} -> {df.index[-1]}")
 
+    # Phase 8-Gamma G1: fit HMM detector on full data if regime gate is enabled.
+    # Diagnostic-stage simplification: full-data fit (leakage caveat — see plan §2 arch).
+    regime_cfg = cfg.get("env", {}).get("regime_gate", {}) or {}
+    if regime_cfg.get("enabled", False):
+        from training.signals.regime_detector import RegimeDetector
+        detector_kwargs = regime_cfg.get("detector", {}) or {}
+        detector = RegimeDetector(**detector_kwargs)
+        detector.fit(df)
+        print(
+            f"RegimeDetector fitted on full data ({len(df)} rows). "
+            f"Per-regime mean returns: "
+            f"{detector._model.means_[detector._regime_order, 0].round(6).tolist()}"
+        )
+        cfg["env"]["_fitted_detector"] = detector
+
     result = train_pipeline(config=cfg, data=df)
     print("=== RESULT ===")
     print(result)

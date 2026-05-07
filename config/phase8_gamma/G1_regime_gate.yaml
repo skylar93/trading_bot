@@ -1,0 +1,52 @@
+# Phase 8-Gamma G1 diagnostic — HMM regime gate on top of futures_maker baseline
+# Inherits from base.yaml + futures_maker.yaml semantics; adds regime_gate config.
+# Diagnostic-stage simplifications (intentional, see plan §2):
+#   1. HMM fitted on full data (leakage caveat)
+#   2. Hard gate via argmax or threshold (no soft scaling)
+#   3. Gate implemented directly in env step (bypasses buggy adjust_for_regime)
+
+env:
+  type: single_asset_rl
+  window_size: 20
+  initial_balance: 100000.0
+  trading_fee: 0.00018
+  apply_slippage: false
+  slippage_factor: 0.0
+  cost_model: futures_maker
+  funding_rate_per_8h: 0.0001
+  max_position_size: 1.0
+  sharpe_lookback: 60
+  sharpe_weight: 0.1
+  normalize: true
+  reward_function: sharpe_ratio
+  action_type: continuous
+  include_technical_indicators: true
+  risk_adjusted: true
+  realistic_slippage: false
+
+  # Phase 8-Gamma G1 — HMM regime gate
+  regime_gate:
+    enabled: true
+    mode: close                # "close" forces flat in bear; "refuse_entry" only blocks new longs
+    bear_threshold: 0.5        # min bear posterior prob to trigger gate; 0.0 = argmax mode
+    detector:
+      n_regimes: 3
+      lookback: 60
+      vol_window: 20
+      n_iter: 100
+      random_state: 42
+
+  indicators:
+    - name: RSI
+      window: 14
+    - name: MACD
+      fast_window: 12
+      slow_window: 26
+      signal_window: 9
+    - name: Bollinger
+      window: 20
+      dev: 2
+
+walk_forward:
+  random_start_eval: true
+  eval_episodes: 20

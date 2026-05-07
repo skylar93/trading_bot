@@ -34,10 +34,25 @@ if args.config:
         if key in ec:
             env_kwargs[key] = ec[key]
     print(f"Config loaded from {args.config}: {env_kwargs}")
+else:
+    raw = {}
 
 df = pd.read_csv("data/BTCUSDT_1h.csv", index_col=0, parse_dates=True)
 df = df.iloc[:2000].copy()
 print(f"Data: {len(df)} rows, {df.index[0]} -> {df.index[-1]}")
+
+# Phase 8-Gamma G1: fit detector and build regime_track if gate is enabled in config
+regime_cfg = (raw.get("env", {}) or {}).get("regime_gate", {}) or {}
+if regime_cfg.get("enabled", False):
+    from training.signals.regime_detector import RegimeDetector
+    from training.env_factory import _compute_regime_track
+    det = RegimeDetector(**(regime_cfg.get("detector", {}) or {}))
+    det.fit(df)
+    print(f"RegimeDetector fitted on {len(df)} rows.")
+    env_kwargs["regime_track"] = _compute_regime_track(det, df)
+    env_kwargs["regime_gate_enabled"] = True
+    env_kwargs["regime_gate_mode"] = regime_cfg.get("mode", "close")
+    env_kwargs["regime_gate_bear_threshold"] = regime_cfg.get("bear_threshold", 0.5)
 
 env = SingleAssetRLTradingEnv(
     data=df,
@@ -55,7 +70,10 @@ print(
     f"funding_rate_per_8h={getattr(env, 'funding_rate_per_8h', 0.0)}, "
     f"sharpe_weight={getattr(env, 'sharpe_weight', 0.1)}, "
     f"inactivity_penalty={getattr(env, 'inactivity_penalty', 0.0)}, "
-    f"sharpe_clip_value={getattr(env, 'sharpe_clip_value', 10.0)}"
+    f"sharpe_clip_value={getattr(env, 'sharpe_clip_value', 10.0)}, "
+    f"regime_gate_enabled={getattr(env, 'regime_gate_enabled', False)}, "
+    f"regime_gate_mode={getattr(env, 'regime_gate_mode', 'close')}, "
+    f"regime_gate_bear_threshold={getattr(env, 'regime_gate_bear_threshold', 0.5)}"
 )
 
 agent = create_agent(
@@ -99,4 +117,6 @@ print(f"reward at -5 floor:  {(rewards <= -4.99).sum()} / {len(rewards)} steps")
 print(f"reward at +5 ceil:   {(rewards >= 4.99).sum()} / {len(rewards)} steps")
 print(f"capital min/mean:    {capitals.min():.2f} / {capitals.mean():.2f}")
 print(f"NEGATIVE capital:    {neg_capital} steps {'(BUG STILL PRESENT!)' if neg_capital else '(OK)'}")
+if getattr(env, 'regime_gate_enabled', False):
+    print(f"regime_gate_fires:   {getattr(env, '_gate_fires', 0)} (last episode)")
 print("=" * 60)
