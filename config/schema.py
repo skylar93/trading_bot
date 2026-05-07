@@ -70,6 +70,25 @@ class EnvConfig(BaseModel):
             raise ValueError(f"sharpe_clip_value must be in (0, 100], got {v}")
         return v
 
+    # Phase 8-Gamma G1: regime gate knobs (nested regime_gate dict is extra="allow")
+    regime_gate_enabled: bool = False
+    regime_gate_mode: str = "close"
+    regime_gate_bear_threshold: float = 0.5
+
+    @field_validator("regime_gate_mode")
+    @classmethod
+    def regime_gate_mode_valid(cls, v: str) -> str:
+        if v not in ("close", "refuse_entry"):
+            raise ValueError(f"regime_gate_mode must be 'close' or 'refuse_entry', got '{v}'")
+        return v
+
+    @field_validator("regime_gate_bear_threshold")
+    @classmethod
+    def regime_gate_bear_threshold_range(cls, v: float) -> float:
+        if not (0.0 <= v <= 1.0):
+            raise ValueError(f"regime_gate_bear_threshold must be in [0, 1], got {v}")
+        return v
+
 
 class AgentConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
