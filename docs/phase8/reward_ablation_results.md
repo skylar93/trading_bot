@@ -1,7 +1,7 @@
 # Phase 8-Beta Stage 1 — Reward Ablation Results
 
-**Date**: 2026-05-06
-**Setup**: 4 variants × 50k timesteps × 12-fold expanding walk-forward × eval_episodes=20 × random_start_eval=true. Plus B3-only 200k follow-up to test convergence dynamics.
+**Date**: 2026-05-06 (Stage 1 + 200k); 2026-05-07 (B3 1M empirical closure)
+**Setup**: 4 variants × 50k timesteps × 12-fold expanding walk-forward × eval_episodes=20 × random_start_eval=true. Plus B3-only 200k and 1M follow-ups to test convergence dynamics.
 **Branch**: claude/phase8-beta-reward-ablation (Stage 1 code) + claude/phase8-beta-closure (this evidence pack)
 **Plan reference**: `/Users/skylar/.claude/plans/phase8-beta-reward-shaping.md` §2 (v2)
 **Verdict**: **NEGATIVE — Phase 8-Beta closed. No Stage 2.**
@@ -90,8 +90,11 @@ The 50k snapshot showed B3 trading 2× more than B0 in fixed-start. To test whet
 | Timesteps | All mean | Bull mean | Bear mean | Folds+ | Trades/ep | MaxDD |
 |-----------|---------|-----------|-----------|--------|-----------|-------|
 | 50k       | -0.57%  | +0.89%    | -1.61%    | 6/12   | 12.90     | 16.00%|
-| **200k**  | **-0.59%** | **+0.88%** | **-1.65%** | **6/12** | **5.00** | **16.37%** |
-| ~1M (predicted, from v3 baseline) | -0.59% | +0.92% | -1.67% | 6/12 | 1.50 | 4.20% |
+| 200k      | -0.59%  | +0.88%    | -1.65%    | 6/12   | 5.00      | 16.37%|
+| **1M**    | **-0.59%** | **+0.93%** | **-1.68%** | **6/12** | **1.66** | **16.59%** |
+| v3 1M (B0 baseline) | -0.59% | +0.92% | -1.67% | 6/12 | 1.50 | **4.20%** |
+
+The 1M run was launched after the 200k follow-up to confirm the convergence prediction empirically (the prior version of this evidence pack had 1M as a predicted row). Per-fold returns match v3 1M to within 0.05pp on every fold — an even cleaner reproduction than predicted.
 
 ### B3 200k per-fold detail (fixed-start)
 
@@ -110,20 +113,49 @@ The 50k snapshot showed B3 trading 2× more than B0 in fixed-start. To test whet
 | 10   | bear   | -1.71%  | -21.70 | 5.15      | 27.91%|
 | 11   | bull   | +1.04%  | +3.59  | 9.55      | 0.00% |
 
-### Comparison: B3 200k vs Phase 8-Alpha v3 1M (= effectively B0 1M on current code)
+### Comparison: B3 1M vs Phase 8-Alpha v3 1M (= B0 1M on current code)
 
-| Metric | v3 1M (B0 baseline) | B3 200k | Δ |
-|--------|---------------------|---------|---|
+| Metric | v3 1M (B0 baseline) | B3 1M | Δ |
+|--------|---------------------|-------|---|
 | All mean | -0.59% | -0.59% | 0.00 |
-| Bull mean | +0.92% | +0.88% | -0.04 |
-| Bear mean | -1.67% | -1.65% | +0.02 |
+| Bull mean | +0.92% | +0.93% | +0.01 |
+| Bear mean | -1.67% | -1.68% | -0.01 |
 | Folds positive | 6/12 | 6/12 | 0 |
-| Trades/ep | 1.50 | 5.00 | +3.5 (still mid-convergence) |
-| MaxDD | 4.20% | 16.37% | +12.17pp (still mid-convergence) |
+| Trades/ep | 1.50 | 1.66 | +0.16 |
+| **Mean MaxDD** | **4.20%** | **16.59%** | **+12.39pp (4× worse)** |
 
-Returns are within 0.04pp on every metric. Trade count and MaxDD differences reflect that 200k is mid-convergence: by 1M the policy will have learned to avoid the bad trades (bringing trade count and DD down to v3 levels).
+Returns are within 0.01pp on every metric — B3 1M is essentially a byte-identical reproduction of v3 1M on the return surface. **But mean MaxDD is 4× worse.**
 
-**The convergence is monotonic and predictable.** Sharpe-clip narrowing slows convergence to the same final equilibrium; it does not produce a new equilibrium.
+### B3 1M per-fold detail (fixed-start)
+
+| Fold | Regime | OOS ret | Trades/ep | MaxDD | v3 MaxDD (approx) |
+|------|--------|---------|-----------|-------|--------|
+| 0    | bull   | +0.27%  | 2.00      | 0.00% | low |
+| 1    | bear   | -3.28%  | 1.05      | **46.97%** | low |
+| 2    | bull   | +1.07%  | 1.00      | 0.00% | low |
+| 3    | bear   | -0.88%  | 1.00      | 15.49% | low |
+| 4    | bear   | -3.77%  | 1.00      | **51.82%** | low |
+| 5    | bull   | +1.87%  | 2.00      | 0.00% | low |
+| 6    | bear   | -2.65%  | 1.00      | **40.01%** | low |
+| 7    | bear   | -0.95%  | 1.95      | 16.58% | low |
+| 8    | bull   | +0.32%  | 1.95      | 0.00% | low |
+| 9    | bear   | +1.52%  | 2.15      | 0.00% | low |
+| 10   | bear   | -1.74%  | 2.95      | 28.27% | low |
+| 11   | bull   | +1.13%  | 1.85      | 0.00% | low |
+
+Bull folds: clean (0% MaxDD on 4/5 folds). The negative-DD all comes from bear folds 1, 4, 6 — three deep unrealized drawdowns (40-52%) that recovered to "only" -1 to -4% realized loss.
+
+### Newly-discovered cost of B3: Sharpe-clip narrowing degrades drawdown path
+
+The 1M run revealed a hidden cost not visible in 200k: **B3's narrower clip removed a useful stop-loss-like reflex** that v3 (default clip ±10) had learned. The mechanism:
+
+- v3 trains under saturated negative sharpe whenever a position bleeds; the policy learns "exit fast when reward turns deeply negative" → small MaxDD.
+- B3 caps the negative sharpe at -0.4 (= ±2 × weight 0.1); the policy's exit signal is dampened → it holds through deep unrealized drawdowns and only liquidates when basic_reward + drawdown_penalty finally compounds enough.
+- Realized returns end up similar (the deep drawdowns recover), but the path through 40-50% drawdowns is unacceptable for a live system.
+
+Plan §0 hypothesis: "sharpe saturation = trade-aversion mechanism, weakening it = good." Reality: **saturation was also doing the work of an implicit stop-loss**. Weakening it kept the policy *more* willing to enter and *less* willing to exit — net worse risk control with the same realized return.
+
+**The convergence is monotonic and predictable on returns; the drawdown path is not.** B3 1M would have been strictly worse than B0 1M in production despite matching returns, had it been chosen for Stage 2.
 
 ---
 
@@ -135,8 +167,9 @@ Returns are within 0.04pp on every metric. Trade count and MaxDD differences ref
 - ❌ **Bear signal absent**: bear mean -1.5 to -1.7% across all 5 runs. No reward-shaping variant moved the bear regime.
 - ❌ **Reward shaping does not change the final policy**: it only changes convergence speed. Once trained to ~1M, all four variants would produce v3-equivalent results.
 - ❌ **Plan §7 predictions wrong on 3/4 variants**: the reward-magnitude model was missing policy-gradient convergence dynamics. The mechanism §0 identified (sharpe saturation) is real but the lever is too weak to change the final equilibrium.
+- ❌ **Bonus finding from B3 1M**: sharpe-clip narrowing degrades the drawdown path (mean MaxDD 16.59% vs v3's 4.20%) without changing returns. The clip was acting as an implicit stop-loss that B3 weakened. **B3 would have been strictly worse in production than B0 even though returns are identical.**
 
-**Stage 2 is NOT recommended on the strength of this evidence alone.** B3 at 1M would reproduce v3 within seed noise per the convergence trajectory above. (An optional B3 1M run for empirical closure is fine but adds no decision-relevant information.)
+**Stage 2 was empirically closed by the B3 1M run.** Per-fold returns match v3 1M to within 0.05pp on every fold; aggregate returns match within 0.01pp. The drawdown blowup confirms reward shaping in this direction is not just useless — it is actively harmful.
 
 ---
 
@@ -189,8 +222,9 @@ python run_wf.py --config config/phase8_beta/B1_inactivity.yaml --n_splits 12 --
 python run_wf.py --config config/phase8_beta/B2_sharpe_weight.yaml --n_splits 12 --total_timesteps 50000
 python run_wf.py --config config/phase8_beta/B3_sharpe_clip.yaml --n_splits 12 --total_timesteps 50000
 
-# B3 200k follow-up:
+# B3 200k and 1M follow-ups:
 python run_wf.py --config config/phase8_beta/B3_sharpe_clip.yaml --n_splits 12 --total_timesteps 200000
+python run_wf.py --config config/phase8_beta/B3_sharpe_clip.yaml --n_splits 12 --total_timesteps 1000000
 
 # Aggregate:
 python scripts/aggregate_wf_results.py \
@@ -199,4 +233,4 @@ python scripts/aggregate_wf_results.py \
     --apply-criterion --detail B3
 ```
 
-Raw logs: `logs/phase8_beta_stage1/` (50k, 5 files) and `logs/phase8_beta_200k/B3_200k.log`. Not committed (each ~150KB, gitignored under `logs/`).
+Raw logs: `logs/phase8_beta_stage1/` (50k, 5 files), `logs/phase8_beta_200k/B3_200k.log`, `logs/phase8_beta_1M/B3_1M.log`. Not committed (gitignored under `logs/`).
