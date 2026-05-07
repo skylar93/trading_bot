@@ -118,6 +118,23 @@ def _parse_float(s: str) -> float:
     return float(s)
 
 
+def _read_log_text(path: Path) -> str:
+    """Read a log file with BOM auto-detection.
+
+    PowerShell on Windows redirects (`*>` / `Out-File`) default to UTF-16 LE
+    with BOM (\\xff\\xfe), which UTF-8 decoding garbles. We sniff the first
+    bytes and pick the right codec; fall back to UTF-8 with replacement.
+    """
+    raw = path.read_bytes()
+    if raw.startswith(b"\xff\xfe"):
+        return raw.decode("utf-16-le", errors="replace").lstrip("﻿")
+    if raw.startswith(b"\xfe\xff"):
+        return raw.decode("utf-16-be", errors="replace").lstrip("﻿")
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return raw[3:].decode("utf-8", errors="replace")
+    return raw.decode("utf-8", errors="replace")
+
+
 def parse_log(path: Path) -> List[ParsedFold]:
     """Extract all FoldResults from a run_wf.py log file.
 
@@ -126,7 +143,7 @@ def parse_log(path: Path) -> List[ParsedFold]:
 
     Raises ValueError if the RESULT block is absent or no folds are found.
     """
-    text = path.read_text(encoding="utf-8", errors="replace")
+    text = _read_log_text(path)
 
     marker = "=== RESULT ==="
     idx = text.rfind(marker)  # take the last occurrence if log was re-run

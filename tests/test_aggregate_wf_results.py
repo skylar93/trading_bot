@@ -155,6 +155,36 @@ class TestParseLogHappyPath:
 # parse_log: error cases
 # ---------------------------------------------------------------------------
 
+class TestParseLogEncodings:
+    """PowerShell on Windows defaults to UTF-16 LE for `*>` redirects;
+    parser must handle that and other BOM variants transparently.
+    """
+
+    def test_utf16_le_log_parses(self, tmp_path):
+        block = _make_result_block(n_folds=2)
+        text = "log start\n" + block + "\n"
+        path = tmp_path / "B0_utf16le.log"
+        path.write_bytes(b"\xff\xfe" + text.encode("utf-16-le"))
+        folds = parse_log(path)
+        assert len(folds) == 2
+
+    def test_utf16_be_log_parses(self, tmp_path):
+        block = _make_result_block(n_folds=2)
+        text = "log start\n" + block + "\n"
+        path = tmp_path / "B0_utf16be.log"
+        path.write_bytes(b"\xfe\xff" + text.encode("utf-16-be"))
+        folds = parse_log(path)
+        assert len(folds) == 2
+
+    def test_utf8_with_bom_log_parses(self, tmp_path):
+        block = _make_result_block(n_folds=2)
+        text = "log start\n" + block + "\n"
+        path = tmp_path / "B0_utf8bom.log"
+        path.write_bytes(b"\xef\xbb\xbf" + text.encode("utf-8"))
+        folds = parse_log(path)
+        assert len(folds) == 2
+
+
 class TestParseLogErrors:
     def test_missing_result_block_raises(self, tmp_path):
         log = _write_log(tmp_path, "Training complete. No result block here.\n")
