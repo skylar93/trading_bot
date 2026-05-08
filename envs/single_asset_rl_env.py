@@ -118,7 +118,10 @@ class SingleAssetRLTradingEnv(gym.Env):
             scale_ohlcv: Whether to scale OHLCV data to prevent numerical instability
             price_scale_factor: Factor to scale price data (OHLC)
             volume_scale_factor: Factor to scale volume data
-            min_episode_steps: Minimum number of steps before allowing early termination
+            min_episode_steps: Minimum number of steps **after episode start** before
+                allowing early termination via capital floor or portfolio FORCE_TERMINATION.
+                Counted from `_episode_start_step` (which differs from `window_size` when
+                `reset(options={"random_start": True})` picks a non-default start step).
             reward_scale: Factor to scale rewards (smaller values = more stable)
         """
         super().__init__()
@@ -280,6 +283,7 @@ class SingleAssetRLTradingEnv(gym.Env):
         )
 
         # Initialize state variables
+        self._episode_start_step = 0  # set properly in reset()
         self.current_step = None
         self.current_position = None
         self.current_capital = None
@@ -384,6 +388,7 @@ class SingleAssetRLTradingEnv(gym.Env):
             )
         else:
             self.current_step = self.window_size
+        self._episode_start_step = self.current_step
         self.current_position = 0.0
         self.current_capital = self.initial_capital
         self.portfolio_value = self.initial_capital
@@ -702,8 +707,8 @@ class SingleAssetRLTradingEnv(gym.Env):
         else:
             _capital_force_done = False
 
-        if _capital_force_done and (self.current_step - self.window_size) < self.min_episode_steps:
-            self.logger.debug(f"Delaying episode termination until minimum steps {self.min_episode_steps} are reached. Current: {self.current_step - self.window_size}")
+        if _capital_force_done and (self.current_step - self._episode_start_step) < self.min_episode_steps:
+            self.logger.debug(f"Delaying episode termination until minimum steps {self.min_episode_steps} are reached. Current: {self.current_step - self._episode_start_step}")
             _capital_force_done = False
 
         if _capital_force_done:
@@ -761,7 +766,7 @@ class SingleAssetRLTradingEnv(gym.Env):
              final_reward_on_termination = -5.0
 
         # 에피소드 강제 종료 조건 확인 (최소 스텝 이후)
-        min_steps_elapsed = (self.current_step - self.window_size) >= self.min_episode_steps
+        min_steps_elapsed = (self.current_step - self._episode_start_step) >= self.min_episode_steps
         if FORCE_TERMINATION and min_steps_elapsed:
             self.done = True
             observation = self._get_observation() # 최종 상태 가져오기
