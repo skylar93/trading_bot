@@ -247,3 +247,32 @@ def test_gate_fires_counter_increments():
     # After reset, counter resets to 0
     _, info = env.reset(seed=0)
     assert info["regime_gate_fires"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Test 9: gate_fires cumulative count persists to final info dict
+# ---------------------------------------------------------------------------
+
+def test_gate_fires_persists_across_episode_to_info():
+    """Confirms that final info dict captures cumulative gate_fires for the episode.
+
+    Regression: protects against future refactor that resets gate_fires before _get_info.
+    """
+    data = _make_data(200)
+    bear_track = _make_bear_track(len(data))
+    env = _make_env(data, regime_track=bear_track, regime_gate_enabled=True,
+                    regime_gate_mode="refuse_entry")
+    env.reset(seed=0)
+    last_info = {}
+    for _ in range(20):
+        action = np.array([1.0], dtype=np.float32)
+        _, _, term, trunc, info = env.step(action)
+        last_info = info
+        if term or trunc:
+            break
+    assert last_info["regime_gate_fires"] > 0, (
+        f"Expected non-zero fires after 20 long-actions in all-bear regime, "
+        f"got {last_info['regime_gate_fires']}"
+    )
+    assert last_info["regime_gate_fires"] == env._gate_fires, \
+        "info dict should mirror env._gate_fires"
