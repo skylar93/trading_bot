@@ -41,6 +41,9 @@ class FoldResult:
     oos_total_return_random: float = 0.0
     oos_trade_count_mean: float = 0.0
     oos_trade_count_random_mean: float = 0.0
+    # Phase 8-Gamma G1 diagnostic: gate activity (random-start eval only)
+    oos_mean_gate_fires_per_episode: float = 0.0
+    oos_mean_gate_active_fraction: float = 0.0
     metrics: Dict[str, float] = field(default_factory=dict)
 
 
@@ -84,6 +87,14 @@ class WalkForwardResult:
     def oos_total_return_random_mean(self) -> float:
         return float(np.mean([f.oos_total_return_random for f in self.folds])) if self.folds else 0.0
 
+    @property
+    def oos_mean_gate_fires_per_episode(self) -> float:
+        return float(np.mean([f.oos_mean_gate_fires_per_episode for f in self.folds])) if self.folds else 0.0
+
+    @property
+    def oos_mean_gate_active_fraction(self) -> float:
+        return float(np.mean([f.oos_mean_gate_active_fraction for f in self.folds])) if self.folds else 0.0
+
     def summary(self) -> Dict[str, float]:
         return {
             "oos_sharpe_mean": self.oos_sharpe,
@@ -94,6 +105,8 @@ class WalkForwardResult:
             "n_folds": len(self.folds),
             "oos_total_return_mean": self.oos_total_return_mean,
             "oos_total_return_random_mean": self.oos_total_return_random_mean,
+            "oos_mean_gate_fires_per_episode": self.oos_mean_gate_fires_per_episode,
+            "oos_mean_gate_active_fraction": self.oos_mean_gate_active_fraction,
         }
 
 
@@ -229,7 +242,9 @@ class WalkForwardValidator:
 
             # Test (out-of-sample) — fixed start
             test_env = env_factory(test_df)
-            oos_returns, oos_trades = self._evaluate(agent, test_env, eval_episodes, random_start=False)
+            oos_returns, oos_trades, _gate_fires_fixed, _step_counts_fixed = self._evaluate(
+                agent, test_env, eval_episodes, random_start=False
+            )
             oos_sharpe = self._compute_sharpe(oos_returns)
             oos_dd = self._max_drawdown(oos_returns)
             oos_total = float(np.mean(oos_returns)) if len(oos_returns) > 0 else 0.0
@@ -239,13 +254,19 @@ class WalkForwardValidator:
             oos_sharpe_random = 0.0
             oos_total_random = 0.0
             oos_trade_count_random_mean = 0.0
+            oos_mean_gate_fires_per_episode = 0.0
+            oos_mean_gate_active_fraction = 0.0
             if random_start_eval:
-                oos_returns_random, oos_trades_random = self._evaluate(
-                    agent, test_env, eval_episodes, random_start=True
-                )
+                oos_returns_random, oos_trades_random, oos_gate_fires_random, oos_step_counts_random = \
+                    self._evaluate(agent, test_env, eval_episodes, random_start=True)
                 oos_sharpe_random = self._compute_sharpe(oos_returns_random)
                 oos_total_random = float(np.mean(oos_returns_random)) if len(oos_returns_random) > 0 else 0.0
                 oos_trade_count_random_mean = float(np.mean(oos_trades_random)) if len(oos_trades_random) > 0 else 0.0
+                oos_mean_gate_fires_per_episode = float(np.mean(oos_gate_fires_random)) if len(oos_gate_fires_random) > 0 else 0.0
+                total_steps = int(np.sum(oos_step_counts_random))
+                oos_mean_gate_active_fraction = (
+                    float(np.sum(oos_gate_fires_random)) / total_steps if total_steps > 0 else 0.0
+                )
 
             fold = FoldResult(
                 fold_idx=i,
@@ -260,13 +281,18 @@ class WalkForwardValidator:
                 oos_total_return_random=oos_total_random,
                 oos_trade_count_mean=oos_trade_count_mean,
                 oos_trade_count_random_mean=oos_trade_count_random_mean,
+                oos_mean_gate_fires_per_episode=oos_mean_gate_fires_per_episode,
+                oos_mean_gate_active_fraction=oos_mean_gate_active_fraction,
             )
             folds.append(fold)
 
             _rand_suffix = (f" | random-start OOS return={oos_total_random:.4f}") if random_start_eval else ""
             logger.info(
-                "Fold %d result — IS Sharpe=%.3f, OOS Sharpe=%.3f, OOS DD=%.3f%s",
-                i + 1, is_sharpe, oos_sharpe, oos_dd, _rand_suffix,
+                "Fold %d result — IS Sharpe=%.3f, OOS Sharpe=%.3f, OOS DD=%.3f, "
+                "gate_fires/ep=%.1f, gate_active_frac=%.3f%s",
+                i + 1, is_sharpe, oos_sharpe, oos_dd,
+                oos_mean_gate_fires_per_episode, oos_mean_gate_active_fraction,
+                _rand_suffix,
             )
 
             if is_sharpe > 0 and oos_sharpe > 0:
@@ -325,7 +351,7 @@ class WalkForwardValidator:
                 pass
             agent.learn(total_timesteps=total_timesteps, progress_bar=False)
             # After training, roll out a few episodes to score IS Sharpe.
-            is_returns, _ = WalkForwardValidator._evaluate(agent, env, max(1, eval_episodes))
+            is_returns, _, _, _ = WalkForwardValidator._evaluate(agent, env, max(1, eval_episodes))
             return is_returns
 
         # Legacy custom-wrapper path: collect per-episode portfolio % returns
@@ -378,8 +404,11 @@ class WalkForwardValidator:
     @staticmethod
     def _evaluate(
         agent, env, n_episodes: int, random_start: bool = False
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """Evaluate agent without training. Returns (per-episode % returns, per-episode trade counts).
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Evaluate agent without training.
+
+        Returns (per-episode % returns, per-episode trade counts,
+                 per-episode gate_fires, per-episode step counts).
 
         Returns per-episode % returns based on portfolio value, NOT raw reward sums
         (which are scaled and clipped and so do not have %-return semantics).
@@ -396,18 +425,29 @@ class WalkForwardValidator:
         reset_options = {"random_start": True} if random_start else None
         returns = []
         trade_counts = []
+        gate_fires_list = []
+        step_counts = []
         for _ in range(n_episodes):
             obs, _ = env.reset(options=reset_options)
             done = False
             last_info: Dict[str, Any] = {}
+            n_steps = 0
             while not done:
                 action = WalkForwardValidator._agent_action(agent, obs, deterministic=False)
                 obs, _reward, done, truncated, last_info = env.step(action)
+                n_steps += 1
                 if truncated:
                     break
             returns.append(WalkForwardValidator._episode_pv_return(env, last_info))
             trade_counts.append(int(last_info.get("trade_count", getattr(env, "trade_count", 0))))
-        return np.array(returns, dtype=np.float64), np.array(trade_counts, dtype=np.int64)
+            gate_fires_list.append(int(last_info.get("regime_gate_fires", 0)))
+            step_counts.append(n_steps)
+        return (
+            np.array(returns, dtype=np.float64),
+            np.array(trade_counts, dtype=np.int64),
+            np.array(gate_fires_list, dtype=np.int64),
+            np.array(step_counts, dtype=np.int64),
+        )
 
     @staticmethod
     def _compute_sharpe(returns: np.ndarray, risk_free: float = 0.0) -> float:

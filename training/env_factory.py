@@ -406,11 +406,16 @@ def create_env(
                     "run_wf.py before calling env_factory."
                 )
             regime_track = _compute_regime_track(detector, data)
+            am = regime_track[detector.lookback:].argmax(axis=1)
             logger.info(
-                "Regime track computed: %d steps, mean bear prob %.3f, mean bull prob %.3f",
+                "Regime track computed: %d steps, mean bear %.3f, mean bull %.3f, "
+                "argmax BEAR=%d (%.1f%%) SIDE=%d (%.1f%%) BULL=%d (%.1f%%)",
                 len(regime_track),
                 float(regime_track[:, 0].mean()),
                 float(regime_track[:, 2].mean()),
+                int((am == 0).sum()), 100 * (am == 0).mean(),
+                int((am == 1).sum()), 100 * (am == 1).mean(),
+                int((am == 2).sum()), 100 * (am == 2).mean(),
             )
 
         # Create single-asset environment with only supported parameters

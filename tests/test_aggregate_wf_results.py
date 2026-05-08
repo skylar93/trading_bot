@@ -24,6 +24,7 @@ from aggregate_wf_results import (
     main,
     parse_log,
     _parse_fold_range,
+    _FOLD_RE,
 )
 
 
@@ -431,3 +432,42 @@ class TestCLI:
         assert rc == 0
         out = capsys.readouterr().out
         assert "Per-fold detail" in out
+
+
+# ---------------------------------------------------------------------------
+# Phase 8-Gamma G1: gate metric fields + backward-compat
+# ---------------------------------------------------------------------------
+
+class TestGateMetricFields:
+    def test_parse_fold_with_gate_fields(self):
+        """Parser correctly captures new gate metric fields."""
+        text = (
+            "FoldResult(fold_idx=0, train_size=100, test_size=20, "
+            "is_sharpe=0.5, oos_sharpe=0.3, oos_max_drawdown=0.05, "
+            "oos_total_return=0.01, oos_sharpe_random=0.2, "
+            "oos_total_return_random=0.005, oos_trade_count_mean=2.0, "
+            "oos_trade_count_random_mean=2.5, "
+            "oos_mean_gate_fires_per_episode=12.3, "
+            "oos_mean_gate_active_fraction=0.15, "
+            "metrics={})"
+        )
+        matches = list(_FOLD_RE.finditer(text))
+        assert len(matches) == 1
+        g = matches[0].groupdict()
+        assert abs(float(g["gate_fires"]) - 12.3) < 1e-9
+        assert abs(float(g["gate_frac"]) - 0.15) < 1e-9
+
+    def test_parse_fold_without_gate_fields_backward_compat(self):
+        """Old logs without gate fields still parse (backward-compat)."""
+        text = (
+            "FoldResult(fold_idx=0, train_size=100, test_size=20, "
+            "is_sharpe=0.5, oos_sharpe=0.3, oos_max_drawdown=0.05, "
+            "oos_total_return=0.01, oos_sharpe_random=0.2, "
+            "oos_total_return_random=0.005, oos_trade_count_mean=2.0, "
+            "oos_trade_count_random_mean=2.5, metrics={})"
+        )
+        matches = list(_FOLD_RE.finditer(text))
+        assert len(matches) == 1
+        g = matches[0].groupdict()
+        assert g.get("gate_fires") is None
+        assert g.get("gate_frac") is None

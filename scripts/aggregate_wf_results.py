@@ -44,6 +44,9 @@ class ParsedFold:
     oos_total_return_random: float
     oos_trade_count_mean: float
     oos_trade_count_random_mean: float
+    # Phase 8-Gamma G1 diagnostic — NaN when absent from older logs
+    oos_mean_gate_fires_per_episode: float = float("nan")
+    oos_mean_gate_active_fraction: float = float("nan")
 
 
 @dataclass
@@ -76,6 +79,14 @@ class VariantResult:
         vals = self._fold_values("oos_trade_count_random_mean")
         return float(sum(vals) / len(vals)) if vals else float("nan")
 
+    def gate_fires_per_ep_mean(self) -> float:
+        vals = self._fold_values("oos_mean_gate_fires_per_episode")
+        return float(sum(vals) / len(vals)) if vals else float("nan")
+
+    def gate_active_fraction_mean(self) -> float:
+        vals = self._fold_values("oos_mean_gate_active_fraction")
+        return float(sum(vals) / len(vals)) if vals else float("nan")
+
     def n_folds(self) -> int:
         return len(self.folds)
 
@@ -102,6 +113,9 @@ _FOLD_RE = re.compile(
     r"oos_total_return_random=(?P<oos_total_return_random>" + _FLOAT + r"),\s*"
     r"oos_trade_count_mean=(?P<oos_trade_count_mean>" + _FLOAT + r"),\s*"
     r"oos_trade_count_random_mean=(?P<oos_trade_count_random_mean>" + _FLOAT + r"),\s*"
+    # Optional Phase 8-Gamma G1 fields — present in newer logs, absent in older
+    r"(?:oos_mean_gate_fires_per_episode=(?P<gate_fires>" + _FLOAT + r"),\s*"
+    r"oos_mean_gate_active_fraction=(?P<gate_frac>" + _FLOAT + r"),\s*)?"
     r"metrics=\{[^}]*\}"
     r"\)"
 )
@@ -155,6 +169,8 @@ def parse_log(path: Path) -> List[ParsedFold]:
 
     for m in _FOLD_RE.finditer(result_text):
         g = m.groupdict()
+        gate_fires = _parse_float(g["gate_fires"]) if g.get("gate_fires") is not None else float("nan")
+        gate_frac = _parse_float(g["gate_frac"]) if g.get("gate_frac") is not None else float("nan")
         folds.append(ParsedFold(
             fold_idx=int(g["fold_idx"]),
             is_sharpe=_parse_float(g["is_sharpe"]),
@@ -165,6 +181,8 @@ def parse_log(path: Path) -> List[ParsedFold]:
             oos_total_return_random=_parse_float(g["oos_total_return_random"]),
             oos_trade_count_mean=_parse_float(g["oos_trade_count_mean"]),
             oos_trade_count_random_mean=_parse_float(g["oos_trade_count_random_mean"]),
+            oos_mean_gate_fires_per_episode=gate_fires,
+            oos_mean_gate_active_fraction=gate_frac,
         ))
 
     if not folds:
@@ -246,6 +264,12 @@ def _f2(v: float) -> str:
     return f"{v:.2f}"
 
 
+def _gate_fmt(v: float) -> str:
+    if math.isnan(v):
+        return "n/a"
+    return f"{v:.2f}"
+
+
 def print_table(
     variants: List[VariantResult],
     bull_indices: List[int],
@@ -253,7 +277,8 @@ def print_table(
 ) -> None:
     header = (
         f"{'Variant':<12} {'All mean(rnd)':>14} {'Bull mean':>10} "
-        f"{'Bear mean':>10} {'Folds+':>7} {'Trades/ep':>10}"
+        f"{'Bear mean':>10} {'Folds+':>7} {'Trades/ep':>10} "
+        f"{'GateFires/ep':>13} {'GateActiveFrac':>15}"
     )
     sep = "-" * len(header)
     print(sep)
@@ -266,9 +291,32 @@ def print_table(
             f"{_pct(v.bull_mean_random(bull_indices)):>10} "
             f"{_pct(v.bear_mean_random(bear_indices)):>10} "
             f"{v.folds_positive():>5}/{v.n_folds():<2} "
-            f"{_f2(v.trades_per_ep()):>10}"
+            f"{_f2(v.trades_per_ep()):>10} "
+            f"{_gate_fmt(v.gate_fires_per_ep_mean()):>13} "
+            f"{_gate_fmt(v.gate_active_fraction_mean()):>15}"
         )
     print(sep)
+    # Warn if a G1/gamma variant has dormant gate
+    for v in variants:
+        name_lower = v.name.lower()
+        if "g1" in name_lower or "gamma" in name_lower or "regime" in name_lower:
+            gf = v.gate_fires_per_ep_mean()
+            if math.isnan(gf):
+                print(
+                    f"WARNING: variant '{v.name}' has no gate metrics. "
+                    "Run with logger.INFO + diagnostic-polish PR.",
+                    file=sys.stderr,
+                )
+            elif gf < 1.0:
+                print(
+                    f"WARNING: variant '{v.name}' shows mean gate_fires/ep = {gf:.2f} < 1.",
+                    file=sys.stderr,
+                )
+                print(
+                    "  → Detector dormant or evaluator not capturing info. "
+                    "Check run_wf log for 'argmax==BEAR' counts.",
+                    file=sys.stderr,
+                )
 
 
 def print_fold_detail(variant: VariantResult) -> None:

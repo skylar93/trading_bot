@@ -7,7 +7,13 @@ total_timesteps=1_000_000, which silently nullified the futures_maker
 override during the Phase 8-Alpha 1M re-train and the funding ablation.
 """
 import argparse
+import logging
 import sys
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
 
 sys.path.insert(0, ".")
 
@@ -80,6 +86,17 @@ def main() -> None:
             f"Per-regime mean returns: "
             f"{detector._model.means_[detector._regime_order, 0].round(6).tolist()}"
         )
+        # Phase 8-Gamma G1 diagnostic: pre-compute regime distribution
+        from training.env_factory import _compute_regime_track
+        full_track = _compute_regime_track(detector, df)
+        post = full_track[detector.lookback:]
+        am = post.argmax(axis=1)
+        print(f"Regime distribution (post-lookback, {len(post)} bars):")
+        print(f"  argmax==BEAR: {(am==0).sum()} ({100*(am==0).mean():.1f}%)")
+        print(f"  argmax==SIDE: {(am==1).sum()} ({100*(am==1).mean():.1f}%)")
+        print(f"  argmax==BULL: {(am==2).sum()} ({100*(am==2).mean():.1f}%)")
+        print(f"  bear_prob > 0.5: {(post[:,0] > 0.5).mean():.3f}")
+        print(f"  bear_prob > 0.7: {(post[:,0] > 0.7).mean():.3f}")
         cfg["env"]["_fitted_detector"] = detector
 
     result = train_pipeline(config=cfg, data=df)
