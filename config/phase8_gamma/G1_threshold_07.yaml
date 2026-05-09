@@ -1,0 +1,53 @@
+# Phase 8-Gamma G1 variant B — bear_threshold 0.7
+# Same as G1_regime_gate.yaml but bear_threshold=0.7 instead of 0.5.
+# Hypothesis: HMM bear/bull boundary is fuzzy; threshold 0.5 fires on too
+# many borderline cases (false positives in bull folds). Higher threshold
+# only fires when HMM is highly confident → fewer bull-fold disruptions
+# but still catches strong bear periods.
+# Mac diagnostic: bear_prob > 0.5 fires 7.7%, bear_prob > 0.7 fires 6.6%
+# (middle range sparse, so actual fire-rate change is small but selective).
+
+env:
+  type: single_asset_rl
+  window_size: 20
+  initial_balance: 100000.0
+  trading_fee: 0.00018
+  apply_slippage: false
+  slippage_factor: 0.0
+  cost_model: futures_maker
+  funding_rate_per_8h: 0.0001
+  max_position_size: 1.0
+  sharpe_lookback: 60
+  sharpe_weight: 0.1
+  normalize: true
+  reward_function: sharpe_ratio
+  action_type: continuous
+  include_technical_indicators: true
+  risk_adjusted: true
+  realistic_slippage: false
+
+  regime_gate:
+    enabled: true
+    mode: close
+    bear_threshold: 0.7         # ← variant B (vs 0.5 baseline)
+    detector:
+      n_regimes: 3
+      lookback: 60
+      vol_window: 20
+      n_iter: 100
+      random_state: 42
+
+  indicators:
+    - name: RSI
+      window: 14
+    - name: MACD
+      fast_window: 12
+      slow_window: 26
+      signal_window: 9
+    - name: Bollinger
+      window: 20
+      dev: 2
+
+walk_forward:
+  random_start_eval: true
+  eval_episodes: 20
