@@ -96,6 +96,8 @@ class SingleAssetRLTradingEnv(gym.Env):
         regime_gate_enabled: bool = False,
         regime_gate_mode: str = "close",
         regime_gate_bear_threshold: float = 0.5,
+        # Phase 8-Gamma G2: reward function selector
+        reward_function: str = "sharpe_ratio",
     ):
         """Initialize environment
 
@@ -210,6 +212,15 @@ class SingleAssetRLTradingEnv(gym.Env):
         self.regime_gate_mode = regime_gate_mode
         self.regime_gate_bear_threshold = regime_gate_bear_threshold
         self._gate_fires: int = 0
+
+        # Phase 8-Gamma G2: reward function selector
+        _allowed_reward_functions = {"sharpe_ratio", "log_return", "realized_pnl"}
+        if reward_function not in _allowed_reward_functions:
+            raise ValueError(
+                f"reward_function must be one of {_allowed_reward_functions}, got '{reward_function}'"
+            )
+        self.reward_function = reward_function
+        self._realized_pnl_this_step: float = 0.0
 
         # Friction parameters
         if cost_model == "futures_maker" and apply_slippage:
@@ -406,6 +417,7 @@ class SingleAssetRLTradingEnv(gym.Env):
         self._entry_price = None
         self._steps_since_funding = 0
         self._gate_fires = 0
+        self._realized_pnl_this_step = 0.0
         if self._risk_manager is not None:
             self._risk_manager.reset()
 
@@ -474,6 +486,9 @@ class SingleAssetRLTradingEnv(gym.Env):
 
         # Calculate actual position change
         actual_change = target_position - self.current_position
+
+        # Phase 8-Gamma G2: reset per-step realized PnL accumulator
+        self._realized_pnl_this_step = 0.0
 
         # DEBUG: Log action details for monitoring
         # --- START: Added Pre-Trade Logging ---
@@ -650,6 +665,16 @@ class SingleAssetRLTradingEnv(gym.Env):
             _prev_position = self.current_position
             self.current_position += actual_change
 
+            # Phase 8-Gamma G2: realized PnL on position close (computed BEFORE entry_price update)
+            if self.reward_function == "realized_pnl" and self._entry_price is not None:
+                if _prev_position > 0 and actual_change < 0:  # close / reduce long
+                    closed_size = min(_prev_position, -actual_change)
+                    self._realized_pnl_this_step = closed_size * (executed_price - self._entry_price)
+                elif _prev_position < 0 and actual_change > 0:  # close / reduce short
+                    closed_size = min(-_prev_position, actual_change)
+                    self._realized_pnl_this_step = closed_size * (self._entry_price - executed_price)
+                # else: position increase or direction-neutral — realized PnL remains 0
+
             # Week 37: update entry price for stop loss tracking
             if abs(_prev_position) < 1e-8 and abs(self.current_position) >= 1e-8:
                 self._entry_price = executed_price  # flat → non-flat: new position opened
@@ -806,6 +831,50 @@ class SingleAssetRLTradingEnv(gym.Env):
                 self.portfolio_value = self.current_capital
                 if _risk_reason == "max_drawdown":
                     self.done = True
+
+        # Phase 8-Gamma G2: realized-PnL reward path (bypasses sharpe-based reward entirely)
+        if self.reward_function == "realized_pnl":
+            realized = self._realized_pnl_this_step
+            reward_step = float(np.clip(realized / max(self.initial_capital, 1e-9), -5.0, 5.0))
+            reward_debug["basic_reward"] = reward_step
+            reward_debug["sharpe_component"] = 0.0
+            reward_debug["drawdown_penalty"] = 0.0
+            reward_debug["portfolio_change"] = 0.0
+            reward_debug["post_portfolio"] = self.portfolio_value
+            reward_debug["realized_pnl"] = realized
+            reward = reward_step
+            reward_debug["final_reward"] = reward
+
+            observation = self._get_observation()
+            info = self._get_info()
+            info["reward_debug"] = reward_debug
+            info.update(_risk_limit_info)
+
+            if self.done and self.current_step < self._ds_len():
+                if self.current_capital <= 1.0:
+                    reward = -1.0
+                elif self.portfolio_value < 1.0:
+                    reward = -0.5
+                observation = self._get_observation()
+                info = self._get_info()
+                info["reward_debug"] = reward_debug
+                info["early_termination"] = True
+                info.update(_risk_limit_info)
+                return observation, float(reward), True, False, info
+
+            if not np.all(np.isfinite(observation)):
+                bad = int(np.sum(~np.isfinite(observation)))
+                self.logger.error(
+                    f"NaN/Inf in observation at step {self.current_step}: "
+                    f"{bad} non-finite values — replacing with 0.0"
+                )
+                observation = np.nan_to_num(observation, nan=0.0, posinf=0.0, neginf=0.0)
+            if not np.isfinite(reward):
+                self.logger.error(
+                    f"NaN/Inf reward at step {self.current_step}: {reward} — replacing with 0.0"
+                )
+                reward = 0.0
+            return observation, float(reward), self.done, False, info
 
         # Calculate basic reward (change in portfolio value) using log returns with ratio clipping
         eps = 1e-8 # Small epsilon to prevent division by zero
@@ -1404,6 +1473,7 @@ class SingleAssetRLTradingEnv(gym.Env):
             "last_slippage": self.last_slippage,
             "regime_gate_fires": self._gate_fires,
             "regime_gate_active": self._bear_gate_active() if self.regime_gate_enabled else False,
+            "realized_pnl_this_step": self._realized_pnl_this_step,
         }
 
     def _calculate_portfolio_value(self, step: int) -> float:
