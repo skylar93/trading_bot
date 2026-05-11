@@ -70,6 +70,17 @@ class EnvConfig(BaseModel):
             raise ValueError(f"sharpe_clip_value must be in (0, 100], got {v}")
         return v
 
+    # Phase 8-Gamma G2: reward function selector
+    reward_function: str = "sharpe_ratio"
+
+    @field_validator("reward_function")
+    @classmethod
+    def reward_function_valid(cls, v: str) -> str:
+        valid = {"sharpe_ratio", "log_return", "realized_pnl"}
+        if v not in valid:
+            raise ValueError(f"reward_function must be one of {valid}, got '{v}'")
+        return v
+
     # Phase 8-Gamma G1: regime gate knobs (nested regime_gate dict is extra="allow")
     regime_gate_enabled: bool = False
     regime_gate_mode: str = "close"

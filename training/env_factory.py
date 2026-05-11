@@ -439,6 +439,8 @@ def create_env(
             funding_rate_per_8h=env_config.get("funding_rate_per_8h", 0.0001),
             inactivity_penalty=env_config.get("inactivity_penalty", 0.0),
             sharpe_clip_value=env_config.get("sharpe_clip_value", 10.0),
+            # Phase 8-Gamma G2: reward function selector
+            reward_function=env_config.get("reward_function", "sharpe_ratio"),
             # Phase 8-Gamma G1: regime gate pass-through
             regime_track=regime_track,
             regime_gate_enabled=regime_gate_cfg.get("enabled", False),

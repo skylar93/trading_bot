@@ -30,7 +30,8 @@ if args.config:
     ec = raw.get("env", {})
     for key in ("trading_fee", "apply_slippage", "slippage_factor", "cost_model",
                 "funding_rate_per_8h", "window_size", "max_position_size",
-                "sharpe_weight", "inactivity_penalty", "sharpe_clip_value"):
+                "sharpe_weight", "inactivity_penalty", "sharpe_clip_value",
+                "reward_function"):
         if key in ec:
             env_kwargs[key] = ec[key]
     print(f"Config loaded from {args.config}: {env_kwargs}")
@@ -73,7 +74,8 @@ print(
     f"sharpe_clip_value={getattr(env, 'sharpe_clip_value', 10.0)}, "
     f"regime_gate_enabled={getattr(env, 'regime_gate_enabled', False)}, "
     f"regime_gate_mode={getattr(env, 'regime_gate_mode', 'close')}, "
-    f"regime_gate_bear_threshold={getattr(env, 'regime_gate_bear_threshold', 0.5)}"
+    f"regime_gate_bear_threshold={getattr(env, 'regime_gate_bear_threshold', 0.5)}, "
+    f"reward_function={getattr(env, 'reward_function', 'sharpe_ratio')}"
 )
 
 agent = create_agent(
@@ -119,4 +121,7 @@ print(f"capital min/mean:    {capitals.min():.2f} / {capitals.mean():.2f}")
 print(f"NEGATIVE capital:    {neg_capital} steps {'(BUG STILL PRESENT!)' if neg_capital else '(OK)'}")
 if getattr(env, 'regime_gate_enabled', False):
     print(f"regime_gate_fires:   {getattr(env, '_gate_fires', 0)} (last episode)")
+if getattr(env, 'reward_function', '') == 'realized_pnl':
+    n_realized = sum(1 for r in rewards if abs(r) > 1e-9)
+    print(f"realized_pnl trades: {n_realized} / {len(rewards)} steps")
 print("=" * 60)
