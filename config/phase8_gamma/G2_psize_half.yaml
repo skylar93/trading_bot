@@ -1,0 +1,29 @@
+# Phase 8-Gamma G2 variant — half position size
+# G2 1M bull -1.42% driven by fold 0/11 (-4% each). Halving position size:
+# (a) caps magnitude of mistakes, (b) reduces capital floor hits → longer
+# episodes, possibly different learned dynamics.
+env:
+  type: single_asset_rl
+  window_size: 20
+  initial_balance: 100000.0
+  trading_fee: 0.00018
+  apply_slippage: false
+  slippage_factor: 0.0
+  cost_model: futures_maker
+  funding_rate_per_8h: 0.0001
+  max_position_size: 0.5            # ← 1.0 → 0.5 (G2.2 lever)
+  sharpe_lookback: 60
+  sharpe_weight: 0.0
+  normalize: true
+  reward_function: realized_pnl
+  action_type: continuous
+  include_technical_indicators: true
+  risk_adjusted: false
+  realistic_slippage: false
+  indicators:
+    - {name: RSI, window: 14}
+    - {name: MACD, fast_window: 12, slow_window: 26, signal_window: 9}
+    - {name: Bollinger, window: 20, dev: 2}
+walk_forward:
+  random_start_eval: true
+  eval_episodes: 20
