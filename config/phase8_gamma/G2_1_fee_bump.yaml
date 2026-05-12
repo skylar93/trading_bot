@@ -1,0 +1,41 @@
+# Phase 8-Gamma G2.1 — realized_pnl reward + fee bump
+# G2 1M result: All +2.05% / Bear +4.53% / Bull -1.42% / trades 2.22/ep.
+# Hypothesis for bull regression: policy closes winners too early in bull
+# trends. Higher fee makes each close costlier → policy must hold winners
+# longer to overcome friction → captures more of bull trend.
+# trading_fee 0.00018 → 0.001 (5.5×, matches Binance taker rate).
+# All other params identical to G2_realized_pnl.yaml for clean comparison.
+
+env:
+  type: single_asset_rl
+  window_size: 20
+  initial_balance: 100000.0
+  trading_fee: 0.001               # ← bump from 0.00018 (G2.1 lever)
+  apply_slippage: false
+  slippage_factor: 0.0
+  cost_model: futures_maker
+  funding_rate_per_8h: 0.0001
+  max_position_size: 1.0
+  sharpe_lookback: 60
+  sharpe_weight: 0.0
+  normalize: true
+  reward_function: realized_pnl
+  action_type: continuous
+  include_technical_indicators: true
+  risk_adjusted: false
+  realistic_slippage: false
+
+  indicators:
+    - name: RSI
+      window: 14
+    - name: MACD
+      fast_window: 12
+      slow_window: 26
+      signal_window: 9
+    - name: Bollinger
+      window: 20
+      dev: 2
+
+walk_forward:
+  random_start_eval: true
+  eval_episodes: 20
