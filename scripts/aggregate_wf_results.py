@@ -87,6 +87,18 @@ class VariantResult:
         vals = self._fold_values("oos_mean_gate_active_fraction")
         return float(sum(vals) / len(vals)) if vals else float("nan")
 
+    def maxdd_stats(self, indices: Optional[List[int]] = None) -> Tuple[float, float, float]:
+        """Return (mean, median, p95) of oos_max_drawdown for the given fold indices."""
+        vals = sorted(self._fold_values("oos_max_drawdown", indices))
+        n = len(vals)
+        if n == 0:
+            nan = float("nan")
+            return nan, nan, nan
+        mean = sum(vals) / n
+        median = vals[n // 2] if n % 2 == 1 else (vals[n // 2 - 1] + vals[n // 2]) / 2
+        p95 = vals[min(int(math.ceil(0.95 * n)) - 1, n - 1)]
+        return mean, median, p95
+
     def n_folds(self) -> int:
         return len(self.folds)
 
@@ -319,6 +331,34 @@ def print_table(
                 )
 
 
+def print_maxdd_table(
+    variants: List[VariantResult],
+    bull_indices: List[int],
+    bear_indices: List[int],
+) -> None:
+    """Print mean/median/p95 MaxDD per regime for each variant."""
+    hdr = (
+        f"{'Variant':<12} "
+        f"{'All mean DD':>12} {'All med DD':>11} {'All p95 DD':>11} "
+        f"{'Bull mean DD':>13} {'Bear mean DD':>13}"
+    )
+    sep = "-" * len(hdr)
+    print("\nMaxDD summary (oos_max_drawdown, lower = better):")
+    print(sep)
+    print(hdr)
+    print(sep)
+    for v in variants:
+        a_mean, a_med, a_p95 = v.maxdd_stats()
+        b_mean, _, _ = v.maxdd_stats(bull_indices)
+        r_mean, _, _ = v.maxdd_stats(bear_indices)
+        print(
+            f"{v.name:<12} "
+            f"{_pct(a_mean):>12} {_pct(a_med):>11} {_pct(a_p95):>11} "
+            f"{_pct(b_mean):>13} {_pct(r_mean):>13}"
+        )
+    print(sep)
+
+
 def print_fold_detail(variant: VariantResult) -> None:
     print(f"\nPer-fold detail — {variant.name}")
     hdr = f"{'Fold':>5} {'OOS ret(rnd)':>13} {'OOS Sharpe(rnd)':>16} {'Trades/ep(rnd)':>15}"
@@ -435,6 +475,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     print()
 
     print_table(variants, bull_indices, bear_indices)
+    print_maxdd_table(variants, bull_indices, bear_indices)
 
     if args.detail:
         target = next((v for v in variants if v.name == args.detail), None)
