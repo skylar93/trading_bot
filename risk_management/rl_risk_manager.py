@@ -27,6 +27,7 @@ Recent Changes:
 - Added portfolio-wide Stop-Loss and Trailing Stop
 """
 
+import warnings
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass, field
@@ -46,14 +47,14 @@ from deployment.monitoring.alerter import TradingAlerter
 class RLRiskConfig(RiskConfigBase):
     """
     Configuration for risk management in the RL trading environment.
-    
+
     Features:
     - Stop loss and trailing stop settings
     - VaR/CVaR configuration
     - Drawdown limits and liquidation triggers
     - Correlation-based risk adjustments
     - Portfolio-level risk controls
-    
+
     Implementation Notes:
     - All percentages are expressed as decimals (0.01 = 1%)
     - Default values are set to conservative levels
@@ -61,26 +62,26 @@ class RLRiskConfig(RiskConfigBase):
     """
     # Application frequency settings
     check_frequency: int = 1  # Check every n steps
-    
+
     # Correlation settings
     use_correlation: bool = False
     correlation_window: int = 50  # Window for correlation calculation
     correlation_threshold: float = 0.7  # Threshold to consider high correlation
     correlation_risk_reduction: float = 0.5  # Position size multiplier when correlation exceeds threshold
-    
+
     # Portfolio-level stop loss
     use_portfolio_stop_loss: bool = False
     portfolio_stop_loss_threshold: float = 0.15  # 15% portfolio loss triggers stop loss
-    
+
     # Portfolio-level trailing stop
     use_portfolio_trailing_stop: bool = False
     portfolio_trailing_stop_buffer: float = 0.08  # 8% drop from portfolio high water mark
-    
+
     # Multi-asset VaR settings
     use_portfolio_var: bool = False
     portfolio_var_threshold: float = 0.02  # Maximum acceptable portfolio VaR (2%)
     use_parametric_var: bool = False  # Use parametric (True) or historical (False) VaR calculation
-    
+
     # Action on VaR exceeding threshold
     action_on_var_exceed: str = "reduce_position"  # "reduce_position" or "close_position"
 
@@ -88,12 +89,12 @@ class RLRiskConfig(RiskConfigBase):
 class RLRiskManager(RiskManagerBase):
     """
     Risk manager for RL trading environment.
-    
+
     Provides risk management functionality including stop-loss, trailing stop,
     VaR/CVaR calculation and position management based on risk thresholds.
     Also includes correlation-based risk management and portfolio-level controls.
     """
-    
+
     def __init__(self, config: RLRiskConfig, alerter: Optional[TradingAlerter] = None, audit_logger=None):
         """
         Initialize the risk manager with the given configuration.
@@ -118,26 +119,26 @@ class RLRiskManager(RiskManagerBase):
         # Composition: delegate core risk computations to UnifiedRiskManager
         _var_method = "parametric" if config.use_parametric_var else "historical"
         self._unified = UnifiedRiskManager(mode="live", var_method=_var_method)
-        
+
         # Portfolio tracking
         self.peak_values = {}  # Dict[agent_id, peak_value]
         self.current_values = {}  # Dict[agent_id, current_value]
         self.position_highest_values = {}  # Dict[agent_id, Dict[asset, highest_value]]
         self.liquidation_triggered = {}  # Dict[agent_id, bool]
-        
+
         # VaR tracking
         self.returns_history = {}  # Dict[agent_id, deque]
-        
+
         # Portfolio tracking
         self.portfolio_peak_value = 0.0
         self.portfolio_current_value = 0.0
-        
+
         # Multi-asset returns history for correlation and portfolio VaR
         self.asset_returns_history = {}  # Dict[asset, deque]
         self.asset_prices_history = {}   # Dict[asset, deque]
         self.correlation_matrix = None
         self.covariance_matrix = None
-        
+
         # Metrics for logging
         self.stop_loss_events = 0
         self.trailing_stop_events = 0
@@ -146,7 +147,7 @@ class RLRiskManager(RiskManagerBase):
         self.correlation_adjustment_events = 0
         self.portfolio_stop_loss_events = 0
         self.portfolio_var_exceed_events = 0
-    
+
     def reset(self):
         """Reset all risk manager state."""
         with self._lock:
@@ -171,16 +172,16 @@ class RLRiskManager(RiskManagerBase):
             self.correlation_adjustment_events = 0
             self.portfolio_stop_loss_events = 0
             self.portfolio_var_exceed_events = 0
-    
+
     def calculate_stop_loss(self, entry_price: float, position_size: float, is_long: bool = True) -> float:
         """
         Calculate stop loss price based on entry price and position direction.
-        
+
         Args:
             entry_price: Entry price of the position
             position_size: Size of the position (positive for long, negative for short)
             is_long: Whether the position is long (True) or short (False)
-            
+
         Returns:
             float: Stop loss price
         """
@@ -188,24 +189,24 @@ class RLRiskManager(RiskManagerBase):
             return entry_price * (1 - self.config.stop_loss_threshold)
         else:
             return entry_price * (1 + self.config.stop_loss_threshold)
-    
-    def check_stop_loss(self, agent_id: str, position_size: float, 
+
+    def check_stop_loss(self, agent_id: str, position_size: float,
                       entry_price: float, current_price: float) -> bool:
         """
         Check if stop loss has been triggered for a position.
-        
+
         Args:
             agent_id: Identifier for the agent
             position_size: Size of the position (positive for long, negative for short)
             entry_price: Entry price of the position
             current_price: Current market price
-            
+
         Returns:
             bool: True if stop loss triggered, False otherwise
         """
         if not self.config.use_stop_loss:
             return False
-            
+
         # Calculate percentage loss
         if position_size > 0:  # Long position
             pct_change = (current_price - entry_price) / entry_price
@@ -215,7 +216,7 @@ class RLRiskManager(RiskManagerBase):
             pct_change = (entry_price - current_price) / entry_price
             is_loss = pct_change < 0
             loss_exceeded = abs(pct_change) > self.config.stop_loss_threshold
-        
+
         if is_loss and loss_exceeded:
             with self._lock:
                 self.stop_loss_events += 1
@@ -248,7 +249,7 @@ class RLRiskManager(RiskManagerBase):
         with self._lock:
             if key not in self.position_highest_values or current_price > self.position_highest_values[key]:
                 self.position_highest_values[key] = current_price
-    
+
     def compute_var(self, agent_id_or_returns: Union[str, np.ndarray]) -> Optional[float]:
         """
         Compute Value at Risk (VaR).
@@ -292,11 +293,11 @@ class RLRiskManager(RiskManagerBase):
             stacklevel=2,
         )
         return self.compute_var(*args, **kwargs)
-    
+
     def _get_risk_metrics(self) -> Dict[str, Any]:
         """
         Get current risk metrics.
-        
+
         Returns:
             Dict[str, Any]: Dictionary of current risk metrics
         """
@@ -309,7 +310,7 @@ class RLRiskManager(RiskManagerBase):
             "portfolio_stop_loss_events": self.portfolio_stop_loss_events,
             "portfolio_var_exceed_events": self.portfolio_var_exceed_events
         }
-    
+
     def update_portfolio_values(self, portfolio_values: Dict[str, float]):
         """
         Update portfolio values for each agent and track peak values.
@@ -335,10 +336,10 @@ class RLRiskManager(RiskManagerBase):
             # Update portfolio peak value
             if self.portfolio_peak_value == 0 or self.portfolio_current_value > self.portfolio_peak_value:
                 self.portfolio_peak_value = self.portfolio_current_value
-    
+
     # Add other RL-specific risk management methods below
     # (These are methods from the original RiskManager class in envs/risk_manager.py)
-    
+
     def record_returns(self, returns: Dict[str, float]):
         """
         Record returns for VaR calculation.
@@ -354,7 +355,7 @@ class RLRiskManager(RiskManagerBase):
                 if agent_id not in self.returns_history:
                     self.returns_history[agent_id] = deque(maxlen=self.config.rolling_var_window)
                 self.returns_history[agent_id].append(ret)
-    
+
     def _record_asset_data(self, asset_prices: Dict[str, float], asset_returns: Dict[str, float]):
         """
         Record asset prices and returns for correlation and portfolio VaR calculation.
@@ -381,7 +382,7 @@ class RLRiskManager(RiskManagerBase):
 
         # Update correlation and covariance matrices if we have enough data
         self._update_correlation_matrix()
-    
+
     def _update_correlation_matrix(self) -> None:
         """Update correlation and covariance matrices based on asset return histories."""
         if not self.config.use_correlation:
@@ -418,38 +419,38 @@ class RLRiskManager(RiskManagerBase):
         except Exception as e:
             self.logger.error(f"Error calculating correlation matrix: {e}")
             # Keep existing matrices if calculation fails
-    
+
     # Legacy compatibility methods
     def _get_correlation_matrix(self) -> Optional[pd.DataFrame]:
         """
         Get the current correlation matrix.
-        
+
         Returns:
             Optional[pd.DataFrame]: Correlation matrix or None if not available
         """
         return self.correlation_matrix
-    
+
     def get_correlation_adjustment(self, asset1: str, asset2_or_positions: Union[str, Dict[str, float]]) -> float:
         """
         Calculate position size adjustment factor based on correlations.
-        
+
         This method supports both:
         1. (asset1, asset2) to compare two specific assets
         2. (asset, position_sizes) to check one asset against all assets with positions
-        
+
         Args:
             asset1: First asset to check
             asset2_or_positions: Either:
                 - Second asset name (str) to check correlation with asset1
                 - Dictionary of position sizes for all assets to check against asset1
-                
+
         Returns:
             float: Adjustment factor (1.0 = no adjustment, < 1.0 = reduce position)
         """
         # If correlation tracking is disabled
         if not self.config.use_correlation:
             return 1.0
-            
+
         # Check if correlation matrix exists
         if self.correlation_matrix is None:
             return 1.0
@@ -461,11 +462,11 @@ class RLRiskManager(RiskManagerBase):
             for other_asset, size in asset2_or_positions.items():
                 if abs(size) < 1e-8 or other_asset == asset1:
                     continue
-                    
+
                 # Check correlation between assets
                 if other_asset in self.correlation_matrix.columns and self._check_correlation(asset1, other_asset):
                     correlated_assets += 1
-                    
+
             # If we have positions in correlated assets, reduce position size
             if correlated_assets > 0:
                 self.correlation_adjustment_events += 1
@@ -478,15 +479,15 @@ class RLRiskManager(RiskManagerBase):
             self.correlation_adjustment_events += 1
             return self.config.correlation_risk_reduction
         return 1.0
-    
+
     def _check_correlation(self, asset1: str, asset2: str) -> bool:
         """
         Check if correlation between two assets exceeds the threshold.
-        
+
         Args:
             asset1: First asset name
             asset2: Second asset name
-            
+
         Returns:
             bool: True if correlation exceeds threshold, False otherwise
         """
@@ -499,22 +500,22 @@ class RLRiskManager(RiskManagerBase):
         correlation = float(self.correlation_matrix.loc[asset1, asset2])
         # Delegate to UnifiedRiskManager
         return self._unified.check_correlation(correlation, self.config.correlation_threshold)
-    
+
     def _check_portfolio_stop_loss(self) -> bool:
         """
         Check if portfolio-wide stop loss has been triggered.
-        
+
         Returns:
             bool: True if portfolio stop loss triggered, False otherwise
         """
-        if (not self.config.use_portfolio_stop_loss or 
+        if (not self.config.use_portfolio_stop_loss or
             self.portfolio_peak_value == 0 or
             self.portfolio_current_value == 0):
             return False
-            
+
         # Calculate portfolio drawdown
         drawdown = (self.portfolio_peak_value - self.portfolio_current_value) / self.portfolio_peak_value
-        
+
         if drawdown > self.config.portfolio_stop_loss_threshold:
             self.portfolio_stop_loss_events += 1
             if self._audit_logger is not None:
@@ -532,28 +533,28 @@ class RLRiskManager(RiskManagerBase):
     def _check_portfolio_trailing_stop(self) -> bool:
         """
         Check if portfolio-wide trailing stop has been triggered.
-        
+
         Returns:
             bool: True if portfolio trailing stop triggered, False otherwise
         """
-        if (not self.config.use_portfolio_trailing_stop or 
-            self.portfolio_peak_value == 0 or 
+        if (not self.config.use_portfolio_trailing_stop or
+            self.portfolio_peak_value == 0 or
             self.portfolio_current_value == 0):
             return False
-            
+
         # Calculate portfolio drawdown from peak
         drawdown = (self.portfolio_peak_value - self.portfolio_current_value) / self.portfolio_peak_value
-        
+
         return drawdown > self.config.portfolio_trailing_stop_buffer
-    
+
     def _calculate_portfolio_var(self, position_sizes: Dict[str, float], prices: Dict[str, float]) -> Optional[float]:
         """
         Calculate portfolio Value at Risk using the covariance matrix.
-        
+
         Args:
             position_sizes: Current position sizes for all assets
             prices: Current prices for all assets
-            
+
         Returns:
             float: Portfolio VaR, or None if insufficient data
         """
@@ -602,54 +603,54 @@ class RLRiskManager(RiskManagerBase):
             portfolio_returns = returns_matrix @ w
             var = -np.percentile(portfolio_returns, 100 * (1 - self.config.var_confidence_level))
             return max(0.0, float(var))
-    
-    def check_portfolio_var_exceed(self, position_sizes: Dict[str, float], prices: Dict[str, float], 
+
+    def check_portfolio_var_exceed(self, position_sizes: Dict[str, float], prices: Dict[str, float],
                                   current_portfolio_return: float) -> bool:
         """
         Check if portfolio VaR exceeds threshold.
-        
+
         Args:
             position_sizes: Current position sizes for all assets
             prices: Current prices for all assets
             current_portfolio_return: Current portfolio return
-            
+
         Returns:
             bool: True if portfolio VaR is exceeded, False otherwise
         """
         if not self.config.use_portfolio_var:
             return False
-            
+
         # Simple implementation for compatibility
         if current_portfolio_return < -self.config.portfolio_var_threshold:
             self.portfolio_var_exceed_events += 1
             return True
-            
+
         return False
-    
+
     def update_asset_price(self, asset: str, price: float) -> None:
         """
         Update price history for a single asset.
-        
+
         Args:
             asset: Asset to update
             price: Current price
         """
         if asset not in self.asset_prices_history:
             self.asset_prices_history[asset] = deque(maxlen=self.config.correlation_window)
-            
+
         self.asset_prices_history[asset].append(price)
-    
-    def check_trailing_stop(self, agent_id: str, asset: str, 
+
+    def check_trailing_stop(self, agent_id: str, asset: str,
                           position_size: float, current_price: float) -> bool:
         """
         Check if trailing stop has been triggered.
-        
+
         Args:
             agent_id: Identifier for the agent
             asset: Asset symbol
             position_size: Size of the position (positive for long, negative for short)
             current_price: Current market price
-            
+
         Returns:
             bool: True if trailing stop triggered, False otherwise
         """
@@ -721,7 +722,7 @@ class RLRiskManager(RiskManagerBase):
                 return True
 
         return False
-    
+
     def _get_risk_events_info(self) -> Dict[str, int]:
         """
         Get information about risk events that have occurred.
@@ -739,7 +740,7 @@ class RLRiskManager(RiskManagerBase):
                 "portfolio_stop_loss_events": self.portfolio_stop_loss_events,
                 "portfolio_var_exceed_events": self.portfolio_var_exceed_events,
             }
-    
+
     def check_drawdown(self, agent_id_or_peak, peak_value=None, current_value=None) -> bool:
         """
         Check if drawdown limit has been exceeded.
@@ -830,49 +831,38 @@ class RLRiskManager(RiskManagerBase):
         return self.check_drawdown(*args, **kwargs)
 
     def adjust_for_regime(self, action: float, regime_probs: np.ndarray) -> float:
-        """
-        Regime 확률에 따라 position sizing을 조정한다.
-
-        Args:
-            action: 원래 action 값 ([-1, 1] 범위)
-            regime_probs: HMM regime 확률 배열 [low_vol, medium_vol, high_vol]
-
-        Returns:
-            float: 조정된 action 값 ([-max_position_size, max_position_size]로 clip; 숏 지원)
-
-        Notes:
-            - high-vol regime(index 2) 확률이 높을수록 position 최대 50% 축소
-            - low-vol regime(index 0) 확률이 높으면 축소 없음
-        """
-        if len(regime_probs) < 3:
-            return action
-
-        high_vol_prob = float(regime_probs[2])
-        vol_factor = 1.0 - 0.5 * high_vol_prob  # high-vol이면 최대 50% 축소
-        adjusted = action * vol_factor
-
-        max_pos = getattr(self.config, "max_position_size", 1.0)
-        return float(np.clip(adjusted, -max_pos, max_pos))
+        """Deprecated — semantic bug (vol_factor double-clips after max_position_size).
+        Phase 8-Gamma uses pre-computed regime_track + bear_gate instead."""
+        warnings.warn(
+            "adjust_for_regime() is deprecated and must not be called; "
+            "use regime_track/bear_gate in SingleAssetRLTradingEnv instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        raise RuntimeError(
+            "adjust_for_regime() is blocked (deprecated, semantic bug). "
+            "See RLRiskManager docstring for replacement."
+        )
 
     def check_var_exceed(self, agent_id: str, current_return: float) -> Optional[str]:
         """
         Check if current return exceeds VaR threshold.
-        
+
         Args:
             agent_id: Identifier for the agent
             current_return: Current period return
-            
+
         Returns:
             str or None: Action to take if VaR is exceeded, None otherwise
         """
         var_value = None
-        
+
         # Try to calculate VaR from returns history
         if agent_id in self.returns_history:
             returns = np.array(list(self.returns_history[agent_id]))
             if len(returns) >= 10:
                 var_value = self.compute_var(returns)
-        
+
         if var_value is None:
             return None
 
@@ -882,4 +872,3 @@ class RLRiskManager(RiskManagerBase):
             return self.config.action_on_var_exceed
 
         return None
-

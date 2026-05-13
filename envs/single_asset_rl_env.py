@@ -310,9 +310,7 @@ class SingleAssetRLTradingEnv(gym.Env):
         self.last_fill_rate = 1.0
         self.last_slippage = 0.0
 
-        # Week 30: regime-based position sizing
         self._risk_manager = risk_manager
-        self._regime_probs = None  # 외부에서 set_regime_probs()로 업데이트
         _annualize_map = {"daily": 252, "hourly": 252 * 6.5, "minute": 252 * 390}
         if data_frequency not in _annualize_map:
             raise ValueError(f"data_frequency must be one of {set(_annualize_map)}, got {data_frequency!r}")
@@ -360,10 +358,6 @@ class SingleAssetRLTradingEnv(gym.Env):
         if self.data_source is not None:
             return self.data_source.get_window(start, end)
         return self.data.iloc[start:end]
-
-    def set_regime_probs(self, regime_probs) -> None:
-        """Week 30: 외부에서 HMM regime 확률을 주입한다. step()에서 position sizing에 반영."""
-        self._regime_probs = regime_probs
 
     def _bear_gate_active(self) -> bool:
         """Phase 8-Gamma G1: returns True if bear gate should fire at current_step."""
@@ -471,9 +465,6 @@ class SingleAssetRLTradingEnv(gym.Env):
 
         # Calculate target position change
         raw_action = float(action[0])
-        # Week 30: apply regime-based position sizing if available
-        if self._risk_manager is not None and self._regime_probs is not None:
-            raw_action = self._risk_manager.adjust_for_regime(raw_action, self._regime_probs)
         position_change = raw_action * self.max_position_size
         target_position = self.current_position + position_change
 
