@@ -26,6 +26,7 @@ from aggregate_wf_results import (
     _parse_fold_range,
     _FOLD_RE,
     print_maxdd_table,
+    print_fixed_start_table,
 )
 
 
@@ -559,3 +560,63 @@ class TestGateMetricFields:
         g = matches[0].groupdict()
         assert g.get("gate_fires") is None
         assert g.get("gate_frac") is None
+
+
+# ---------------------------------------------------------------------------
+# Fixed-start stats (oos_total_return field)
+# ---------------------------------------------------------------------------
+
+def _make_variant_fixed(name: str, fixed_returns: list) -> VariantResult:
+    """Build a VariantResult with distinct fixed-start (oos_total_return) values.
+
+    oos_total_return_random is deliberately zeroed so tests confirm the
+    fixed-start methods read from the correct field.
+    """
+    folds = [
+        ParsedFold(
+            fold_idx=i,
+            is_sharpe=0.0,
+            oos_sharpe=0.0,
+            oos_max_drawdown=0.0,
+            oos_total_return=r,
+            oos_sharpe_random=0.0,
+            oos_total_return_random=0.0,  # distinct from fixed — ensures correct field is read
+            oos_trade_count_mean=2.0,
+            oos_trade_count_random_mean=2.0,
+        )
+        for i, r in enumerate(fixed_returns)
+    ]
+    return VariantResult(name=name, folds=folds)
+
+
+class TestFixedStartStats:
+    def test_all_mean(self):
+        v = _make_variant_fixed("X", [0.01, -0.02, 0.03])
+        assert abs(v.all_mean() - (0.01 - 0.02 + 0.03) / 3) < 1e-9
+
+    def test_bull_mean(self):
+        v = _make_variant_fixed("X", [0.05, 0.04, -0.03, -0.01])
+        assert abs(v.bull_mean([0, 1]) - 0.045) < 1e-9
+
+    def test_bear_mean(self):
+        v = _make_variant_fixed("X", [0.05, 0.04, -0.03, -0.01])
+        assert abs(v.bear_mean([2, 3]) - (-0.02)) < 1e-9
+
+    def test_folds_positive_fixed(self):
+        v = _make_variant_fixed("X", [0.01, -0.02, 0.03, -0.01, 0.02])
+        assert v.folds_positive_fixed() == 3
+
+
+class TestFixedStartTable:
+    def test_header_and_variant_rows_present(self, capsys):
+        g2 = _make_variant_fixed("G2", [0.01, -0.02, 0.03] * 4)
+        b0 = _make_variant_fixed("B0", [-0.01] * 12)
+        print_fixed_start_table(
+            [g2, b0],
+            bull_indices=[0, 2, 4, 6, 8],
+            bear_indices=[1, 3, 5, 7, 9, 10, 11],
+        )
+        out = capsys.readouterr().out
+        assert "Fixed-start" in out
+        assert "G2" in out
+        assert "B0" in out
