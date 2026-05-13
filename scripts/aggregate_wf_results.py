@@ -75,6 +75,22 @@ class VariantResult:
     def folds_positive(self) -> int:
         return sum(1 for f in self.folds if f.oos_total_return_random > 0)
 
+    # Fixed-start equivalents (source: oos_total_return, not oos_total_return_random)
+    def all_mean(self) -> float:
+        vals = self._fold_values("oos_total_return")
+        return float(sum(vals) / len(vals)) if vals else float("nan")
+
+    def bull_mean(self, bull_indices: List[int]) -> float:
+        vals = self._fold_values("oos_total_return", bull_indices)
+        return float(sum(vals) / len(vals)) if vals else float("nan")
+
+    def bear_mean(self, bear_indices: List[int]) -> float:
+        vals = self._fold_values("oos_total_return", bear_indices)
+        return float(sum(vals) / len(vals)) if vals else float("nan")
+
+    def folds_positive_fixed(self) -> int:
+        return sum(1 for f in self.folds if f.oos_total_return > 0)
+
     def trades_per_ep(self) -> float:
         vals = self._fold_values("oos_trade_count_random_mean")
         return float(sum(vals) / len(vals)) if vals else float("nan")
@@ -331,6 +347,32 @@ def print_table(
                 )
 
 
+def print_fixed_start_table(
+    variants: List[VariantResult],
+    bull_indices: List[int],
+    bear_indices: List[int],
+) -> None:
+    """Print fixed-start OOS return table — cross-check for random-start results."""
+    print("\nFixed-start OOS return (eval_episodes=N at fold-start):")
+    header = (
+        f"{'Variant':<12} {'All mean(fix)':>14} {'Bull mean':>10} "
+        f"{'Bear mean':>10} {'Folds+':>7}"
+    )
+    sep = "-" * len(header)
+    print(sep)
+    print(header)
+    print(sep)
+    for v in variants:
+        print(
+            f"{v.name:<12} "
+            f"{_pct(v.all_mean()):>14} "
+            f"{_pct(v.bull_mean(bull_indices)):>10} "
+            f"{_pct(v.bear_mean(bear_indices)):>10} "
+            f"{v.folds_positive_fixed():>5}/{v.n_folds():<2}"
+        )
+    print(sep)
+
+
 def print_maxdd_table(
     variants: List[VariantResult],
     bull_indices: List[int],
@@ -475,6 +517,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     print()
 
     print_table(variants, bull_indices, bear_indices)
+    print_fixed_start_table(variants, bull_indices, bear_indices)
     print_maxdd_table(variants, bull_indices, bear_indices)
 
     if args.detail:
