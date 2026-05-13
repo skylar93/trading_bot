@@ -379,7 +379,7 @@ class TestBacktestingAndStatisticalTests:
 
 
 # ===========================================================================
-# Test 7: Risk manager with regime sizing
+# Test 7: adjust_for_regime is deprecated + blocked
 # ===========================================================================
 
 
@@ -393,43 +393,15 @@ class TestRegimeSizing:
             max_drawdown_pct=0.20,
         )
 
-    def test_high_vol_reduces_position(self):
+    def test_adjust_for_regime_is_blocked(self):
+        """adjust_for_regime() has a semantic bug and is deprecated; verify it raises."""
+        import warnings
         from risk_management.rl_risk_manager import RLRiskManager
 
         rm = RLRiskManager(self._make_config())
-        high_vol_probs = np.array([0.1, 0.1, 0.8])
-        adjusted = rm.adjust_for_regime(0.8, high_vol_probs)
-        assert adjusted < 0.8, f"High-vol regime should reduce position: {adjusted}"
-
-    def test_low_vol_preserves_position(self):
-        from risk_management.rl_risk_manager import RLRiskManager
-
-        rm = RLRiskManager(self._make_config())
-        low_vol_probs = np.array([0.8, 0.1, 0.1])
-        adjusted = rm.adjust_for_regime(0.8, low_vol_probs)
-        assert adjusted > 0.5, f"Low-vol regime should allow larger position: {adjusted}"
-
-    def test_high_vol_smaller_than_low_vol(self):
-        from risk_management.rl_risk_manager import RLRiskManager
-
-        rm = RLRiskManager(self._make_config())
-        high = rm.adjust_for_regime(0.8, np.array([0.1, 0.1, 0.8]))
-        low = rm.adjust_for_regime(0.8, np.array([0.8, 0.1, 0.1]))
-        assert high < low, f"High-vol ({high:.3f}) must be < low-vol ({low:.3f})"
-
-    def test_adjusted_clipped_to_max_position(self):
-        from risk_management.rl_risk_manager import RLRiskManager
-
-        rm = RLRiskManager(self._make_config())
-        result = rm.adjust_for_regime(2.0, np.array([0.9, 0.05, 0.05]))
-        assert result <= 1.0, f"Result must not exceed max_position_size: {result}"
-
-    def test_zero_action_stays_zero(self):
-        from risk_management.rl_risk_manager import RLRiskManager
-
-        rm = RLRiskManager(self._make_config())
-        result = rm.adjust_for_regime(0.0, np.array([0.1, 0.1, 0.8]))
-        assert result == pytest.approx(0.0)
+        with warnings.catch_warnings(record=True):
+            with pytest.raises(RuntimeError, match="blocked"):
+                rm.adjust_for_regime(0.8, np.array([0.1, 0.1, 0.8]))
 
 
 # ===========================================================================
