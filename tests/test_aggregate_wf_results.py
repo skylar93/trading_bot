@@ -25,6 +25,7 @@ from aggregate_wf_results import (
     parse_log,
     _parse_fold_range,
     _FOLD_RE,
+    print_maxdd_table,
 )
 
 
@@ -435,6 +436,82 @@ class TestCLI:
 
 
 # ---------------------------------------------------------------------------
+# MaxDD aggregation — synthetic capital path exercise
+# ---------------------------------------------------------------------------
+
+def _make_variant_with_drawdowns(name: str, drawdowns: list) -> VariantResult:
+    """Build a VariantResult where each fold has the given oos_max_drawdown value."""
+    folds = [
+        ParsedFold(
+            fold_idx=i,
+            is_sharpe=0.0,
+            oos_sharpe=0.0,
+            oos_max_drawdown=dd,
+            oos_total_return=0.0,
+            oos_sharpe_random=0.0,
+            oos_total_return_random=0.0,
+            oos_trade_count_mean=2.0,
+            oos_trade_count_random_mean=2.0,
+        )
+        for i, dd in enumerate(drawdowns)
+    ]
+    return VariantResult(name=name, folds=folds)
+
+
+class TestMaxDDStats:
+    """Synthetic capital path: 12 folds with known drawdown values.
+
+    Drawdowns represent peak-to-trough fractions (e.g. 0.10 = 10%).
+    We verify mean, median, and p95 for all / bull / bear regimes.
+    """
+
+    # 12-fold drawdowns (indices 0-11); bull = 0,2,5,8,11 (5 folds), bear = rest (7 folds)
+    _DD = [0.05, 0.20, 0.08, 0.15, 0.25, 0.10, 0.18, 0.22, 0.12, 0.30, 0.06, 0.04]
+    _BULL = [0, 2, 5, 8, 11]   # dd: 0.05, 0.08, 0.10, 0.12, 0.04
+    _BEAR = [1, 3, 4, 6, 7, 9, 10]  # dd: 0.20, 0.15, 0.25, 0.18, 0.22, 0.30, 0.06
+
+    def _v(self):
+        return _make_variant_with_drawdowns("X", self._DD)
+
+    def test_all_mean(self):
+        mean, _, _ = self._v().maxdd_stats()
+        assert abs(mean - sum(self._DD) / 12) < 1e-9
+
+    def test_all_median(self):
+        _, median, _ = self._v().maxdd_stats()
+        sorted_dd = sorted(self._DD)
+        expected = (sorted_dd[5] + sorted_dd[6]) / 2  # n=12, even
+        assert abs(median - expected) < 1e-9
+
+    def test_all_p95(self):
+        import math as _math
+        _, _, p95 = self._v().maxdd_stats()
+        sorted_dd = sorted(self._DD)
+        idx = min(int(_math.ceil(0.95 * 12)) - 1, 11)  # ceil(11.4)-1 = 11
+        assert abs(p95 - sorted_dd[idx]) < 1e-9
+
+    def test_bull_mean(self):
+        bull_dd = [self._DD[i] for i in self._BULL]
+        mean, _, _ = self._v().maxdd_stats(self._BULL)
+        assert abs(mean - sum(bull_dd) / len(bull_dd)) < 1e-9
+
+    def test_bear_mean(self):
+        bear_dd = [self._DD[i] for i in self._BEAR]
+        mean, _, _ = self._v().maxdd_stats(self._BEAR)
+        assert abs(mean - sum(bear_dd) / len(bear_dd)) < 1e-9
+
+    def test_empty_indices_returns_nan(self):
+        mean, median, p95 = self._v().maxdd_stats([])
+        assert math.isnan(mean) and math.isnan(median) and math.isnan(p95)
+
+    def test_nan_drawdown_excluded(self):
+        dd = [0.10, float("nan"), 0.20]
+        v = _make_variant_with_drawdowns("Y", dd)
+        mean, _, _ = v.maxdd_stats()
+        assert abs(mean - 0.15) < 1e-9
+
+
+# ---------------------------------------------------------------------------
 # Phase 8-Gamma G1: gate metric fields + backward-compat
 # ---------------------------------------------------------------------------
 
@@ -456,6 +533,17 @@ class TestGateMetricFields:
         g = matches[0].groupdict()
         assert abs(float(g["gate_fires"]) - 12.3) < 1e-9
         assert abs(float(g["gate_frac"]) - 0.15) < 1e-9
+
+    def test_maxdd_table_prints_without_error(self, capsys):
+        """print_maxdd_table runs without error and emits expected column headers."""
+        v = _make_variant("G2", [0.01] * 12)
+        # Override drawdowns to known values so we can check output
+        for i, f in enumerate(v.folds):
+            object.__setattr__(f, "oos_max_drawdown", (i + 1) * 0.01)
+        print_maxdd_table([v], bull_indices=list(range(5)), bear_indices=list(range(5, 12)))
+        out = capsys.readouterr().out
+        assert "MaxDD" in out
+        assert "G2" in out
 
     def test_parse_fold_without_gate_fields_backward_compat(self):
         """Old logs without gate fields still parse (backward-compat)."""
