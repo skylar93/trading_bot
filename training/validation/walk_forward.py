@@ -44,6 +44,8 @@ class FoldResult:
     # Phase 8-Gamma G1 diagnostic: gate activity (random-start eval only)
     oos_mean_gate_fires_per_episode: float = 0.0
     oos_mean_gate_active_fraction: float = 0.0
+    # B6: random-start MaxDD (populated only when random_start_eval=True)
+    oos_max_drawdown_random: float = 0.0
     metrics: Dict[str, float] = field(default_factory=dict)
 
 
@@ -95,6 +97,10 @@ class WalkForwardResult:
     def oos_mean_gate_active_fraction(self) -> float:
         return float(np.mean([f.oos_mean_gate_active_fraction for f in self.folds])) if self.folds else 0.0
 
+    @property
+    def mean_max_drawdown_random(self) -> float:
+        return float(np.mean([f.oos_max_drawdown_random for f in self.folds])) if self.folds else 0.0
+
     def summary(self) -> Dict[str, float]:
         return {
             "oos_sharpe_mean": self.oos_sharpe,
@@ -102,6 +108,7 @@ class WalkForwardResult:
             "is_sharpe_mean": self.is_sharpe,
             "stability_ratio": self.stability_ratio,
             "mean_max_drawdown": self.mean_max_drawdown,
+            "mean_max_drawdown_random": self.mean_max_drawdown_random,
             "n_folds": len(self.folds),
             "oos_total_return_mean": self.oos_total_return_mean,
             "oos_total_return_random_mean": self.oos_total_return_random_mean,
@@ -256,6 +263,7 @@ class WalkForwardValidator:
             oos_trade_count_random_mean = 0.0
             oos_mean_gate_fires_per_episode = 0.0
             oos_mean_gate_active_fraction = 0.0
+            oos_dd_random = 0.0
             if random_start_eval:
                 oos_returns_random, oos_trades_random, oos_gate_fires_random, oos_step_counts_random = \
                     self._evaluate(agent, test_env, eval_episodes, random_start=True)
@@ -267,6 +275,7 @@ class WalkForwardValidator:
                 oos_mean_gate_active_fraction = (
                     float(np.sum(oos_gate_fires_random)) / total_steps if total_steps > 0 else 0.0
                 )
+                oos_dd_random = self._max_drawdown(oos_returns_random)
 
             fold = FoldResult(
                 fold_idx=i,
@@ -283,6 +292,7 @@ class WalkForwardValidator:
                 oos_trade_count_random_mean=oos_trade_count_random_mean,
                 oos_mean_gate_fires_per_episode=oos_mean_gate_fires_per_episode,
                 oos_mean_gate_active_fraction=oos_mean_gate_active_fraction,
+                oos_max_drawdown_random=oos_dd_random,
             )
             folds.append(fold)
 

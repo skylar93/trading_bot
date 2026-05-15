@@ -27,6 +27,8 @@ from aggregate_wf_results import (
     _FOLD_RE,
     print_maxdd_table,
     print_fixed_start_table,
+    print_regime_dd_random_table,
+    print_regime_dd_gate_dict,
 )
 
 
@@ -46,8 +48,13 @@ def _fold_repr(
     oos_total_return_random: float = 0.018,
     oos_trade_count_mean: float = 2.0,
     oos_trade_count_random_mean: float = 2.5,
+    oos_max_drawdown_random: float = None,  # None → field omitted (backward-compat)
     metrics: str = "{}",
 ) -> str:
+    dd_random_part = (
+        f"oos_max_drawdown_random={oos_max_drawdown_random}, "
+        if oos_max_drawdown_random is not None else ""
+    )
     return (
         f"FoldResult(fold_idx={fold_idx}, train_size={train_size}, "
         f"test_size={test_size}, is_sharpe={is_sharpe}, oos_sharpe={oos_sharpe}, "
@@ -56,6 +63,7 @@ def _fold_repr(
         f"oos_total_return_random={oos_total_return_random}, "
         f"oos_trade_count_mean={oos_trade_count_mean}, "
         f"oos_trade_count_random_mean={oos_trade_count_random_mean}, "
+        f"{dd_random_part}"
         f"metrics={metrics})"
     )
 
@@ -620,3 +628,203 @@ class TestFixedStartTable:
         assert "Fixed-start" in out
         assert "G2" in out
         assert "B0" in out
+
+
+# ---------------------------------------------------------------------------
+# B6: oos_max_drawdown_random — parsing + VariantResult + output
+# ---------------------------------------------------------------------------
+
+def _make_variant_with_dd_random(name: str, dd_random: list) -> VariantResult:
+    folds = [
+        ParsedFold(
+            fold_idx=i,
+            is_sharpe=0.0,
+            oos_sharpe=0.0,
+            oos_max_drawdown=0.0,
+            oos_total_return=0.0,
+            oos_sharpe_random=0.0,
+            oos_total_return_random=0.0,
+            oos_trade_count_mean=2.0,
+            oos_trade_count_random_mean=2.0,
+            oos_max_drawdown_random=dd,
+        )
+        for i, dd in enumerate(dd_random)
+    ]
+    return VariantResult(name=name, folds=folds)
+
+
+class TestB6ParseMaxDDRandom:
+    """Regex and parse_log pick up oos_max_drawdown_random when present."""
+
+    def test_regex_captures_maxdd_random(self):
+        text = (
+            "FoldResult(fold_idx=0, train_size=100, test_size=20, "
+            "is_sharpe=0.5, oos_sharpe=0.3, oos_max_drawdown=0.05, "
+            "oos_total_return=0.01, oos_sharpe_random=0.2, "
+            "oos_total_return_random=0.005, oos_trade_count_mean=2.0, "
+            "oos_trade_count_random_mean=2.5, "
+            "oos_mean_gate_fires_per_episode=3.0, "
+            "oos_mean_gate_active_fraction=0.12, "
+            "oos_max_drawdown_random=0.18, "
+            "metrics={})"
+        )
+        matches = list(_FOLD_RE.finditer(text))
+        assert len(matches) == 1
+        g = matches[0].groupdict()
+        assert abs(float(g["maxdd_random"]) - 0.18) < 1e-9
+
+    def test_regex_maxdd_random_absent_backward_compat(self):
+        """Old logs without oos_max_drawdown_random still parse (group is None)."""
+        text = (
+            "FoldResult(fold_idx=0, train_size=100, test_size=20, "
+            "is_sharpe=0.5, oos_sharpe=0.3, oos_max_drawdown=0.05, "
+            "oos_total_return=0.01, oos_sharpe_random=0.2, "
+            "oos_total_return_random=0.005, oos_trade_count_mean=2.0, "
+            "oos_trade_count_random_mean=2.5, metrics={})"
+        )
+        matches = list(_FOLD_RE.finditer(text))
+        assert len(matches) == 1
+        assert matches[0].groupdict().get("maxdd_random") is None
+
+    def test_parse_log_reads_maxdd_random(self, tmp_path):
+        content = (
+            "=== RESULT ===\n"
+            "WalkForwardResult(folds=["
+            + _fold_repr(fold_idx=0, oos_max_drawdown_random=0.12)
+            + "])\n"
+        )
+        path = tmp_path / "run.log"
+        path.write_text(content, encoding="utf-8")
+        folds = parse_log(path)
+        assert len(folds) == 1
+        assert abs(folds[0].oos_max_drawdown_random - 0.12) < 1e-9
+
+    def test_parse_log_maxdd_random_absent_gives_nan(self, tmp_path):
+        """Logs without the field parse to NaN for backward-compat."""
+        content = "=== RESULT ===\nWalkForwardResult(folds=[" + _fold_repr(fold_idx=0) + "])\n"
+        path = tmp_path / "run.log"
+        path.write_text(content, encoding="utf-8")
+        folds = parse_log(path)
+        assert math.isnan(folds[0].oos_max_drawdown_random)
+
+
+class TestMaxDDRandomStats:
+    _BULL = [0, 2, 5, 8, 11]
+    _BEAR = [1, 3, 4, 6, 7, 9, 10]
+    # 12 random-start DDs
+    _DD_R = [0.04, 0.22, 0.07, 0.14, 0.27, 0.09, 0.19, 0.23, 0.11, 0.31, 0.05, 0.03]
+
+    def _v(self):
+        return _make_variant_with_dd_random("X", self._DD_R)
+
+    def test_all_mean(self):
+        mean, _, _ = self._v().maxdd_random_stats()
+        assert abs(mean - sum(self._DD_R) / 12) < 1e-9
+
+    def test_bull_mean(self):
+        bull_dd = [self._DD_R[i] for i in self._BULL]
+        mean, _, _ = self._v().maxdd_random_stats(self._BULL)
+        assert abs(mean - sum(bull_dd) / len(bull_dd)) < 1e-9
+
+    def test_bear_mean(self):
+        bear_dd = [self._DD_R[i] for i in self._BEAR]
+        mean, _, _ = self._v().maxdd_random_stats(self._BEAR)
+        assert abs(mean - sum(bear_dd) / len(bear_dd)) < 1e-9
+
+    def test_bear_p95(self):
+        bear_dd = sorted(self._DD_R[i] for i in self._BEAR)
+        n = len(bear_dd)
+        expected = bear_dd[min(int(math.ceil(0.95 * n)) - 1, n - 1)]
+        _, _, p95 = self._v().maxdd_random_stats(self._BEAR)
+        assert abs(p95 - expected) < 1e-9
+
+    def test_empty_indices_returns_nan(self):
+        mean, med, p95 = self._v().maxdd_random_stats([])
+        assert math.isnan(mean) and math.isnan(med) and math.isnan(p95)
+
+    def test_nan_folds_excluded(self):
+        v = _make_variant_with_dd_random("Y", [0.10, float("nan"), 0.20])
+        mean, _, _ = v.maxdd_random_stats()
+        assert abs(mean - 0.15) < 1e-9
+
+    def test_all_nan_folds_returns_nan(self):
+        v = _make_variant_with_dd_random("Z", [float("nan")] * 3)
+        mean, med, p95 = v.maxdd_random_stats()
+        assert math.isnan(mean) and math.isnan(med) and math.isnan(p95)
+
+
+class TestRegimeDDRandomTable:
+    def test_table_prints_without_error(self, capsys):
+        v = _make_variant_with_dd_random("G2", [0.05 + i * 0.01 for i in range(12)])
+        print_regime_dd_random_table(
+            [v],
+            bull_indices=[0, 2, 5, 8, 11],
+            bear_indices=[1, 3, 4, 6, 7, 9, 10],
+        )
+        out = capsys.readouterr().out
+        assert "Random-start MaxDD" in out
+        assert "G2" in out
+
+    def test_table_shows_na_for_all_nan_variant(self, capsys):
+        v = _make_variant_with_dd_random("OLD", [float("nan")] * 12)
+        print_regime_dd_random_table(
+            [v],
+            bull_indices=[0, 2, 5, 8, 11],
+            bear_indices=[1, 3, 4, 6, 7, 9, 10],
+        )
+        out = capsys.readouterr().out
+        assert "n/a" in out
+
+
+class TestRegimeDDGateDict:
+    def test_gate_dict_output_structure(self, capsys):
+        v = _make_variant_with_dd_random("G2", [0.10] * 5 + [0.20] * 7)
+        print_regime_dd_gate_dict(
+            [v],
+            bull_indices=[0, 1, 2, 3, 4],
+            bear_indices=[5, 6, 7, 8, 9, 10, 11],
+        )
+        out = capsys.readouterr().out
+        assert "=== REGIME DD GATE DICT ===" in out
+        assert "=== END GATE DICT ===" in out
+        assert "G2" in out
+        assert "bull_mean_dd" in out
+        assert "bear_mean_dd" in out
+        assert "bear_p95_dd" in out
+
+    def test_gate_dict_values_parseable_as_json(self, capsys):
+        import json
+        v = _make_variant_with_dd_random("G2", [0.08] * 5 + [0.15] * 7)
+        print_regime_dd_gate_dict(
+            [v],
+            bull_indices=[0, 1, 2, 3, 4],
+            bear_indices=[5, 6, 7, 8, 9, 10, 11],
+        )
+        out = capsys.readouterr().out
+        # Extract the JSON dict for G2
+        for line in out.splitlines():
+            if line.startswith("G2:"):
+                d = json.loads(line.split(":", 1)[1].strip())
+                assert abs(d["bull_mean_dd"] - 0.08) < 1e-5
+                assert abs(d["bear_mean_dd"] - 0.15) < 1e-5
+                break
+        else:
+            pytest.fail("G2 line not found in gate dict output")
+
+    def test_gate_dict_null_for_nan_variant(self, capsys):
+        import json
+        v = _make_variant_with_dd_random("OLD", [float("nan")] * 12)
+        print_regime_dd_gate_dict(
+            [v],
+            bull_indices=[0, 1, 2, 3, 4],
+            bear_indices=[5, 6, 7, 8, 9, 10, 11],
+        )
+        out = capsys.readouterr().out
+        for line in out.splitlines():
+            if line.startswith("OLD:"):
+                d = json.loads(line.split(":", 1)[1].strip())
+                assert d["bull_mean_dd"] is None
+                assert d["bear_mean_dd"] is None
+                break
+        else:
+            pytest.fail("OLD line not found")
