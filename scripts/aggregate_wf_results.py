@@ -47,6 +47,8 @@ class ParsedFold:
     # Phase 8-Gamma G1 diagnostic — NaN when absent from older logs
     oos_mean_gate_fires_per_episode: float = float("nan")
     oos_mean_gate_active_fraction: float = float("nan")
+    # B6: random-start MaxDD — NaN when absent from older logs
+    oos_max_drawdown_random: float = float("nan")
 
 
 @dataclass
@@ -115,6 +117,22 @@ class VariantResult:
         p95 = vals[min(int(math.ceil(0.95 * n)) - 1, n - 1)]
         return mean, median, p95
 
+    def maxdd_random_stats(self, indices: Optional[List[int]] = None) -> Tuple[float, float, float]:
+        """Return (mean, median, p95) of oos_max_drawdown_random for the given fold indices.
+
+        NaN folds (older logs without the B6 field) are excluded from all statistics.
+        Returns (nan, nan, nan) when no valid values are present.
+        """
+        vals = sorted(self._fold_values("oos_max_drawdown_random", indices))
+        n = len(vals)
+        if n == 0:
+            nan = float("nan")
+            return nan, nan, nan
+        mean = sum(vals) / n
+        median = vals[n // 2] if n % 2 == 1 else (vals[n // 2 - 1] + vals[n // 2]) / 2
+        p95 = vals[min(int(math.ceil(0.95 * n)) - 1, n - 1)]
+        return mean, median, p95
+
     def n_folds(self) -> int:
         return len(self.folds)
 
@@ -144,6 +162,8 @@ _FOLD_RE = re.compile(
     # Optional Phase 8-Gamma G1 fields — present in newer logs, absent in older
     r"(?:oos_mean_gate_fires_per_episode=(?P<gate_fires>" + _FLOAT + r"),\s*"
     r"oos_mean_gate_active_fraction=(?P<gate_frac>" + _FLOAT + r"),\s*)?"
+    # Optional B6 field — present only in B6+ logs
+    r"(?:oos_max_drawdown_random=(?P<maxdd_random>" + _FLOAT + r"),\s*)?"
     r"metrics=\{[^}]*\}"
     r"\)"
 )
@@ -199,6 +219,7 @@ def parse_log(path: Path) -> List[ParsedFold]:
         g = m.groupdict()
         gate_fires = _parse_float(g["gate_fires"]) if g.get("gate_fires") is not None else float("nan")
         gate_frac = _parse_float(g["gate_frac"]) if g.get("gate_frac") is not None else float("nan")
+        maxdd_random = _parse_float(g["maxdd_random"]) if g.get("maxdd_random") is not None else float("nan")
         folds.append(ParsedFold(
             fold_idx=int(g["fold_idx"]),
             is_sharpe=_parse_float(g["is_sharpe"]),
@@ -211,6 +232,7 @@ def parse_log(path: Path) -> List[ParsedFold]:
             oos_trade_count_random_mean=_parse_float(g["oos_trade_count_random_mean"]),
             oos_mean_gate_fires_per_episode=gate_fires,
             oos_mean_gate_active_fraction=gate_frac,
+            oos_max_drawdown_random=maxdd_random,
         ))
 
     if not folds:
@@ -401,6 +423,72 @@ def print_maxdd_table(
     print(sep)
 
 
+def print_regime_dd_random_table(
+    variants: List[VariantResult],
+    bull_indices: List[int],
+    bear_indices: List[int],
+) -> None:
+    """Print random-start MaxDD by regime (bull mean, bear mean, bear p95)."""
+    hdr = (
+        f"{'Variant':<12} "
+        f"{'All mean DD(rnd)':>17} {'Bull mean DD':>13} "
+        f"{'Bear mean DD':>13} {'Bear p95 DD':>12}"
+    )
+    sep = "-" * len(hdr)
+    print("\nRandom-start MaxDD by regime (oos_max_drawdown_random, lower = better):")
+    print(sep)
+    print(hdr)
+    print(sep)
+    any_data = False
+    for v in variants:
+        a_mean, _, _ = v.maxdd_random_stats()
+        b_mean, _, _ = v.maxdd_random_stats(bull_indices)
+        r_mean, _, r_p95 = v.maxdd_random_stats(bear_indices)
+        if not math.isnan(a_mean):
+            any_data = True
+        print(
+            f"{v.name:<12} "
+            f"{_pct(a_mean):>17} "
+            f"{_pct(b_mean):>13} "
+            f"{_pct(r_mean):>13} "
+            f"{_pct(r_p95):>12}"
+        )
+    print(sep)
+    if not any_data:
+        print(
+            "  NOTE: oos_max_drawdown_random is n/a for all variants. "
+            "Re-run with B6 code (random_start_eval=True).",
+            file=sys.stderr,
+        )
+
+
+def print_regime_dd_gate_dict(
+    variants: List[VariantResult],
+    bull_indices: List[int],
+    bear_indices: List[int],
+) -> None:
+    """Print a machine-readable per-regime DD dict for each variant.
+
+    Format (one JSON object per variant, preceded by its name):
+        VARIANT_NAME: {"bull_mean_dd": 0.xx, "bear_mean_dd": 0.xx, "bear_p95_dd": 0.xx}
+
+    The gate criterion can parse this section by searching for '=== REGIME DD GATE DICT ==='
+    and reading the subsequent lines until the closing '=== END GATE DICT ==='.
+    """
+    import json as _json
+    print("\n=== REGIME DD GATE DICT ===")
+    for v in variants:
+        bull_mean, _, _ = v.maxdd_random_stats(bull_indices)
+        bear_mean, _, bear_p95 = v.maxdd_random_stats(bear_indices)
+        d = {
+            "bull_mean_dd": round(bull_mean, 6) if not math.isnan(bull_mean) else None,
+            "bear_mean_dd": round(bear_mean, 6) if not math.isnan(bear_mean) else None,
+            "bear_p95_dd": round(bear_p95, 6) if not math.isnan(bear_p95) else None,
+        }
+        print(f"{v.name}: {_json.dumps(d)}")
+    print("=== END GATE DICT ===")
+
+
 def print_fold_detail(variant: VariantResult) -> None:
     print(f"\nPer-fold detail — {variant.name}")
     hdr = f"{'Fold':>5} {'OOS ret(rnd)':>13} {'OOS Sharpe(rnd)':>16} {'Trades/ep(rnd)':>15}"
@@ -519,6 +607,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     print_table(variants, bull_indices, bear_indices)
     print_fixed_start_table(variants, bull_indices, bear_indices)
     print_maxdd_table(variants, bull_indices, bear_indices)
+    print_regime_dd_random_table(variants, bull_indices, bear_indices)
+    print_regime_dd_gate_dict(variants, bull_indices, bear_indices)
 
     if args.detail:
         target = next((v for v in variants if v.name == args.detail), None)
