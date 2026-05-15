@@ -1,0 +1,42 @@
+# Phase 8-Gamma G2 diagnostic — realized-PnL reward
+# Hypothesis: sharpe-based reward saturates → near-hold convergence at 1M
+#   (verified: B0_v2_1M trades/ep 1.46, G1_refuse_1M trades/ep 1.48 — both collapse 4×).
+# Realized PnL pays reward only on position close → zero reward on hold →
+#   policy must trade to receive reward → trade frequency preserved.
+# Diagnostic-stage simplifications:
+#   1. Pure realized PnL (no sharpe wrapping). If 50k still converges to hold,
+#      hypothesis is falsified.
+#   2. No regime gate (G1) — keep apples-to-apples vs B0_v2.
+
+env:
+  type: single_asset_rl
+  window_size: 20
+  initial_balance: 100000.0
+  trading_fee: 0.00018
+  apply_slippage: true
+  slippage_factor: 0.0005
+  cost_model: futures_maker
+  funding_rate_per_8h: 0.0001
+  max_position_size: 1.0
+  sharpe_lookback: 60
+  sharpe_weight: 0.0
+  normalize: true
+  reward_function: realized_pnl
+  action_type: continuous
+  include_technical_indicators: true
+  risk_adjusted: false
+
+  indicators:
+    - name: RSI
+      window: 14
+    - name: MACD
+      fast_window: 12
+      slow_window: 26
+      signal_window: 9
+    - name: Bollinger
+      window: 20
+      dev: 2
+
+walk_forward:
+  random_start_eval: true
+  eval_episodes: 20
