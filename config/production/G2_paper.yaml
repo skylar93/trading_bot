@@ -1,0 +1,103 @@
+# G2 Paper Trading Config
+# Forked from config/phase8_gamma/G2_realized_pnl_slippage.yaml
+# Purpose: paper trading validation (not live, not backtest).
+# Do NOT set execution.exchange_mode: live here — use CLI --exchange-mode paper.
+# Do NOT commit real API keys. Use SecretProvider env refs only.
+
+# ── Environment (identical to winning G2_realized_pnl_slippage config) ─────────
+env:
+  type: single_asset_rl
+  window_size: 20
+  initial_balance: 10000.0         # paper-only notional; does not move real money
+  trading_fee: 0.00018             # Binance USDⓈ-M futures maker (BNB discount)
+  apply_slippage: true             # keep realistic; matches 1M eval conditions
+  slippage_factor: 0.0005
+  cost_model: futures_maker
+  funding_rate_per_8h: 0.0001
+  max_position_size: 0.10          # 10% of paper capital = ~$1000 notional cap
+  sharpe_lookback: 60
+  sharpe_weight: 0.0               # pure realized-PnL reward (G2 lever)
+  normalize: true
+  reward_function: realized_pnl
+  action_type: continuous
+  include_technical_indicators: true
+  risk_adjusted: false
+
+  indicators:
+    - name: RSI
+      window: 14
+    - name: MACD
+      fast: 12
+      slow: 26
+      signal: 9
+    - name: Bollinger
+      window: 20
+      dev: 2
+
+# ── Walk-forward disabled for paper trading ─────────────────────────────────────
+# (run_wf.py forces walk_forward.enabled=True; do NOT use run_wf.py for paper trading)
+walk_forward:
+  enabled: false
+  random_start_eval: true
+  eval_episodes: 20
+
+# ── Paper trading runtime ────────────────────────────────────────────────────────
+paper_trading:
+  enabled: true
+  exchange: "binance"
+  symbol: "BTC/USDT"
+  initial_capital: 10000.0         # matches env.initial_balance
+  risk_per_trade: 0.02
+  max_drawdown_threshold: 0.15     # halt if paper DD > 15%
+  window_size: 20
+  poll_interval_seconds: 5.0
+  daily_report_interval: 86400
+  api_key_ref: "EXCHANGE_BINANCE_KEY"      # pragma: allowlist secret
+  api_secret_ref: "EXCHANGE_BINANCE_SECRET"  # pragma: allowlist secret
+
+# ── Model checkpoint ─────────────────────────────────────────────────────────────
+# Operator must populate this before launch (see runbook §2, Deploy checkpoint step).
+paths:
+  checkpoint: "checkpoints/G2_paper/best_agent.pt"
+  checkpoint_dir: "checkpoints/G2_paper"
+  log_dir: "logs/G2_paper"
+
+# ── Persistence ──────────────────────────────────────────────────────────────────
+persistence:
+  enabled: true
+  db_path: "./state/G2_paper_trader.db"
+  checkpoint_every_n_steps: 100
+
+# ── Secrets backend ──────────────────────────────────────────────────────────────
+secrets:
+  backend: "env"                   # or "keychain" on Mac
+
+# ── Warmup (E2) ─────────────────────────────────────────────────────────────────
+warmup:
+  enabled: true
+  warmup_minutes: 30
+  max_qps: 1.0
+  size_fraction: 0.5               # 50% of max_position_size during warmup
+  progress_alerts: false
+
+# ── Drift detection (SN11 / I7) ─────────────────────────────────────────────────
+drift:
+  shadow_mode_hours: 72            # first 72h: log-only, no halt
+  reward_return_sigma_threshold: 2.0
+  feature_psi_threshold: 0.2
+  pnl_z_threshold: 3.0
+  action_entropy_min: 0.5
+
+# ── Monitoring ───────────────────────────────────────────────────────────────────
+monitoring:
+  enabled: true
+  log_level: "INFO"
+  daily_report_path: "logs/G2_paper/daily_report.json"
+  alert_on_halt: true
+
+# ── Cost decomposition audit (A6) ────────────────────────────────────────────────
+cost_decomposition:
+  audit_log: "audit_log/G2_paper_audit.jsonl"
+  output_dir: "docs/reports/G2_paper"
+  enable_funding_tracking: true
+  report_schedule_utc: "00:30"
