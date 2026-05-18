@@ -107,6 +107,41 @@ def bootstrap_ci(
     )
 
 
+def block_bootstrap_ci(
+    returns: np.ndarray,
+    n_bootstrap: int = 10000,
+    block_size: int = 4,
+    rng: Optional[np.random.Generator] = None,
+) -> Tuple[float, float, float]:
+    """Circular block bootstrap 95% CI for time-series data.
+
+    Preserves autocorrelation between adjacent folds (walk-forward folds
+    share training data → adjacent returns are correlated). Block size ≈
+    sqrt(n) is a standard heuristic; default 4 for n=12.
+
+    Returns (mean, lower_2.5%, upper_97.5%).
+    """
+    n = len(returns)
+    if rng is None:
+        rng = np.random.default_rng(42)
+
+    n_blocks = math.ceil(n / block_size)
+    boot_means = np.empty(n_bootstrap)
+    for i in range(n_bootstrap):
+        starts = rng.integers(0, n, size=n_blocks)
+        sample = []
+        for s in starts:
+            for j in range(block_size):
+                sample.append(returns[(s + j) % n])
+        boot_means[i] = np.mean(sample[:n])
+
+    return (
+        float(returns.mean()),
+        float(np.percentile(boot_means, 2.5)),
+        float(np.percentile(boot_means, 97.5)),
+    )
+
+
 def permutation_p(
     returns: np.ndarray,
     n_permutations: int = 1000,
@@ -153,20 +188,35 @@ def _returns_from_csv(path: Path) -> Tuple[np.ndarray, np.ndarray]:
     return np.array(fixed, dtype=float), np.array(random, dtype=float)
 
 
-def _compute(returns: np.ndarray, seed: int, n_perm: int, n_boot: int) -> Dict:
-    rng = np.random.default_rng(seed)
+def _compute(
+    returns: np.ndarray,
+    seed: int,
+    n_perm: int,
+    n_boot: int,
+    bootstrap_method: str = "iid",
+    block_size: int = 4,
+) -> Dict:
     rng_dsr = np.random.default_rng(seed)
     rng_boot = np.random.default_rng(seed + 1)
     rng_perm = np.random.default_rng(seed + 2)
 
     sr = net_sharpe(returns)
     d = dsr(returns, n_permutations=n_perm, rng=rng_dsr)
-    b_mean, b_lower, b_upper = bootstrap_ci(returns, n_bootstrap=n_boot, rng=rng_boot)
+
+    if bootstrap_method == "block":
+        b_mean, b_lower, b_upper = block_bootstrap_ci(
+            returns, n_bootstrap=n_boot, block_size=block_size, rng=rng_boot
+        )
+    else:
+        b_mean, b_lower, b_upper = bootstrap_ci(returns, n_bootstrap=n_boot, rng=rng_boot)
+
     p = permutation_p(returns, n_permutations=n_perm, rng=rng_perm)
 
     return {
         "net_sharpe": round(sr, 6),
         "dsr": round(d, 6),
+        "bootstrap_method": bootstrap_method,
+        "bootstrap_block_size": block_size if bootstrap_method == "block" else None,
         "bootstrap_ci_mean": round(b_mean, 6),
         "bootstrap_ci_lower": round(b_lower, 6),
         "bootstrap_ci_upper": round(b_upper, 6),
@@ -189,7 +239,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--output", metavar="FILE", help="write JSON to this path (also printed to stdout)")
     parser.add_argument("--seed", type=int, default=42, help="random seed (default: 42)")
     parser.add_argument("--n-permutations", type=int, default=1000, help="permutation count for DSR and p-value (default: 1000)")
-    parser.add_argument("--n-bootstrap", type=int, default=1000, help="bootstrap resample count (default: 1000)")
+    parser.add_argument("--n-bootstrap", type=int, default=10000, help="bootstrap resample count (default: 10000)")
+    parser.add_argument("--bootstrap-method", choices=["iid", "block"], default="iid",
+                        help="bootstrap method: 'iid' (standard) or 'block' (circular, corrects for fold autocorrelation)")
+    parser.add_argument("--block-size", type=int, default=4,
+                        help="block size for block bootstrap (default: 4 ≈ sqrt(12))")
     args = parser.parse_args(argv)
 
     try:
@@ -202,8 +256,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
 
     result = {
-        "random_start": _compute(random, args.seed, args.n_permutations, args.n_bootstrap),
-        "fixed_start": _compute(fixed, args.seed, args.n_permutations, args.n_bootstrap),
+        "random_start": _compute(
+            random, args.seed, args.n_permutations, args.n_bootstrap,
+            bootstrap_method=args.bootstrap_method, block_size=args.block_size,
+        ),
+        "fixed_start": _compute(
+            fixed, args.seed, args.n_permutations, args.n_bootstrap,
+            bootstrap_method=args.bootstrap_method, block_size=args.block_size,
+        ),
     }
 
     payload = json.dumps(result, indent=2)
