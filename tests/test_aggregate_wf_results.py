@@ -17,6 +17,7 @@ import pytest
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
+import aggregate_wf_results as _agg_mod
 from aggregate_wf_results import (
     ParsedFold,
     VariantResult,
@@ -165,6 +166,80 @@ class TestParseLogHappyPath:
 # ---------------------------------------------------------------------------
 # parse_log: error cases
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# parse_log: large-file tail-read (memory-safe path)
+# ---------------------------------------------------------------------------
+
+class TestLargeFileSupport:
+    """_read_log_text tail-seek path: activated when content > _TAIL_BYTES.
+
+    We monkeypatch _TAIL_BYTES to a small value so a synthetic 8-KB file
+    triggers the large-file branch without allocating GB in CI.
+    """
+
+    # Preamble large enough to push content past the patched _TAIL_BYTES.
+    # "x" * 10000 encodes to 20000 UTF-16-LE bytes (10000 UTF-8 bytes).
+    _PREAMBLE = "x" * 10000 + "\n"
+    # Patched _TAIL_BYTES: larger than a 12-fold RESULT block (~6.3 KB UTF-16)
+    # but smaller than the preamble (20 KB UTF-16), so the tail path is exercised.
+    _SMALL_TAIL = 8192
+
+    def test_utf16_le_large_file_parses(self, tmp_path, monkeypatch):
+        """Large UTF-16 LE file: tail path finds and parses RESULT block."""
+        block = _make_result_block(n_folds=3)
+        text = self._PREAMBLE + block + "\n"
+        path = tmp_path / "large_utf16le.log"
+        path.write_bytes(b"\xff\xfe" + text.encode("utf-16-le"))
+
+        monkeypatch.setattr(_agg_mod, "_TAIL_BYTES", self._SMALL_TAIL)
+        folds = parse_log(path)
+        assert len(folds) == 3
+
+    def test_utf16_le_large_file_correct_values(self, tmp_path, monkeypatch):
+        """Numeric values parsed from the tail are identical to a small-file read."""
+        block = _make_result_block(n_folds=1, oos_total_return_random=0.0314)
+        text = self._PREAMBLE + block
+        path = tmp_path / "values_utf16le.log"
+        path.write_bytes(b"\xff\xfe" + text.encode("utf-16-le"))
+
+        monkeypatch.setattr(_agg_mod, "_TAIL_BYTES", self._SMALL_TAIL)
+        folds = parse_log(path)
+        assert len(folds) == 1
+        assert abs(folds[0].oos_total_return_random - 0.0314) < 1e-9
+
+    def test_utf8_large_file_parses(self, tmp_path, monkeypatch):
+        """Large plain UTF-8 file: tail path works correctly."""
+        block = _make_result_block(n_folds=3)
+        text = self._PREAMBLE + block + "\n"
+        path = tmp_path / "large_utf8.log"
+        path.write_text(text, encoding="utf-8")
+
+        monkeypatch.setattr(_agg_mod, "_TAIL_BYTES", self._SMALL_TAIL)
+        folds = parse_log(path)
+        assert len(folds) == 3
+
+    def test_small_file_full_read_path(self, tmp_path, monkeypatch):
+        """Files whose content fits in _TAIL_BYTES still parse correctly."""
+        block = _make_result_block(n_folds=2)
+        log = _write_log(tmp_path, block)
+        # _TAIL_BYTES larger than the file → full-read branch taken
+        monkeypatch.setattr(_agg_mod, "_TAIL_BYTES", 1024 * 1024)
+        folds = parse_log(log)
+        assert len(folds) == 2
+
+    def test_utf16_le_twelve_folds_large_file(self, tmp_path, monkeypatch):
+        """12-fold RESULT block is fully recovered from tail even with large preamble."""
+        block = _make_result_block(n_folds=12)
+        text = self._PREAMBLE + block
+        path = tmp_path / "twelve_utf16le.log"
+        path.write_bytes(b"\xff\xfe" + text.encode("utf-16-le"))
+
+        monkeypatch.setattr(_agg_mod, "_TAIL_BYTES", self._SMALL_TAIL)
+        folds = parse_log(path)
+        assert len(folds) == 12
+        assert [f.fold_idx for f in folds] == list(range(12))
+
 
 class TestParseLogEncodings:
     """PowerShell on Windows defaults to UTF-16 LE for `*>` redirects;
