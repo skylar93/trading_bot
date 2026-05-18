@@ -180,21 +180,49 @@ def _parse_float(s: str) -> float:
     return float(s)
 
 
+# Tail window for large-file reads.  The RESULT block is always written last
+# by run_wf.py and is at most a few KB, so 2 MB is ample margin.
+_TAIL_BYTES = 2 * 1024 * 1024
+
+
 def _read_log_text(path: Path) -> str:
-    """Read a log file with BOM auto-detection.
+    """Read a log file with BOM auto-detection and memory-safe tail reading.
 
     PowerShell on Windows redirects (`*>` / `Out-File`) default to UTF-16 LE
-    with BOM (\\xff\\xfe), which UTF-8 decoding garbles. We sniff the first
-    bytes and pick the right codec; fall back to UTF-8 with replacement.
+    with BOM (\\xff\\xfe), producing files up to several GB. For files larger
+    than _TAIL_BYTES, only the last _TAIL_BYTES are read; run_wf.py always
+    writes ``=== RESULT ===`` at the very end of the log, so the tail contains
+    everything parse_log needs.  Small files are read in full (original path).
     """
-    raw = path.read_bytes()
-    if raw.startswith(b"\xff\xfe"):
-        return raw.decode("utf-16-le", errors="replace").lstrip("﻿")
-    if raw.startswith(b"\xfe\xff"):
-        return raw.decode("utf-16-be", errors="replace").lstrip("﻿")
-    if raw.startswith(b"\xef\xbb\xbf"):
-        return raw[3:].decode("utf-8", errors="replace")
-    return raw.decode("utf-8", errors="replace")
+    file_size = path.stat().st_size
+
+    with path.open("rb") as fh:
+        bom = fh.read(3)
+
+    if bom[:2] == b"\xff\xfe":
+        codec, bom_len, char_size = "utf-16-le", 2, 2
+    elif bom[:2] == b"\xfe\xff":
+        codec, bom_len, char_size = "utf-16-be", 2, 2
+    elif bom == b"\xef\xbb\xbf":
+        codec, bom_len, char_size = "utf-8", 3, 1
+    else:
+        codec, bom_len, char_size = "utf-8", 0, 1
+
+    content_size = file_size - bom_len
+    if content_size <= _TAIL_BYTES:
+        # File fits in the tail window — read in full and strip BOM bytes.
+        with path.open("rb") as fh:
+            raw = fh.read()
+        return raw[bom_len:].decode(codec, errors="replace")
+
+    # Large file: seek to last _TAIL_BYTES, aligned to the codec's code-unit size.
+    seek_pos = file_size - _TAIL_BYTES
+    if char_size == 2 and (seek_pos - bom_len) % 2 != 0:
+        seek_pos += 1  # step forward one byte to land on a UTF-16 code-unit boundary
+    with path.open("rb") as fh:
+        fh.seek(seek_pos)
+        raw_tail = fh.read()
+    return raw_tail.decode(codec, errors="replace")
 
 
 def parse_log(path: Path) -> List[ParsedFold]:
