@@ -2,7 +2,8 @@
 
 **Plan**: `/Users/skylar/.claude/plans/phase8-restructured.md`
 **Supersedes**: `/Users/skylar/.claude/plans/phase8-early-items.md`
-**Started**: 2026-04-27
+**Started**: 2026-04-27  
+**Gate dry-run**: [`docs/phase8/g2_gate_dryrun_result.md`](g2_gate_dryrun_result.md) — G2 gate: 3 FAIL / 4 PASS, exit 2 (expected), no schema errors (2026-05-17)
 
 ---
 
